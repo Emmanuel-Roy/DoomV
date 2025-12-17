@@ -1,9 +1,9 @@
 # DoomV - RV32IMAC Emulator Capable of Running Doom
 
-# About
+# About.
 
 #### Since my Gameboy emulator has been completed, I've taken more advanced coursework in hardware design and computer architecture, to the point where I have one more undergraduate class left. I've gotten internships and had cool things to work on, but i've been itching for another big project to sink my teeth into. I have a month left before I start doing a Co-op, so I figured I'd work on something to keep my programming skills sharp.
 
-# GUI
+# GUI and Overall System Archtecture.
 
-### AI was used to assist me during this part of development.
+### DISCLAIMER: AI was used to assist me during this part of development. However, it will NOT be used when developing or debugging the CPU Core.
