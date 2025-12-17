@@ -1,2 +1,2 @@
-# DoomV
-A software emulator of a RISC-V Core capable of running Doom.
+# DoomV - RV32IMAC Emulator Capable of Running Doom
+
