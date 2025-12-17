@@ -7,3 +7,5 @@
 # GUI and Overall System Archtecture.
 
 ### DISCLAIMER: AI was used to assist me during this part of development. However, it will NOT be used when developing or debugging the CPU Core.
+
+<img width="1919" height="1079" alt="image" src="https://github.com/user-attachments/assets/29a71234-7924-46e0-a533-b3529b49804f" />
