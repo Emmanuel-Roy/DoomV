@@ -29,7 +29,7 @@
 
 #### While Atomics may seem useless, I'm guessing the game will depend on them or won't build otherwise. In practice, all instructions here are atomic. 
 
-#### We need a couple more packages than IMAC, source one used a couple more than I think i'll need. I'll be implementing Zicsr, CLINT, UART, and the Framebuffer as well. More may be added.
+#### We need a couple more packages than IMAC, source one used a couple more than I think i'll need. I'll be implementing Zicsr, CLINT, UART, and the Framebuffer as well. Zifencei won't be fully implemented, I plan to treat it like a NOP unless we need to add it for some reason. Many more may be added.
 
 # Sources:
 [https://github.com/jameslzhu/riscv-card](https://git.knazarov.com/knazarov/rve/) - I originally was inspired by his RISC-V core, and I plan to use his port for this project, or another with slight modifications. I didn't read any code from his repo, but I used it to help determine what extensions I would need to implement to get this project going. 
