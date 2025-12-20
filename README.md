@@ -16,10 +16,10 @@
 
 # CPU Core Explanation
 
-### This RISC-V is based on the RISC-V reference sheet from this GitHub:  
+##### This RISC-V is based on the RISC-V reference sheet from this GitHub:  
 [https://github.com/jameslzhu/riscv-card](https://github.com/jameslzhu/riscv-card)
 
-### Note that I'm not doing the Floating Point extension for now, perhaps I will if performance is bad. (Which I suspect it will be due to the nature of the vibe-coded GUI.
+#### Note that I'm not doing the Floating Point extension for now, perhaps I will if performance is bad. (Which I suspect it will be due to the nature of the vibe-coded GUI.
 
-### Aside from that, to put things simply, we are back to using the primary switch case architecture. I considered using something like an array of function pointers, but after some research, I found out that industry tools like QEMU stick to this switch approach, and that it's better to optimize cases together rather than swapping to the function pointer approach. My research led me to the idea that function pointers can cause issues with branch prediction, so I think this switch approach is more performant (even if its kinda ugly).
+#### Aside from that, to put things simply, we are back to using the primary switch case architecture. I considered using something like an array of function pointers, but after some research, I found out that industry tools like QEMU stick to this switch approach, and that it's better to optimize cases together rather than swapping to the function pointer approach. My research led me to the idea that function pointers can cause issues with branch prediction, so I think this switch approach is more performant (even if its kinda ugly).
 
