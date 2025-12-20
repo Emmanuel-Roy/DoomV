@@ -6,7 +6,7 @@
 
 # Goal
 
-## Boot bare-metal DOOM. If it works, nothing else needs to be implemented. 
+### Boot bare-metal DOOM. If it works, nothing else needs to be implemented. 
 
 # GUI and Overall System Archtecture.
 
