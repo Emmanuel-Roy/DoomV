@@ -8,6 +8,8 @@
 
 ### Boot bare-metal DOOM. If it works, nothing else needs to be implemented. 
 
+##### Maybe add JIT
+
 # GUI and Overall System Archtecture.
 
 ### DISCLAIMER: AI was used to assist me during this part of development. However, it will NOT be used when developing or debugging the CPU Core. The initial commit and the underlying system code is pretty vibe-coded.
