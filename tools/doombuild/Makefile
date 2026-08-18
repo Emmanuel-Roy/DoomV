@@ -1,10 +1,11 @@
 # Cross-compiles doomgeneric for DoomV's RV32IMA target.
 # Needs riscv-none-elf-gcc on PATH (xPack GNU RISC-V Embedded GCC).
 #
-# Usage: make doom1   (shareware, default)
-#        make doom2
-#        make final   (TNT.WAD)
-#        make all     (all three)
+# Usage: make free       (shareware, DOOM1.WAD -- default)
+#        make doom       (Ultimate Doom, DOOM.WAD)
+#        make doom2      (DOOM2.WAD)
+#        make finaldoom  (Final Doom, TNT.WAD)
+#        make all        (all four)
 
 CC = riscv-none-elf-gcc
 
@@ -109,30 +110,39 @@ ENGINE_SRCS = \
 PLATFORM_SRCS = doomgeneric_doomv.c w_file_doomv.c libc_shim.c
 ASM_SRCS      = start.S
 
-# WAD target: WAD=doom1 (default) | doom2 | final
-WAD ?= doom1
+# WAD target: which real IWAD this build's WAD_LENGTH matches. The guest
+# binary doesn't embed the WAD itself -- the host loader places the real
+# file's bytes at WAD_BASE at runtime -- so WAD_FILE here is just the
+# reference for which one to actually hand the loader for a given build.
+WAD ?= free
 
-ifeq ($(WAD),doom1)
+ifeq ($(WAD),free)
+	WAD_FILE   = DOOM1.WAD
 	WAD_LENGTH = 4196020
+else ifeq ($(WAD),doom)
+	WAD_FILE   = DOOM.WAD
+	WAD_LENGTH = 12408292
 else ifeq ($(WAD),doom2)
+	WAD_FILE   = DOOM2.WAD
 	WAD_LENGTH = 14604584
-else ifeq ($(WAD),final)
+else ifeq ($(WAD),finaldoom)
+	WAD_FILE   = TNT.WAD
 	WAD_LENGTH = 18195736
 else
-	$(error Unknown WAD target '$(WAD)', expected doom1, doom2, or final)
+	$(error Unknown WAD target '$(WAD)', expected free, doom, doom2, or finaldoom)
 endif
 
 OUT = doomv-$(WAD).elf
 
-all: doom1 doom2 final
+all: free doom doom2 finaldoom
 
-doom1 doom2 final:
+free doom doom2 finaldoom:
 	$(MAKE) $(OUT) WAD=$@
 
 $(OUT): $(ASM_SRCS) $(PLATFORM_SRCS) $(ENGINE_SRCS)
 	$(CC) $(CFLAGS) -DWAD_LENGTH=$(WAD_LENGTH) $(LDFLAGS) -o $@ $^
 
 clean:
-	rm -f doomv-doom1.elf doomv-doom2.elf doomv-final.elf
+	rm -f doomv-free.elf doomv-doom.elf doomv-doom2.elf doomv-finaldoom.elf
 
-.PHONY: all doom1 doom2 final clean
+.PHONY: all free doom doom2 finaldoom clean
