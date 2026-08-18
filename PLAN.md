@@ -376,13 +376,21 @@ the CPU side just hasn't caught up yet.
   state for inspection? Log-and-halt only helps if something's still alive
   to look at afterward. Leaning toward: stay up, freeze execution, keep
   dashboard live.
-- **Timing model — decided: instruction-count based, not wall-clock.** The
-  MMIO tick register advances based on how many instructions the core has
-  executed, not real elapsed time, so Doom's 35 tics/sec pacing (and
-  `DG_GetTicksMs`) is deterministic/reproducible run-to-run rather than
-  tied to host speed (unlike the reference port, which uses real time via
-  a 70Hz video-tick counter). Still needs an actual instructions-per-tick
-  constant picked once the core's real throughput is known.
+- **Timing model — decided AND calibrated: instruction-count based, not
+  wall-clock.** The MMIO tick register advances based on how many
+  instructions the core has executed, not real elapsed time, so Doom's 35
+  tics/sec pacing (and `DG_GetTicksMs`) is deterministic/reproducible
+  run-to-run rather than tied to host speed (unlike the reference port,
+  which uses real time via a 70Hz video-tick counter).
+  `Memory::INSTR_PER_MS = 1200`, calibrated from the observed ~20000
+  instructions/render at ~60fps. This was the actual blocker behind the
+  title screen appearing "frozen" during first-boot testing: a naive 1:1
+  instruction-to-ms mapping made `I_GetTime()` (`= ms * 35 / 1000`) race
+  roughly 1000x too fast relative to real work done, leaving tic-count-
+  gated logic (`D_PageTicker`, `TryRunTics`) stuck trying to process an
+  enormous backlog of tics it thought had already elapsed. Fixed, verified
+  by actually reaching the main menu and starting a game (E1M1 rendered
+  and playable) instead of sitting on the title screen indefinitely.
 
 ## Explicitly out of scope for this pass
 

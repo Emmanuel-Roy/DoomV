@@ -33,9 +33,14 @@ public:
 
 	void push_key_event(bool pressed, uint8_t doom_keycode);
 
-	// TODO: instructions-per-tick constant still undecided, see PLAN.md's
-	// timing model item. Placeholder: advances the tick register 1:1 with
-	// executed instructions for now.
+	// Instructions-per-ms calibrated to observed throughput: DoomSystem
+	// bursts 20000 instructions per render at ~60fps (~16.7ms/frame), so
+	// roughly 1200 instructions per "ms" tracks close to real 35Hz tic
+	// pacing. A naive 1:1 mapping (1 instruction = 1ms) made simulated
+	// time race ~1000x too fast, leaving I_GetTime()-driven game logic
+	// stuck trying to process an enormous backlog of tics it thought had
+	// already elapsed -- see PLAN.md's debugging notes.
+	static constexpr uint32_t INSTR_PER_MS = 1200;
 	void step_instructions(uint32_t count);
 
 	const uint8_t *framebuffer() const { return fb.data(); }
@@ -54,6 +59,7 @@ private:
 	int key_queue_head;
 	int key_queue_tail;
 
-	uint32_t tick_counter;
+	uint32_t instr_count;   // raw executed-instruction count
+	uint32_t tick_counter;  // instr_count / INSTR_PER_MS -- what MMIO_TICK exposes
 	uint32_t fb_write_count;
 };

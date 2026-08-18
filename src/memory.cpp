@@ -41,7 +41,7 @@ constexpr uint32_t PT_LOAD = 1;
 
 Memory::Memory()
 	: ram(RAM_SIZE + WAD_SIZE, 0), fb(FB_SIZE, 0),
-	  key_queue_head(0), key_queue_tail(0), tick_counter(0), fb_write_count(0)
+	  key_queue_head(0), key_queue_tail(0), instr_count(0), tick_counter(0), fb_write_count(0)
 {
 	for (int i = 0; i < 16; i++) key_queue[i] = 0;
 }
@@ -160,5 +160,6 @@ void Memory::push_key_event(bool pressed, uint8_t doom_keycode)
 
 void Memory::step_instructions(uint32_t count)
 {
-	tick_counter += count;
+	instr_count += count;
+	tick_counter = instr_count / INSTR_PER_MS;
 }
