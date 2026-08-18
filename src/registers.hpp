@@ -4,6 +4,7 @@
 struct HistoryEntry {
 	uint32_t pc;
 	uint32_t instr;
+	const char *mnemonic;
 };
 
 class Registers {
@@ -21,7 +22,7 @@ public:
 	uint32_t read_csr(uint16_t addr) const;
 	void write_csr(uint16_t addr, uint32_t value);
 
-	void record_history(uint32_t pc, uint32_t instr);
+	void record_history(uint32_t pc, uint32_t instr, const char *mnemonic);
 	const HistoryEntry &history_at(int index) const;
 	int history_pos() const;
 

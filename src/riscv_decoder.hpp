@@ -18,6 +18,7 @@ struct DecodedInstruction {
 	uint8_t funct3, funct7;
 	int32_t imm;
 	uint8_t length; // 2 or 4 bytes
+	const char *mnemonic; // e.g. "ADDI" -- static string, name only, no operands
 };
 
 class Registers;
@@ -26,6 +27,7 @@ class RiscvCore;
 
 struct DispatchResult {
 	bool illegal;
+	const char *mnemonic;
 };
 
 class Decoder {
@@ -39,10 +41,9 @@ private:
 	Registers &regs;
 	Memory &mem;
 
-	// TODO: classify raw_instr by opcode/funct7 into an Extension tag
-	// (pure classification data, see PLAN.md), then decode its fields
-	// into a DecodedInstruction. This is the CPU core logic -- yours to
-	// write.
+	// classify()/decode() figure out *what* an instruction is (opcode
+	// tables, field extraction, mnemonic for display) -- exec_32I/M/A in
+	// RiscvCore are what actually *do* something with it, and stay stubs.
 	Extension classify(uint32_t raw_instr) const;
 	DecodedInstruction decode(uint32_t raw_instr, Extension ext) const;
 };

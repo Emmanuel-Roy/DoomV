@@ -41,9 +41,8 @@ void DoomSystem::step()
 	}
 
 	uint32_t instr = memory.read32(pc);
-	regs.record_history(pc, instr);
-
 	DispatchResult result = decoder.decode_and_dispatch(instr);
+	regs.record_history(pc, instr, result.mnemonic);
 
 	if (debugger.should_halt(pc, result.illegal)) {
 		debugger.dump_log(regs, "crash.log");
