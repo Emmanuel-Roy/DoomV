@@ -12,3 +12,8 @@
 *.exe
 *.elf
 riscv_doom.exe
+
+# Runtime files the guest may write (config save, crash dumps)
+.default.cfg
+.savegame/
+crash.log

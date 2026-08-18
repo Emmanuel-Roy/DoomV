@@ -8,9 +8,11 @@ DoomSystem::DoomSystem() : decoder(core, regs, memory)
 {
 }
 
-bool DoomSystem::init(const char *wad_path, const char *elf_path, int scale_factor)
+bool DoomSystem::init(const char *wad_path, const char *elf_path)
 {
-	if (!gui.init(scale_factor)) return false;
+	if (!gui.init()) return false;
+
+	controls.load("controls.json");
 
 	std::ifstream wad_file(wad_path, std::ios::binary | std::ios::ate);
 	if (!wad_file.is_open()) return false;
@@ -29,8 +31,12 @@ bool DoomSystem::init(const char *wad_path, const char *elf_path, int scale_fact
 
 uint8_t DoomSystem::translate_key(uint32_t sdl_keysym) const
 {
+	uint8_t mapped = controls.translate(sdl_keysym);
+	if (mapped != 0) return mapped;
+
 	// Numeric values match doomkeys.h exactly (KEY_RIGHTARROW etc) -- see
-	// tools/doombuild/doomgeneric/doomgeneric/doomkeys.h.
+	// tools/doombuild/doomgeneric/doomgeneric/doomkeys.h. Arrow keys stay
+	// here too (not in controls.json) so they keep working alongside WASD.
 	switch (sdl_keysym) {
 	case SDLK_RIGHT:     return 0xae;
 	case SDLK_LEFT:      return 0xac;

@@ -5,12 +5,13 @@
 #include "riscv_decoder.hpp"
 #include "debugger.hpp"
 #include "gui.hpp"
+#include "controls.hpp"
 
 class DoomSystem {
 public:
 	DoomSystem();
 
-	bool init(const char *wad_path, const char *elf_path, int scale_factor);
+	bool init(const char *wad_path, const char *elf_path);
 	void run();
 	void step();
 
@@ -21,8 +22,10 @@ private:
 	Decoder decoder;
 	Debugger debugger;
 	Gui gui;
+	ControlMap controls;
 
-	// TODO: SDL keysym -> Doom key code translation, see PLAN.md's
-	// "input key mapping" item. Currently drops all key events.
+	// SDL keysym -> Doom key code. Movement (WASD) comes from
+	// controls.json via ControlMap; everything else is fixed here, with
+	// printable-ASCII passthrough as the final fallback.
 	uint8_t translate_key(uint32_t sdl_keysym) const;
 };

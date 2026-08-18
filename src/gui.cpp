@@ -19,12 +19,9 @@ Gui::~Gui()
 	SDL_Quit();
 }
 
-bool Gui::init(int scale_factor)
+bool Gui::init(int window_w, int window_h)
 {
 	if (SDL_Init(SDL_INIT_VIDEO) != 0) return false;
-
-	int window_w = TOTAL_W * scale_factor;
-	int window_h = TOTAL_H * scale_factor;
 
 	window = SDL_CreateWindow("RISC-V Doom SoC",
 	                          SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
@@ -32,28 +29,42 @@ bool Gui::init(int scale_factor)
 	if (!window) return false;
 
 	renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
-	SDL_RenderSetLogicalSize(renderer, TOTAL_W, TOTAL_H);
-	SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "0");
+	SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "0"); // nearest-neighbor -- sharp blocks, never blurry
 
-	texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGB888,
-	                            SDL_TEXTUREACCESS_STREAMING, TOTAL_W, TOTAL_H);
-
+	resize_canvas_if_needed();
 	last_sync = SDL_GetTicks();
 
 	return (renderer && texture);
 }
 
+void Gui::resize_canvas_if_needed()
+{
+	int w, h;
+	SDL_GetWindowSize(window, &w, &h);
+	if (w == canvas_w && h == canvas_h) return;
+
+	canvas_w = w;
+	canvas_h = h;
+	scale_x = (float)canvas_w / (float)DESIGN_W;
+	scale_y = (float)canvas_h / (float)DESIGN_H;
+	screen_buf.resize((size_t)canvas_w * (size_t)canvas_h);
+
+	if (texture) SDL_DestroyTexture(texture);
+	texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGB888,
+	                            SDL_TEXTUREACCESS_STREAMING, canvas_w, canvas_h);
+}
+
 void Gui::render(const Registers &regs, Memory &mem, const Debugger &dbg)
 {
+	resize_canvas_if_needed();
+
 	uint32_t now = SDL_GetTicks();
 	uint32_t delta = now - last_sync;
 	if (delta == 0) delta = 1;
-
 	dashboard_fps = 1000.0f / (float)delta;
 	last_sync = now;
 
-	static uint32_t screen[TOTAL_W * TOTAL_H];
-	std::fill(screen, screen + (TOTAL_W * TOTAL_H), 0x876A96);
+	std::fill(screen_buf.begin(), screen_buf.end(), 0x876A96);
 
 	uint32_t pal_pink  = 0xD580B8;
 	uint32_t pal_white = 0xD7D0D0;
@@ -61,25 +72,36 @@ void Gui::render(const Registers &regs, Memory &mem, const Debugger &dbg)
 	uint32_t pal_dark  = 0x25080C;
 	uint32_t pal_stats = 0xC3A9C4;
 
-	// GAME SCREEN (400x250), scaled from the native 320x200 32bpp framebuffer.
-	// Only 400 distinct sx values and 250 distinct sy values exist -- precompute
-	// them once instead of a multiply+divide per pixel (100,000/frame otherwise).
-	static int scale_x[400];
-	static int scale_y[250];
-	static bool scale_tables_built = false;
-	if (!scale_tables_built) {
-		for (int x = 0; x < 400; x++) scale_x[x] = (x * Memory::FB_W) / 400;
-		for (int y = 0; y < 250; y++) scale_y[y] = (y * Memory::FB_H) / 250;
-		scale_tables_built = true;
+	// GAME SCREEN: design box is 400x250 at (15,55), scaled to canvas
+	// pixels as one box, then sampled directly from the native 320x200
+	// framebuffer into that box in a single scale step (avoids chaining
+	// two scaling passes, which would leave gaps or blur at odd sizes).
+	int box_x = (int)(15 * scale_x);
+	int box_y = (int)(55 * scale_y);
+	int box_w = (int)(400 * scale_x);
+	int box_h = (int)(250 * scale_y);
+
+	static std::vector<int> sx_lut, sy_lut;
+	static int last_box_w = -1, last_box_h = -1;
+	if (box_w != last_box_w || box_h != last_box_h) {
+		sx_lut.resize(box_w > 0 ? box_w : 0);
+		sy_lut.resize(box_h > 0 ? box_h : 0);
+		for (int x = 0; x < box_w; x++) sx_lut[x] = (x * Memory::FB_W) / box_w;
+		for (int y = 0; y < box_h; y++) sy_lut[y] = (y * Memory::FB_H) / box_h;
+		last_box_w = box_w;
+		last_box_h = box_h;
 	}
 
 	const uint32_t *fb32 = reinterpret_cast<const uint32_t *>(mem.framebuffer());
-	int tx = 15, ty = 55;
-	for (int y = 0; y < 250; y++) {
-		const uint32_t *src_row = fb32 + scale_y[y] * Memory::FB_W;
-		uint32_t *dst_row = screen + (y + ty) * TOTAL_W + tx;
-		for (int x = 0; x < 400; x++) {
-			dst_row[x] = src_row[scale_x[x]];
+	for (int y = 0; y < box_h; y++) {
+		int ty = box_y + y;
+		if (ty < 0 || ty >= canvas_h) continue;
+		const uint32_t *src_row = fb32 + sy_lut[y] * Memory::FB_W;
+		uint32_t *dst_row = &screen_buf[(size_t)ty * canvas_w];
+		for (int x = 0; x < box_w; x++) {
+			int tx = box_x + x;
+			if (tx < 0 || tx >= canvas_w) continue;
+			dst_row[tx] = src_row[sx_lut[x]];
 		}
 	}
 
@@ -87,8 +109,8 @@ void Gui::render(const Registers &regs, Memory &mem, const Debugger &dbg)
 	int hud_x = 425;
 
 	auto draw_shadow_text = [&](int x, int y, const char *s, uint32_t col) {
-		draw_string(screen, x + 1, y + 1, s, pal_dark);
-		draw_string(screen, x, y, s, col);
+		draw_string(x + 1, y + 1, s, pal_dark);
+		draw_string(x, y, s, col);
 	};
 
 	// STATS
@@ -142,7 +164,7 @@ void Gui::render(const Registers &regs, Memory &mem, const Debugger &dbg)
 		draw_shadow_text(hud_x, (current_y + 15) + (i * 11), buf, pal_stats);
 	}
 
-	SDL_UpdateTexture(texture, nullptr, screen, TOTAL_W * 4);
+	SDL_UpdateTexture(texture, nullptr, screen_buf.data(), canvas_w * 4);
 	SDL_RenderCopy(renderer, texture, nullptr, nullptr);
 	SDL_RenderPresent(renderer);
 }
@@ -161,24 +183,37 @@ std::vector<RawKeyEvent> Gui::poll_input()
 	return events;
 }
 
-void Gui::draw_char(uint32_t *p, int x, int y, char c, uint32_t col)
+void Gui::draw_char(int x, int y, char c, uint32_t col)
 {
 	if ((uint8_t)c >= 128) return;
+
+	int bw = (int)(scale_x + 0.5f); if (bw < 1) bw = 1;
+	int bh = (int)(scale_y + 0.5f); if (bh < 1) bh = 1;
+
 	for (int r = 0; r < 8; r++) {
 		uint8_t b = font8x8[(uint8_t)c][r];
 		for (int cl = 0; cl < 8; cl++) {
-			if (b & (0x80 >> cl)) {
-				int tx = x + cl, ty = y + r;
-				if (tx >= 0 && tx < TOTAL_W && ty >= 0 && ty < TOTAL_H)
-					p[ty * TOTAL_W + tx] = col;
+			if (!(b & (0x80 >> cl))) continue;
+
+			int px = (int)((x + cl) * scale_x);
+			int py = (int)((y + r) * scale_y);
+			for (int by = 0; by < bh; by++) {
+				int ty = py + by;
+				if (ty < 0 || ty >= canvas_h) continue;
+				uint32_t *row = &screen_buf[(size_t)ty * canvas_w];
+				for (int bx = 0; bx < bw; bx++) {
+					int tx = px + bx;
+					if (tx < 0 || tx >= canvas_w) continue;
+					row[tx] = col;
+				}
 			}
 		}
 	}
 }
 
-void Gui::draw_string(uint32_t *p, int x, int y, const char *s, uint32_t c)
+void Gui::draw_string(int x, int y, const char *s, uint32_t c)
 {
-	while (*s) { draw_char(p, x, y, *s++, c); x += 8; }
+	while (*s) { draw_char(x, y, *s++, c); x += 8; }
 }
 
 void Gui::init_font()
