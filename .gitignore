@@ -1,0 +1,14 @@
+# WAD files (copyrighted commercial game data, not source) -- the
+# shareware IWAD is an exception, id Software released it for free
+# redistribution, so it's fine to commit.
+*.wad
+*.WAD
+!DOOM1.WAD
+!doom1.wad
+
+# Build outputs
+*.o
+*.obj
+*.exe
+*.elf
+riscv_doom.exe
