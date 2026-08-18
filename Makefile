@@ -7,7 +7,7 @@ INCLUDES = -Isrc/include
 LIBS = -Lsrc/lib -lmingw32 -lSDL2main -lSDL2
 
 # Source files
-SRCS = main.cpp Doom_System.cpp RV32IMAC_Core.cpp
+SRCS = src/main.cpp src/Doom_System.cpp src/RV32IMAC_Core.cpp
 OUT = riscv_doom.exe
 
 all:

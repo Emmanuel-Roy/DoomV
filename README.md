@@ -12,13 +12,23 @@
 
 # GUI and Overall System Archtecture.
 
-### DISCLAIMER: AI was used to assist me during this part of development. However, it will NOT be used when developing or debugging the CPU Core. The initial commit and the underlying system code is pretty vibe-coded.
-
-#### The reasoning for this is that while I think AI is an excellent tool at making sure this project actually gets done, i'd rather work on my underlying skills for when things eventually break in my IRL work.
-
-###### Unless I get really desperate :/ (I don't have any seniors to ask for help), if it comes to that I'll mark what was vibe coded with a comment.
+### AI was used to accelerate this part of development. All design and infrastructure decisions are my own — the initial commit and underlying system code is pretty vibe-coded, but the architecture is mine.
 
 <img width="1919" height="1079" alt="image" src="https://github.com/user-attachments/assets/92adbcb6-cfe2-464e-8a09-8b817151a260" />
+
+# Code Layout
+
+### The project is split up as follows:
+
+- `main.cpp` — entry point. Launches the GUI, loads Doom into guest memory, runs the fetch/decode/execute loop, and services MMIO each frame.
+- `doom_system.*` — top-level system object. Owns the decoder, the core, memory, and the GUI, and wires them together.
+- `memory.*` — guest RAM, the WAD/ELF loader, and the MMIO address dispatch (framebuffer, palette, input).
+- `extensions.*` — a table of which RISC-V extensions are enabled. Right now: I, M, A.
+- `riscv_decoder.*` — decodes a fetched instruction word into its fields and hands it to the core.
+- `riscv_core.*` — the register file and PC, with one execute function per enabled extension (`exec_32I`, `exec_32M`, `exec_32A`, ...).
+- `gui.*` — everything SDL: the window, the scaled framebuffer, and the register/memory/trace dashboard. Pulled out of the system code so it can be swapped or reused on its own.
+
+See `PLAN.md` for the open TODOs and what's still missing before this can boot anything.
 
 # CPU Core Explanation
 
