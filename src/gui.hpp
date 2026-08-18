@@ -2,10 +2,7 @@
 #include <SDL2/SDL.h>
 #include <cstdint>
 #include <vector>
-
-class Registers;
-class Memory;
-class Debugger;
+#include "snapshot.hpp"
 
 struct RawKeyEvent {
 	uint32_t sdl_keysym;
@@ -25,7 +22,7 @@ public:
 
 	bool init(int window_w = 1920, int window_h = 1080);
 
-	void render(const Registers &regs, Memory &mem, const Debugger &dbg);
+	void render(const Snapshot &snap);
 	std::vector<RawKeyEvent> poll_input();
 
 private:

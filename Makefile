@@ -1,6 +1,6 @@
 # Compiler settings
 CXX = g++
-CXXFLAGS = -std=c++2a -O3
+CXXFLAGS = -std=c++2a -O3 -pthread
 
 # Include and Library paths
 INCLUDES = -Isrc/include

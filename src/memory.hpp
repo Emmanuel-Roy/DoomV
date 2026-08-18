@@ -1,5 +1,6 @@
 #pragma once
 #include <cstdint>
+#include <mutex>
 #include <vector>
 
 class Memory {
@@ -55,6 +56,10 @@ private:
 	std::vector<uint8_t> ram;
 	std::vector<uint8_t> fb;
 
+	// Pushed by the render thread (input polling lives there, tied to the
+	// SDL window), popped by the CPU thread on MMIO_INPUT reads -- the one
+	// piece of Memory state actually touched from both threads.
+	std::mutex key_mutex;
 	uint32_t key_queue[16];
 	int key_queue_head;
 	int key_queue_tail;

@@ -63,6 +63,7 @@ uint16_t Memory::read16(uint32_t addr)
 uint32_t Memory::read32(uint32_t addr)
 {
 	if (addr == MMIO_INPUT) {
+		std::lock_guard<std::mutex> lock(key_mutex);
 		if (key_queue_head == key_queue_tail) return 0;
 		uint32_t val = key_queue[key_queue_head];
 		key_queue_head = (key_queue_head + 1) % 16;
@@ -151,6 +152,7 @@ bool Memory::load_wad(const uint8_t *wad_bytes, size_t len)
 
 void Memory::push_key_event(bool pressed, uint8_t doom_keycode)
 {
+	std::lock_guard<std::mutex> lock(key_mutex);
 	int next = (key_queue_tail + 1) % 16;
 	if (next == key_queue_head) return; // queue full, drop the event
 

@@ -1,7 +1,9 @@
 #include "doom_system.hpp"
 #include <SDL2/SDL.h>
+#include <algorithm>
 #include <cstdio>
 #include <fstream>
+#include <thread>
 #include <vector>
 
 DoomSystem::DoomSystem() : decoder(core, regs, memory)
@@ -104,22 +106,63 @@ void DoomSystem::step()
 	memory.step_instructions(1);
 }
 
-void DoomSystem::run()
+void DoomSystem::publish_snapshot()
+{
+	Snapshot snap;
+
+	const uint32_t *fb32 = reinterpret_cast<const uint32_t *>(memory.framebuffer());
+	std::copy(fb32, fb32 + Memory::FB_W * Memory::FB_H, snap.framebuffer.begin());
+
+	for (int i = 0; i < 32; i++) snap.x[i] = regs.read_x(i);
+	snap.pc = regs.get_pc();
+	snap.halted = debugger.halted;
+
+	int active_idx = (regs.history_pos() + Registers::HISTORY_SIZE - 1) % Registers::HISTORY_SIZE;
+	snap.active = regs.history_at(active_idx);
+	for (int i = 0; i < 4; i++) {
+		int pos = (regs.history_pos() + i) % Registers::HISTORY_SIZE;
+		snap.trace[i] = regs.history_at(pos);
+	}
+
+	std::lock_guard<std::mutex> lock(snapshot_mutex);
+	shared_snapshot = std::move(snap);
+}
+
+void DoomSystem::cpu_loop()
 {
 	while (true) {
-		// Bigger burst = more actual emulated work per render/input-poll
+		// Bigger burst = more actual emulated work per snapshot-publish
 		// overhead, since that overhead doesn't scale with burst size --
-		// this raises total instructions/sec even though it lowers raw
-		// FPS a bit (which was far higher than useful anyway once VSYNC
-		// was removed).
+		// this raises total instructions/sec even though it lowers how
+		// often the dashboard updates.
 		for (int i = 0; i < 200000; i++) {
 			if (!debugger.halted) step();
 		}
+		publish_snapshot();
+	}
+}
 
+void DoomSystem::run()
+{
+	// CPU execution and rendering run on separate threads: instruction
+	// bursts no longer stall input polling/rendering, and vice versa. The
+	// two sides only ever communicate through shared_snapshot (a full copy
+	// under snapshot_mutex, published once per burst) and Memory's key
+	// queue (locked separately) -- everything else in Memory/Registers/
+	// Debugger stays exclusively CPU-thread-owned, so it needs no locking.
+	std::thread cpu_thread(&DoomSystem::cpu_loop, this);
+	cpu_thread.detach();
+
+	while (true) {
 		for (const RawKeyEvent &ev : gui.poll_input()) {
 			memory.push_key_event(ev.pressed, translate_key(ev.sdl_keysym));
 		}
 
-		gui.render(regs, memory, debugger);
+		Snapshot snap;
+		{
+			std::lock_guard<std::mutex> lock(snapshot_mutex);
+			snap = shared_snapshot;
+		}
+		gui.render(snap);
 	}
 }

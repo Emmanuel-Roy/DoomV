@@ -1,7 +1,4 @@
 #include "gui.hpp"
-#include "registers.hpp"
-#include "memory.hpp"
-#include "debugger.hpp"
 #include <cstdio>
 #include <cstring>
 #include <cmath>
@@ -59,7 +56,7 @@ void Gui::resize_canvas_if_needed()
 	                            SDL_TEXTUREACCESS_STREAMING, canvas_w, canvas_h);
 }
 
-void Gui::render(const Registers &regs, Memory &mem, const Debugger &dbg)
+void Gui::render(const Snapshot &snap)
 {
 	resize_canvas_if_needed();
 
@@ -117,7 +114,7 @@ void Gui::render(const Registers &regs, Memory &mem, const Debugger &dbg)
 		last_box_h = box_h;
 	}
 
-	const uint32_t *fb32 = reinterpret_cast<const uint32_t *>(mem.framebuffer());
+	const uint32_t *fb32 = snap.framebuffer.data();
 	for (int y = 0; y < box_h; y++) {
 		int ty = box_y + y;
 		if (ty < 0 || ty >= canvas_h) continue;
@@ -163,7 +160,7 @@ void Gui::render(const Registers &regs, Memory &mem, const Debugger &dbg)
 
 	sprintf(buf, "DASH FPS: %.1f", dashboard_fps);
 	draw_shadow_text(hud_x, current_y, buf, pal_stats);
-	if (dbg.halted) {
+	if (snap.halted) {
 		current_y += 12;
 		draw_shadow_text(hud_x, current_y, "HALTED", pal_red);
 	}
@@ -180,7 +177,7 @@ void Gui::render(const Registers &regs, Memory &mem, const Debugger &dbg)
 		sprintf(buf, "X%02d:", i);
 		draw_shadow_text(cx, cy, buf, pal_red);
 
-		sprintf(buf, "%08X", regs.read_x(i));
+		sprintf(buf, "%08X", snap.x[i]);
 		draw_shadow_text(cx + 35, cy, buf, pal_white);
 	}
 
@@ -191,18 +188,15 @@ void Gui::render(const Registers &regs, Memory &mem, const Debugger &dbg)
 	current_y += 15;
 
 	// Most recently recorded history entry == the instruction that just executed.
-	int active_idx = (regs.history_pos() + Registers::HISTORY_SIZE - 1) % Registers::HISTORY_SIZE;
-	const HistoryEntry &active = regs.history_at(active_idx);
-	sprintf(buf, "ACTIVE: %08X %s", active.instr, active.mnemonic);
+	sprintf(buf, "ACTIVE: %08X %s", snap.active.instr, snap.active.mnemonic);
 	draw_shadow_text(hud_x, current_y, buf, pal_pink);
 	current_y += 12;
 
-	sprintf(buf, "CURR PC: %08X", regs.get_pc());
+	sprintf(buf, "CURR PC: %08X", snap.pc);
 	draw_shadow_text(hud_x, current_y, buf, pal_white);
 
 	for (int i = 0; i < 4; i++) {
-		int pos = (regs.history_pos() + i) % Registers::HISTORY_SIZE;
-		const HistoryEntry &h = regs.history_at(pos);
+		const HistoryEntry &h = snap.trace[i];
 		sprintf(buf, "%08X: %s", h.pc, h.mnemonic);
 		draw_shadow_text(hud_x, (current_y + 15) + (i * 11), buf, pal_stats);
 	}
