@@ -4,6 +4,7 @@
 #include "debugger.hpp"
 #include <cstdio>
 #include <cstring>
+#include <cmath>
 #include <algorithm>
 
 Gui::Gui() : last_sync(0)
@@ -85,13 +86,33 @@ void Gui::render(const Registers &regs, Memory &mem, const Debugger &dbg)
 	int box_w = (int)(400 * scale_x);
 	int box_h = (int)(250 * scale_y);
 
-	static std::vector<int> sx_lut, sy_lut;
+	// Bilinear, not nearest-neighbor: at native 320x200 scaled ~3-4x, hard
+	// pixel blocks looked wrong for the game view (dashboard text stays
+	// sharp block-fills on purpose, this is just the rendered scene).
+	// Fixed-point (8-bit fraction) so the per-pixel blend is pure integer
+	// math, no floats in the hot loop.
+	struct Sample { int i0, i1; uint32_t frac; };
+	static std::vector<Sample> sx_lut, sy_lut;
 	static int last_box_w = -1, last_box_h = -1;
 	if (box_w != last_box_w || box_h != last_box_h) {
 		sx_lut.resize(box_w > 0 ? box_w : 0);
 		sy_lut.resize(box_h > 0 ? box_h : 0);
-		for (int x = 0; x < box_w; x++) sx_lut[x] = (x * Memory::FB_W) / box_w;
-		for (int y = 0; y < box_h; y++) sy_lut[y] = (y * Memory::FB_H) / box_h;
+		for (int x = 0; x < box_w; x++) {
+			float src = ((float)x + 0.5f) * Memory::FB_W / box_w - 0.5f;
+			int i0 = (int)std::floor(src);
+			float frac = src - (float)i0;
+			if (i0 < 0) { i0 = 0; frac = 0.0f; }
+			int i1 = (i0 + 1 < Memory::FB_W) ? i0 + 1 : i0;
+			sx_lut[x] = { i0, i1, (uint32_t)(frac * 256.0f) };
+		}
+		for (int y = 0; y < box_h; y++) {
+			float src = ((float)y + 0.5f) * Memory::FB_H / box_h - 0.5f;
+			int i0 = (int)std::floor(src);
+			float frac = src - (float)i0;
+			if (i0 < 0) { i0 = 0; frac = 0.0f; }
+			int i1 = (i0 + 1 < Memory::FB_H) ? i0 + 1 : i0;
+			sy_lut[y] = { i0, i1, (uint32_t)(frac * 256.0f) };
+		}
 		last_box_w = box_w;
 		last_box_h = box_h;
 	}
@@ -100,12 +121,30 @@ void Gui::render(const Registers &regs, Memory &mem, const Debugger &dbg)
 	for (int y = 0; y < box_h; y++) {
 		int ty = box_y + y;
 		if (ty < 0 || ty >= canvas_h) continue;
-		const uint32_t *src_row = fb32 + sy_lut[y] * Memory::FB_W;
+
+		const Sample &ys = sy_lut[y];
+		const uint32_t *row0 = fb32 + ys.i0 * Memory::FB_W;
+		const uint32_t *row1 = fb32 + ys.i1 * Memory::FB_W;
 		uint32_t *dst_row = &screen_buf[(size_t)ty * canvas_w];
+
 		for (int x = 0; x < box_w; x++) {
 			int tx = box_x + x;
 			if (tx < 0 || tx >= canvas_w) continue;
-			dst_row[tx] = src_row[sx_lut[x]];
+
+			const Sample &xs = sx_lut[x];
+			uint32_t p00 = row0[xs.i0], p10 = row0[xs.i1];
+			uint32_t p01 = row1[xs.i0], p11 = row1[xs.i1];
+
+			uint32_t out = 0;
+			for (int shift = 16; shift >= 0; shift -= 8) {
+				uint32_t c00 = (p00 >> shift) & 0xFF, c10 = (p10 >> shift) & 0xFF;
+				uint32_t c01 = (p01 >> shift) & 0xFF, c11 = (p11 >> shift) & 0xFF;
+				uint32_t top = c00 * (256 - xs.frac) + c10 * xs.frac;
+				uint32_t bot = c01 * (256 - xs.frac) + c11 * xs.frac;
+				uint32_t chan = (top * (256 - ys.frac) + bot * ys.frac) >> 16;
+				out |= chan << shift;
+			}
+			dst_row[tx] = out;
 		}
 	}
 

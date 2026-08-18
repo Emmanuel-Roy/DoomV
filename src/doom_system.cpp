@@ -107,7 +107,12 @@ void DoomSystem::step()
 void DoomSystem::run()
 {
 	while (true) {
-		for (int i = 0; i < 20000; i++) {
+		// Bigger burst = more actual emulated work per render/input-poll
+		// overhead, since that overhead doesn't scale with burst size --
+		// this raises total instructions/sec even though it lowers raw
+		// FPS a bit (which was far higher than useful anyway once VSYNC
+		// was removed).
+		for (int i = 0; i < 200000; i++) {
 			if (!debugger.halted) step();
 		}
 
