@@ -1,5 +1,42 @@
 #include "memory.hpp"
 #include <cstring>
+#include <fstream>
+
+// Minimal ELF32 structures -- just enough to read PT_LOAD segments,
+// not a general-purpose ELF library.
+namespace {
+
+struct Elf32_Ehdr {
+	uint8_t  e_ident[16];
+	uint16_t e_type;
+	uint16_t e_machine;
+	uint32_t e_version;
+	uint32_t e_entry;
+	uint32_t e_phoff;
+	uint32_t e_shoff;
+	uint32_t e_flags;
+	uint16_t e_ehsize;
+	uint16_t e_phentsize;
+	uint16_t e_phnum;
+	uint16_t e_shentsize;
+	uint16_t e_shnum;
+	uint16_t e_shstrndx;
+};
+
+struct Elf32_Phdr {
+	uint32_t p_type;
+	uint32_t p_offset;
+	uint32_t p_vaddr;
+	uint32_t p_paddr;
+	uint32_t p_filesz;
+	uint32_t p_memsz;
+	uint32_t p_flags;
+	uint32_t p_align;
+};
+
+constexpr uint32_t PT_LOAD = 1;
+
+} // namespace
 
 Memory::Memory()
 	: ram(RAM_SIZE + WAD_SIZE, 0), fb(FB_SIZE, 0),
@@ -63,10 +100,42 @@ void Memory::write32(uint32_t addr, uint32_t val)
 
 bool Memory::load_elf(const char *path)
 {
-	(void)path;
-	// TODO: parse ELF program headers, copy each PT_LOAD segment to its
-	// p_vaddr within the RAM region. See PLAN.md.
-	return false;
+	std::ifstream file(path, std::ios::binary);
+	if (!file.is_open()) return false;
+
+	Elf32_Ehdr ehdr;
+	file.read((char *)&ehdr, sizeof(ehdr));
+	if (!file) return false;
+	if (ehdr.e_ident[0] != 0x7F || ehdr.e_ident[1] != 'E' ||
+	    ehdr.e_ident[2] != 'L' || ehdr.e_ident[3] != 'F') {
+		return false;
+	}
+
+	for (int i = 0; i < ehdr.e_phnum; i++) {
+		Elf32_Phdr phdr;
+		file.seekg(ehdr.e_phoff + (uint32_t)i * ehdr.e_phentsize);
+		file.read((char *)&phdr, sizeof(phdr));
+		if (!file) return false;
+
+		if (phdr.p_type != PT_LOAD) continue;
+		if (phdr.p_vaddr < RAM_BASE || phdr.p_vaddr + phdr.p_memsz > RAM_BASE + RAM_SIZE + WAD_SIZE) {
+			return false;
+		}
+
+		uint32_t ram_off = phdr.p_vaddr - RAM_BASE;
+
+		if (phdr.p_filesz > 0) {
+			file.seekg(phdr.p_offset);
+			file.read((char *)&ram[ram_off], phdr.p_filesz);
+			if (!file) return false;
+		}
+
+		if (phdr.p_memsz > phdr.p_filesz) {
+			std::memset(&ram[ram_off + phdr.p_filesz], 0, phdr.p_memsz - phdr.p_filesz);
+		}
+	}
+
+	return true;
 }
 
 bool Memory::load_wad(const uint8_t *wad_bytes, size_t len)
