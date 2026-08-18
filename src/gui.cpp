@@ -28,7 +28,7 @@ bool Gui::init(int scale_factor)
 
 	window = SDL_CreateWindow("RISC-V Doom SoC",
 	                          SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-	                          window_w, window_h, SDL_WINDOW_SHOWN);
+	                          window_w, window_h, SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE);
 	if (!window) return false;
 
 	renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
@@ -50,10 +50,6 @@ void Gui::render(const Registers &regs, Memory &mem, const Debugger &dbg)
 	if (delta == 0) delta = 1;
 
 	dashboard_fps = 1000.0f / (float)delta;
-
-	float total_pixels = (float)(Memory::FB_W * Memory::FB_H);
-	doom_fps = ((float)mem.take_fb_write_count() / total_pixels) / ((float)delta / 1000.0f);
-
 	last_sync = now;
 
 	static uint32_t screen[TOTAL_W * TOTAL_H];
@@ -102,18 +98,12 @@ void Gui::render(const Registers &regs, Memory &mem, const Debugger &dbg)
 
 	sprintf(buf, "DASH FPS: %.1f", dashboard_fps);
 	draw_shadow_text(hud_x, current_y, buf, pal_stats);
-	current_y += 12;
-	sprintf(buf, "DOOM FPS: %.1f", doom_fps);
-	draw_shadow_text(hud_x, current_y, buf, pal_stats);
-	current_y += 12;
-	sprintf(buf, "LATENCY : %.2f ns/i", avg_ns_per_instr);
-	draw_shadow_text(hud_x, current_y, buf, pal_stats);
 	if (dbg.halted) {
 		current_y += 12;
 		draw_shadow_text(hud_x, current_y, "HALTED", pal_red);
 	}
 
-	current_y += 20;
+	current_y += 12;
 
 	// REGISTER FILE
 	draw_shadow_text(hud_x, current_y, "--- REGISTER FILE ---", pal_pink);
@@ -129,7 +119,7 @@ void Gui::render(const Registers &regs, Memory &mem, const Debugger &dbg)
 		draw_shadow_text(cx + 35, cy, buf, pal_white);
 	}
 
-	current_y = reg_start_y + (16 * 11) + 20;
+	current_y = reg_start_y + (16 * 11) + 12;
 
 	// TRACE LOG
 	draw_shadow_text(hud_x, current_y, "--- TRACE LOG ---", pal_pink);

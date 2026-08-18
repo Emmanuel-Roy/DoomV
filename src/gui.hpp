@@ -37,6 +37,4 @@ private:
 
 	uint32_t last_sync;
 	float dashboard_fps = 0.0f;
-	float doom_fps = 0.0f;
-	float avg_ns_per_instr = 0.0f;
 };
