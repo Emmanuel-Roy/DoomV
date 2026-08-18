@@ -26,11 +26,14 @@ bool Gui::init(int window_w, int window_h)
 	                          window_w, window_h, SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE);
 	if (!window) return false;
 
-	// No VSYNC: it locked every loop iteration to ~60Hz even though the
-	// instruction burst itself finishes in a small fraction of that
-	// budget, wasting most of each frame's time doing nothing. Uncapped,
-	// the loop runs as fast as the burst+render actually take.
-	renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
+	// VSYNC is back on purpose: rendering now runs on its own thread
+	// (see DoomSystem::run), so capping it to the display refresh rate no
+	// longer throttles instruction throughput -- the CPU thread keeps
+	// burning through instructions uncapped regardless. Without VSYNC this
+	// thread just spun as fast as possible re-presenting duplicate frames
+	// between snapshot publishes, burning a full core fighting the CPU
+	// thread for scheduler time, which showed up as choppiness.
+	renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
 	SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "0"); // nearest-neighbor -- sharp blocks, never blurry
 
 	resize_canvas_if_needed();
