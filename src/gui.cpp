@@ -65,14 +65,25 @@ void Gui::render(const Registers &regs, Memory &mem, const Debugger &dbg)
 	uint32_t pal_dark  = 0x25080C;
 	uint32_t pal_stats = 0xC3A9C4;
 
-	// GAME SCREEN (400x250), scaled from the native 320x200 32bpp framebuffer
+	// GAME SCREEN (400x250), scaled from the native 320x200 32bpp framebuffer.
+	// Only 400 distinct sx values and 250 distinct sy values exist -- precompute
+	// them once instead of a multiply+divide per pixel (100,000/frame otherwise).
+	static int scale_x[400];
+	static int scale_y[250];
+	static bool scale_tables_built = false;
+	if (!scale_tables_built) {
+		for (int x = 0; x < 400; x++) scale_x[x] = (x * Memory::FB_W) / 400;
+		for (int y = 0; y < 250; y++) scale_y[y] = (y * Memory::FB_H) / 250;
+		scale_tables_built = true;
+	}
+
 	const uint32_t *fb32 = reinterpret_cast<const uint32_t *>(mem.framebuffer());
 	int tx = 15, ty = 55;
 	for (int y = 0; y < 250; y++) {
+		const uint32_t *src_row = fb32 + scale_y[y] * Memory::FB_W;
+		uint32_t *dst_row = screen + (y + ty) * TOTAL_W + tx;
 		for (int x = 0; x < 400; x++) {
-			int sx = (x * Memory::FB_W) / 400;
-			int sy = (y * Memory::FB_H) / 250;
-			screen[(y + ty) * TOTAL_W + (x + tx)] = fb32[sy * Memory::FB_W + sx];
+			dst_row[x] = src_row[scale_x[x]];
 		}
 	}
 
@@ -123,6 +134,13 @@ void Gui::render(const Registers &regs, Memory &mem, const Debugger &dbg)
 	// TRACE LOG
 	draw_shadow_text(hud_x, current_y, "--- TRACE LOG ---", pal_pink);
 	current_y += 15;
+
+	// Most recently recorded history entry == the instruction that just executed.
+	int active_idx = (regs.history_pos() + Registers::HISTORY_SIZE - 1) % Registers::HISTORY_SIZE;
+	const HistoryEntry &active = regs.history_at(active_idx);
+	sprintf(buf, "ACTIVE: %08X", active.instr);
+	draw_shadow_text(hud_x, current_y, buf, pal_pink);
+	current_y += 12;
 
 	sprintf(buf, "CURR PC: %08X", regs.get_pc());
 	draw_shadow_text(hud_x, current_y, buf, pal_white);
