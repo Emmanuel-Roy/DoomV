@@ -1,5 +1,6 @@
 #include "doom_system.hpp"
 #include <SDL2/SDL.h>
+#include <cstdio>
 #include <fstream>
 #include <vector>
 

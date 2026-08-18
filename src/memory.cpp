@@ -1,4 +1,5 @@
 #include "memory.hpp"
+#include <cstdio>
 #include <cstring>
 #include <fstream>
 
@@ -80,6 +81,9 @@ void Memory::write8(uint32_t addr, uint8_t val)
 	} else if (addr >= MMIO_FB && addr < MMIO_FB + FB_SIZE) {
 		fb[addr - MMIO_FB] = val;
 		fb_write_count++;
+	} else if (addr == MMIO_DEBUG) {
+		std::putchar(val);
+		std::fflush(stdout);
 	}
 }
 

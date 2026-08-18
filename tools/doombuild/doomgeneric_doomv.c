@@ -46,7 +46,7 @@ void DG_SetWindowTitle(const char *title)
 
 int main(void)
 {
-	static char *argv[] = { "doomv", "-iwad", "doom1.wad" };
+	static char *argv[] = { "doomv", "-iwad", IWAD_NAME };
 	int argc = 3;
 
 	doomgeneric_Create(argc, argv);

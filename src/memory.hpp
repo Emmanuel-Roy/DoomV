@@ -6,6 +6,7 @@ class Memory {
 public:
 	static constexpr uint32_t MMIO_INPUT = 0x10000000;
 	static constexpr uint32_t MMIO_TICK  = 0x10000004;
+	static constexpr uint32_t MMIO_DEBUG = 0x10000008;
 	static constexpr uint32_t MMIO_FB    = 0x10001000;
 
 	static constexpr int FB_W = 320;
@@ -25,8 +26,6 @@ public:
 	void     write8(uint32_t addr, uint8_t val);
 	void     write32(uint32_t addr, uint32_t val);
 
-	// TODO: parse the guest ELF and place PT_LOAD segments at their
-	// target addresses (see PLAN.md's "ELF vs flat binary" item).
 	bool load_elf(const char *path);
 
 	// Copies wad_bytes into the WAD region at WAD_BASE.

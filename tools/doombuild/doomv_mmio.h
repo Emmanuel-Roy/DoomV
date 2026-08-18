@@ -14,6 +14,12 @@
 // advances with executed instructions, not wall-clock time.
 #define MMIO_TICK    0x10000004u
 
+// Debug output: each byte written here gets echoed to the host's stdout.
+// No real UART protocol, just a write-only character sink -- exists so
+// printf/I_Error output isn't silently swallowed by nosys.specs's
+// always-fail _write stub.
+#define MMIO_DEBUG   0x10000008u
+
 // Framebuffer: native 32bpp RGBA, DOOMGENERIC_RESX * DOOMGENERIC_RESY
 // words, doomgeneric already does the palette conversion internally.
 // 320*200*4 = 256000 bytes, padded to a 256K page.
@@ -32,3 +38,7 @@
 
 #define DOOMGENERIC_RESX 320
 #define DOOMGENERIC_RESY 200
+
+// Fixed IWAD name handed to doomgeneric_Create's argv, and the one name
+// _open() in libc_shim.c will actually serve (see its comment for why).
+#define IWAD_NAME "doom1.wad"
