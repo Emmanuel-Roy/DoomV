@@ -1,0 +1,60 @@
+#pragma once
+#include <cstdint>
+#include <vector>
+
+class Memory {
+public:
+	static constexpr uint32_t MMIO_INPUT = 0x10000000;
+	static constexpr uint32_t MMIO_TICK  = 0x10000004;
+	static constexpr uint32_t MMIO_FB    = 0x10001000;
+
+	static constexpr int FB_W = 320;
+	static constexpr int FB_H = 200;
+	static constexpr uint32_t FB_SIZE = FB_W * FB_H * 4; // 32bpp, matches doomgeneric's native output
+
+	static constexpr uint32_t RAM_BASE  = 0x10041000;
+	static constexpr uint32_t RAM_SIZE  = 16 * 1024 * 1024;
+	static constexpr uint32_t WAD_BASE  = 0x11041000;
+	static constexpr uint32_t WAD_SIZE  = 20 * 1024 * 1024;
+
+	Memory();
+
+	uint8_t  read8(uint32_t addr);
+	uint16_t read16(uint32_t addr);
+	uint32_t read32(uint32_t addr);
+	void     write8(uint32_t addr, uint8_t val);
+	void     write32(uint32_t addr, uint32_t val);
+
+	// TODO: parse the guest ELF and place PT_LOAD segments at their
+	// target addresses (see PLAN.md's "ELF vs flat binary" item).
+	bool load_elf(const char *path);
+
+	// Copies wad_bytes into the WAD region at WAD_BASE.
+	bool load_wad(const uint8_t *wad_bytes, size_t len);
+
+	void push_key_event(bool pressed, uint8_t doom_keycode);
+
+	// TODO: instructions-per-tick constant still undecided, see PLAN.md's
+	// timing model item. Placeholder: advances the tick register 1:1 with
+	// executed instructions for now.
+	void step_instructions(uint32_t count);
+
+	const uint8_t *framebuffer() const { return fb.data(); }
+
+	// Returns the number of FB writes since the last call, and resets
+	// the counter. Used for the doom_fps dashboard metric.
+	uint32_t take_fb_write_count();
+
+private:
+	// RAM and WAD are contiguous (RAM_BASE..RAM_BASE+RAM_SIZE == WAD_BASE),
+	// so one backing buffer covers both -- see the memory map in PLAN.md.
+	std::vector<uint8_t> ram;
+	std::vector<uint8_t> fb;
+
+	uint32_t key_queue[16];
+	int key_queue_head;
+	int key_queue_tail;
+
+	uint32_t tick_counter;
+	uint32_t fb_write_count;
+};
