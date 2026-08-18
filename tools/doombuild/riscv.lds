@@ -27,6 +27,7 @@ SECTIONS
 
     _end = .;
     _heap_start = .;
+    PROVIDE(end = .); /* newlib's sbrk.c looks for this exact name */
 
     . = ORIGIN(RAM) + LENGTH(RAM);
     __stacktop = .;

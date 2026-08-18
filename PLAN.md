@@ -230,19 +230,47 @@ the CPU side just hasn't caught up yet.
   `ucrt64/bin` PATH fix from the SDL2 setup — same category of issue).
   As predicted, there's no exact prebuilt `rv32ima` multilib (`-print-multi-lib`
   shows `rv32im`/`rv32ia_zaamo_zalrsc` separately, nothing combined without
-  `c`) — but that only matters for linking against precompiled libgcc/libc
-  variants. Confirmed directly: `-march=rv32ima -mabi=ilp32 -nostdlib
-  -ffreestanding` compiles clean and emits a real hardware `mul`
-  instruction rather than a libgcc softmul call, which is what matters
-  since `start.S` is fully custom (no newlib/libgloss) per the startup
-  code item below.
+  `c`) — turned out not to matter even for linking: `ld`'s multilib
+  matching accepted `rv32ima/ilp32` against the `rv32ia_zaamo_zalrsc/ilp32`
+  prebuilt libc fine (IMA is a superset, our own code still gets real `mul`/
+  `div` instructions, the precompiled libc just doesn't happen to use them
+  internally). See the libc-linking bullet below — this ended up mattering
+  a lot more than expected.
 - **doomgeneric vendored** — added as a git submodule at
   `tools/doombuild/doomgeneric` (pointing at `ozkl/doomgeneric`), not a
   frozen copy, so it can be updated/pinned deliberately later.
 - **Startup code** — since Zicsr isn't enabled, whatever boots the Doom
-  binary can't rely on stock newlib/libgloss crt0 (it often touches CSRs).
-  Needs a hand-written `start.S`: copy `.data`, zero `.bss`, set `sp`,
-  call `main`.
+  binary can't rely on the toolchain's own `crt0.o` (it touches CSRs and
+  defines its own conflicting `_start`). Solved with a hand-written
+  `start.S`: zero `.bss`, set `sp`, call `main` (no `.data` copy needed,
+  see the memory map section). Built with `-nostartfiles`, not `-nostdlib`
+  — that distinction turned out to matter a lot, see below.
+- **Libc — resolved, and it's not what the plan originally assumed.**
+  Originally figured on hand-writing every libc function doomgeneric calls
+  (`memcpy`, `strlen`, the whole `printf` family, `malloc`, ~50 symbols
+  total from a real link attempt). Turns out unnecessary: swap `-nostdlib`
+  for `-nostartfiles -specs=nosys.specs` and the toolchain's real
+  `libc.a`/`libnosys.a` link in fine (see the toolchain bullet above for
+  why the multilib mismatch doesn't block this). `-nostartfiles` drops
+  only the toolchain's `crt0.o` (which we don't want anyway, see above) —
+  everything else in libc, memcpy/strlen/printf/malloc included, comes for
+  free. `_sbrk` (malloc's backing store) already works via `PROVIDE(end = .)`
+  in `riscv.lds`, matching where newlib's `sbrk.c` looks. Full doomgeneric
+  build (all ~80 engine sources + our 3 platform files) linked clean with
+  **zero** undefined references after adding exactly one stub —
+  `mkdir` (`libc_shim.c`), which isn't in `nosys.specs`'s default set.
+  `_read`/`_write`/`_close`/`_lseek`/`_fstat`/`_isatty`/`_kill`/`_getpid`
+  already exist as always-fail stubs from `nosys.specs` — fine for now
+  (no real filesystem), revisit `_write` specifically if/when a UART
+  gets added for debug output.
+- **Floating point showed up, unexpectedly.** The pre-libc-fix link attempt
+  surfaced soft-float intrinsics (`__mulsf3`, `__divsf3`, etc.) — something
+  in doomgeneric's source uses `float`/`double` despite Doom's renderer
+  being fixed-point by design (confirmed correct earlier). Likely a
+  non-hot-path utility (config parsing, scale-factor math), not the
+  renderer itself, but worth tracking down before assuming performance is
+  unaffected — not blocking today since it links fine either way (GCC's
+  soft-float library, not hardware F/D, handles it).
 - **Doom source: use doomgeneric, not raw linuxdoom.** Decided — doomgeneric's
   porting surface is one file, `doomgeneric_doomv.c`, implementing `DG_Init`,
   `DG_DrawFrame`, `DG_SleepMs`, `DG_GetTicksMs`, `DG_GetKey` (+ optional
@@ -290,12 +318,16 @@ the CPU side just hasn't caught up yet.
   Splitting into this many files just means updating its source list for
   now; only worth reconsidering (e.g. CMake) if the file count keeps
   growing.
-- **Guest build pipeline — separate from the above.** Cross-compiling
-  doomgeneric + `doomgeneric_doomv.c` + `w_file_doomv.c` + `start.S` into an
-  RV32IMA ELF needs its own Makefile and linker script (memory regions,
-  `.data`/`.bss`/heap/stack placement — the `start.S` bullet above covers
-  the boot code, not this). Two independent build systems: one produces the
-  emulator, the other produces the guest binary the emulator loads.
+- **Guest build pipeline — resolved.** `tools/doombuild/Makefile`, separate
+  from the emulator's own root `Makefile` (two independent build systems:
+  one produces the emulator, the other the guest binary it loads). Lists
+  all ~80 engine sources + the 3 platform files, `WAD=doom1|doom2|final`
+  selects the target (default `doom1`) setting `WAD_LENGTH` accordingly,
+  `make all` builds all three. No `make` binary exists on this machine
+  yet though (checked `msys64` and the toolchain — not bundled with
+  either) — validated the Makefile's build recipe by running the
+  equivalent `riscv-none-elf-gcc` invocation directly instead. Full build
+  linked clean, see the libc bullet above.
 - **Input key mapping** — `DG_GetKey` expects Doom's own key constants
   (`KEY_RIGHTARROW` etc.) plus pressed/released events, not a raw SDL
   keysym. Current `handle_input()` just stores one raw key into
