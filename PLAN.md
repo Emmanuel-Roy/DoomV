@@ -271,6 +271,39 @@ the CPU side just hasn't caught up yet.
   renderer itself, but worth tracking down before assuming performance is
   unaffected — not blocking today since it links fine either way (GCC's
   soft-float library, not hardware F/D, handles it).
+- **First real boot achieved — the title screen renders correctly.**
+  Getting here took three real bugs, each found by actually running the
+  built guest ELF against the host emulator and watching it (screenshots,
+  a debug-output MMIO channel, and a memory watchpoint), not by
+  inspection:
+  1. `d_iwad.c`'s IWAD search goes through `fopen()`/`_open()`, not
+     `w_file_doomv.c`'s `W_OpenFile` (that's only reached once the IWAD
+     path is already resolved). Fixed with a real `_open`/`_read`/
+     `_close`/`_lseek` in `libc_shim.c`, scoped to only succeed for
+     `IWAD_NAME` opened read-only, so files that genuinely don't exist
+     (config, saves) still correctly fall back to defaults.
+  2. `Z_Malloc` failed allocating 64KB right after a 6MB zone had just
+     succeeded — root cause invisible inside the precompiled `libc.a` (no
+     newlib source shipped). Replaced the toolchain's `_sbrk` with our own
+     simple bump allocator, same pattern the reference project uses.
+  3. **The real one**: `riscv.lds`'s `.bss` rule (`*(.bss*)`) doesn't
+     match `.sbss*` — a different name, not a suffix match. GCC/newlib
+     emit many small-data `.sbss.*` sections; missing them meant the
+     linker orphan-placed them *after* `_end`/`heap_start`, so the very
+     first `malloc` call silently overlapped still-live globals (`drone`,
+     `loop_interface`, `gametic`, ...). Found via a watchpoint on the
+     corrupted global's address, catching the exact instruction that wrote
+     the wrong value into it. Fixed by adding `*(.sbss*)`/`*(.scommon)` to
+     the `.bss` rule (and `*(.sdata*)`/`*(.srodata*)` to `.data`/`.text`
+     for the same reason, before they caused a quieter version of the same
+     bug). Also found and fixed along the way: `DOOMGENERIC_RESX/RESY`
+     were only being set via a header `#define` in `doomv_mmio.h`, which
+     only affects files that `#include` it — `doomgeneric.c` (allocates
+     `DG_ScreenBuffer`) and `i_video.c` (writes into it) don't, so they
+     silently used doomgeneric's own 640x400 default while everything else
+     assumed 320x200, corrupting the image with a stride mismatch. Moved
+     to a global `-D` flag in the Makefile instead so every translation
+     unit agrees.
 - **Doom source: use doomgeneric, not raw linuxdoom.** Decided — doomgeneric's
   porting surface is one file, `doomgeneric_doomv.c`, implementing `DG_Init`,
   `DG_DrawFrame`, `DG_SleepMs`, `DG_GetTicksMs`, `DG_GetKey` (+ optional

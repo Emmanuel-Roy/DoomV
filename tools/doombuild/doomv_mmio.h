@@ -36,8 +36,15 @@
 #define WAD_BASE     0x11041000u
 #define WAD_SIZE     0x01400000u   // 20MB
 
-#define DOOMGENERIC_RESX 320
-#define DOOMGENERIC_RESY 200
+// DOOMGENERIC_RESX/RESY are NOT defined here on purpose -- a #define in
+// this header only takes effect in .c files that #include it, but
+// doomgeneric.c (which allocates DG_ScreenBuffer) and i_video.c (which
+// writes into it) don't. A mismatch there means every other translation
+// unit sees doomgeneric.h's own default (640x400) while this one saw
+// 320x200, producing a real stride/size mismatch -- DG_ScreenBuffer gets
+// allocated 640x400 but DG_DrawFrame only copies out a 320x200 chunk of
+// it, corrupting the image. Must be passed as a global -D compiler flag
+// (see the Makefile) so every file agrees.
 
 // Fixed IWAD name handed to doomgeneric_Create's argv, and the one name
 // _open() in libc_shim.c will actually serve (see its comment for why).

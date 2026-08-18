@@ -16,8 +16,13 @@ CC = riscv-none-elf-gcc
 # stub the small syscall surface nosys.specs doesn't already cover
 # (currently just mkdir, see libc_shim.c). _sbrk works via the `end`
 # symbol PROVIDE'd in riscv.lds.
+# DOOMGENERIC_RESX/RESY as global -D flags, not a header #define -- every
+# translation unit must agree (doomgeneric.c allocates DG_ScreenBuffer at
+# this size, i_video.c writes into it assuming this stride). See
+# doomv_mmio.h's comment for what happens if they disagree.
 MARCH   = -march=rv32ima -mabi=ilp32
-CFLAGS  = $(MARCH) -nostartfiles -specs=nosys.specs -O2 -I. -I$(DOOMGENERIC_DIR)
+RESFLAGS = -DDOOMGENERIC_RESX=320 -DDOOMGENERIC_RESY=200
+CFLAGS  = $(MARCH) -nostartfiles -specs=nosys.specs -O2 $(RESFLAGS) -I. -I$(DOOMGENERIC_DIR)
 LDFLAGS = -T riscv.lds -nostartfiles -specs=nosys.specs
 
 DOOMGENERIC_DIR = doomgeneric/doomgeneric
