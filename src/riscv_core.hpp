@@ -19,15 +19,17 @@ public:
 	void exec_32ZICSR(const DecodedInstruction &instr, Registers &regs, Memory &mem);
 
 private:
-	// LR.W/SC.W reservation state. Single-hart, no interrupts, so this only
+	// LR/SC reservation state. Single-hart, no interrupts, so this only
 	// ever needs to survive the immediate LR->SC pair a retry loop does --
-	// no cross-hart invalidation logic needed.
+	// no cross-hart invalidation logic needed. Doesn't separately track
+	// LR.W vs LR.D width (a mixed-width LR->SC pair at the same address
+	// would incorrectly succeed) -- not something compiled code produces.
 	bool reservation_valid;
-	uint32_t reservation_addr;
+	uint64_t reservation_addr;
 
 	// ECALL/EBREAK both funnel into the same M-mode trap entry sequence
 	// (illegal-instruction detection stays a separate debugger safety net,
 	// see exec_32ZICSR's comment -- this is only for the deliberate,
 	// explicit trap-requesting instructions).
-	void enter_trap(Registers &regs, uint32_t cause, uint32_t tval);
+	void enter_trap(Registers &regs, uint64_t cause, uint64_t tval);
 };

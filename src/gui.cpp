@@ -180,7 +180,11 @@ void Gui::render(const Snapshot &snap)
 		sprintf(buf, "X%02d:", i);
 		draw_shadow_text(cx, cy, buf, pal_red);
 
-		sprintf(buf, "%08X", snap.x[i]);
+		// Low 32 bits only -- full 64-bit hex doesn't fit the two-column
+		// grid without overlapping the second column. CURR PC and the
+		// trace log below (single-width lines, not column-constrained)
+		// show the full 64-bit value.
+		sprintf(buf, "%08X", (uint32_t)snap.x[i]);
 		draw_shadow_text(cx + 35, cy, buf, pal_white);
 	}
 
@@ -195,12 +199,12 @@ void Gui::render(const Snapshot &snap)
 	draw_shadow_text(hud_x, current_y, buf, pal_pink);
 	current_y += 12;
 
-	sprintf(buf, "CURR PC: %08X", snap.pc);
+	sprintf(buf, "CURR PC: %016llX", (unsigned long long)snap.pc);
 	draw_shadow_text(hud_x, current_y, buf, pal_white);
 
 	for (int i = 0; i < 4; i++) {
 		const HistoryEntry &h = snap.trace[i];
-		sprintf(buf, "%08X: %s", h.pc, h.mnemonic);
+		sprintf(buf, "%016llX: %s", (unsigned long long)h.pc, h.mnemonic);
 		draw_shadow_text(hud_x, (current_y + 15) + (i * 11), buf, pal_stats);
 	}
 

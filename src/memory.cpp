@@ -3,18 +3,19 @@
 #include <cstring>
 #include <fstream>
 
-// Minimal ELF32 structures -- just enough to read PT_LOAD segments,
-// not a general-purpose ELF library.
+// Minimal ELF64 structures -- just enough to read PT_LOAD segments,
+// not a general-purpose ELF library. Field widths and (for Phdr) field
+// order both differ from ELF32, not just the widths.
 namespace {
 
-struct Elf32_Ehdr {
+struct Elf64_Ehdr {
 	uint8_t  e_ident[16];
 	uint16_t e_type;
 	uint16_t e_machine;
 	uint32_t e_version;
-	uint32_t e_entry;
-	uint32_t e_phoff;
-	uint32_t e_shoff;
+	uint64_t e_entry;
+	uint64_t e_phoff;
+	uint64_t e_shoff;
 	uint32_t e_flags;
 	uint16_t e_ehsize;
 	uint16_t e_phentsize;
@@ -24,15 +25,15 @@ struct Elf32_Ehdr {
 	uint16_t e_shstrndx;
 };
 
-struct Elf32_Phdr {
+struct Elf64_Phdr {
 	uint32_t p_type;
-	uint32_t p_offset;
-	uint32_t p_vaddr;
-	uint32_t p_paddr;
-	uint32_t p_filesz;
-	uint32_t p_memsz;
-	uint32_t p_flags;
-	uint32_t p_align;
+	uint32_t p_flags; // note: right after p_type in Elf64, unlike Elf32 where it's last
+	uint64_t p_offset;
+	uint64_t p_vaddr;
+	uint64_t p_paddr;
+	uint64_t p_filesz;
+	uint64_t p_memsz;
+	uint64_t p_align;
 };
 
 constexpr uint32_t PT_LOAD = 1;
@@ -46,7 +47,7 @@ Memory::Memory()
 	for (int i = 0; i < 16; i++) key_queue[i] = 0;
 }
 
-uint8_t Memory::read8(uint32_t addr)
+uint8_t Memory::read8(uint64_t addr)
 {
 	if (addr >= RAM_BASE && addr < RAM_BASE + RAM_SIZE + WAD_SIZE)
 		return ram[addr - RAM_BASE];
@@ -55,12 +56,12 @@ uint8_t Memory::read8(uint32_t addr)
 	return 0;
 }
 
-uint16_t Memory::read16(uint32_t addr)
+uint16_t Memory::read16(uint64_t addr)
 {
 	return (uint16_t)read8(addr) | ((uint16_t)read8(addr + 1) << 8);
 }
 
-uint32_t Memory::read32(uint32_t addr)
+uint32_t Memory::read32(uint64_t addr)
 {
 	if (addr == MMIO_INPUT) {
 		std::lock_guard<std::mutex> lock(key_mutex);
@@ -89,7 +90,17 @@ uint32_t Memory::read32(uint32_t addr)
 	return (uint32_t)read16(addr) | ((uint32_t)read16(addr + 2) << 16);
 }
 
-void Memory::write8(uint32_t addr, uint8_t val)
+uint64_t Memory::read64(uint64_t addr)
+{
+	if (addr >= RAM_BASE && addr <= RAM_BASE + RAM_SIZE + WAD_SIZE - 8) {
+		uint64_t val;
+		std::memcpy(&val, &ram[addr - RAM_BASE], sizeof(val));
+		return val;
+	}
+	return (uint64_t)read32(addr) | ((uint64_t)read32(addr + 4) << 32);
+}
+
+void Memory::write8(uint64_t addr, uint8_t val)
 {
 	if (addr >= RAM_BASE && addr < RAM_BASE + RAM_SIZE + WAD_SIZE) {
 		ram[addr - RAM_BASE] = val;
@@ -109,7 +120,7 @@ uint32_t Memory::take_fb_write_count()
 	return count;
 }
 
-void Memory::write32(uint32_t addr, uint32_t val)
+void Memory::write32(uint64_t addr, uint32_t val)
 {
 	write8(addr + 0, (val >> 0) & 0xFF);
 	write8(addr + 1, (val >> 8) & 0xFF);
@@ -117,12 +128,18 @@ void Memory::write32(uint32_t addr, uint32_t val)
 	write8(addr + 3, (val >> 24) & 0xFF);
 }
 
+void Memory::write64(uint64_t addr, uint64_t val)
+{
+	write32(addr + 0, (uint32_t)(val & 0xFFFFFFFFu));
+	write32(addr + 4, (uint32_t)(val >> 32));
+}
+
 bool Memory::load_elf(const char *path)
 {
 	std::ifstream file(path, std::ios::binary);
 	if (!file.is_open()) return false;
 
-	Elf32_Ehdr ehdr;
+	Elf64_Ehdr ehdr;
 	file.read((char *)&ehdr, sizeof(ehdr));
 	if (!file) return false;
 	if (ehdr.e_ident[0] != 0x7F || ehdr.e_ident[1] != 'E' ||
@@ -131,8 +148,8 @@ bool Memory::load_elf(const char *path)
 	}
 
 	for (int i = 0; i < ehdr.e_phnum; i++) {
-		Elf32_Phdr phdr;
-		file.seekg(ehdr.e_phoff + (uint32_t)i * ehdr.e_phentsize);
+		Elf64_Phdr phdr;
+		file.seekg(ehdr.e_phoff + (uint64_t)i * ehdr.e_phentsize);
 		file.read((char *)&phdr, sizeof(phdr));
 		if (!file) return false;
 
@@ -141,7 +158,7 @@ bool Memory::load_elf(const char *path)
 			return false;
 		}
 
-		uint32_t ram_off = phdr.p_vaddr - RAM_BASE;
+		uint64_t ram_off = phdr.p_vaddr - RAM_BASE;
 
 		if (phdr.p_filesz > 0) {
 			file.seekg(phdr.p_offset);

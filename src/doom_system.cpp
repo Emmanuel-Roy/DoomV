@@ -89,7 +89,7 @@ void DoomSystem::step()
 {
 	if (debugger.halted) return;
 
-	uint32_t pc = regs.get_pc();
+	uint64_t pc = regs.get_pc();
 	if (debugger.should_halt(pc, false)) {
 		debugger.dump_log(regs, "crash.log");
 		return;

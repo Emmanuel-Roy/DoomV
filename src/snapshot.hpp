@@ -11,8 +11,8 @@
 // and avoids needing locks scattered through it.
 struct Snapshot {
 	std::vector<uint32_t> framebuffer = std::vector<uint32_t>(Memory::FB_W * Memory::FB_H, 0);
-	uint32_t x[32] = {};
-	uint32_t pc = 0;
+	uint64_t x[32] = {};
+	uint64_t pc = 0;
 	bool halted = false;
 	HistoryEntry active = {0, 0, "???"};
 	HistoryEntry trace[4] = {{0, 0, "???"}, {0, 0, "???"}, {0, 0, "???"}, {0, 0, "???"}};

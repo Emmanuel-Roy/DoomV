@@ -5,27 +5,32 @@
 
 class Memory {
 public:
-	static constexpr uint32_t MMIO_INPUT = 0x10000000;
-	static constexpr uint32_t MMIO_TICK  = 0x10000004;
-	static constexpr uint32_t MMIO_DEBUG = 0x10000008;
-	static constexpr uint32_t MMIO_FB    = 0x10001000;
+	// MMIO/RAM/WAD addresses are still small values that fit comfortably in
+	// 64 bits -- RV64 doesn't require actually using a 64-bit-wide address
+	// space, just being able to represent one.
+	static constexpr uint64_t MMIO_INPUT = 0x10000000;
+	static constexpr uint64_t MMIO_TICK  = 0x10000004;
+	static constexpr uint64_t MMIO_DEBUG = 0x10000008;
+	static constexpr uint64_t MMIO_FB    = 0x10001000;
 
 	static constexpr int FB_W = 320;
 	static constexpr int FB_H = 200;
 	static constexpr uint32_t FB_SIZE = FB_W * FB_H * 4; // 32bpp, matches doomgeneric's native output
 
-	static constexpr uint32_t RAM_BASE  = 0x10041000;
-	static constexpr uint32_t RAM_SIZE  = 16 * 1024 * 1024;
-	static constexpr uint32_t WAD_BASE  = 0x11041000;
-	static constexpr uint32_t WAD_SIZE  = 20 * 1024 * 1024;
+	static constexpr uint64_t RAM_BASE  = 0x10041000;
+	static constexpr uint64_t RAM_SIZE  = 16 * 1024 * 1024;
+	static constexpr uint64_t WAD_BASE  = 0x11041000;
+	static constexpr uint64_t WAD_SIZE  = 20 * 1024 * 1024;
 
 	Memory();
 
-	uint8_t  read8(uint32_t addr);
-	uint16_t read16(uint32_t addr);
-	uint32_t read32(uint32_t addr);
-	void     write8(uint32_t addr, uint8_t val);
-	void     write32(uint32_t addr, uint32_t val);
+	uint8_t  read8(uint64_t addr);
+	uint16_t read16(uint64_t addr);
+	uint32_t read32(uint64_t addr);
+	uint64_t read64(uint64_t addr);
+	void     write8(uint64_t addr, uint8_t val);
+	void     write32(uint64_t addr, uint32_t val);
+	void     write64(uint64_t addr, uint64_t val);
 
 	bool load_elf(const char *path);
 

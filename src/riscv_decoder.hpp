@@ -17,8 +17,10 @@ struct DecodedInstruction {
 	uint8_t opcode;
 	uint8_t rd, rs1, rs2;
 	uint8_t funct3, funct7;
-	int32_t imm;
+	int64_t imm;    // sign-extends to full XLEN (64 bits)
 	uint8_t length; // 2 or 4 bytes
+	bool word_op;   // true for the *W-suffixed RV64 forms (ADDIW, SLLW, MULW, ...) -- 32-bit op, sign-extend result to 64
+	bool op_64;     // true for the .D-suffixed RV64A forms (LR.D/SC.D/AMO*.D) -- selects 64-bit vs 32-bit memory width
 	const char *mnemonic; // e.g. "ADDI" -- static string, name only, no operands
 };
 
@@ -36,7 +38,7 @@ class Decoder {
 public:
 	Decoder(RiscvCore &core, Registers &regs, Memory &mem);
 
-	DispatchResult decode_and_dispatch(uint32_t pc, uint32_t raw_instr);
+	DispatchResult decode_and_dispatch(uint64_t pc, uint32_t raw_instr);
 
 private:
 	RiscvCore &core;
@@ -55,7 +57,10 @@ private:
 	// just expands a 16-bit word into the equivalent DecodedInstruction
 	// (same opcode/funct3/funct7/rd/rs1/rs2/imm fields a real 32-bit
 	// encoding of that operation would produce, length=2 instead of 4) and
-	// lets it flow through the existing exec_32I dispatch unchanged.
+	// lets it flow through the existing exec_32I dispatch unchanged. Note
+	// several encodings mean different things on RV64 than RV32 (e.g.
+	// quadrant-1 funct3=001 is C.JAL on RV32 but C.ADDIW on RV64) -- this
+	// project targets RV64 only, so only the RV64 meaning is implemented.
 	DecodedInstruction decode_compressed(uint16_t raw16) const;
 
 	// Hot loops (Doom's render/tic loop, memcpy-ish helpers, ...) execute
@@ -68,7 +73,7 @@ private:
 	// entry, 32 for a standard one).
 	struct CacheEntry {
 		bool valid = false;
-		uint32_t addr = 0;
+		uint64_t addr = 0;
 		uint32_t raw_instr = 0;
 		DecodedInstruction decoded{};
 		bool enabled = false;

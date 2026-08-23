@@ -7,37 +7,37 @@ Registers::Registers() : pc(0), history_ptr(0)
 	for (int i = 0; i < HISTORY_SIZE; i++) history[i] = {0, 0, "???"};
 }
 
-uint32_t Registers::read_x(int i) const
+uint64_t Registers::read_x(int i) const
 {
 	return x[i];
 }
 
-void Registers::write_x(int i, uint32_t value)
+void Registers::write_x(int i, uint64_t value)
 {
 	if (i != 0) x[i] = value;
 }
 
-uint32_t Registers::get_pc() const
+uint64_t Registers::get_pc() const
 {
 	return pc;
 }
 
-void Registers::set_pc(uint32_t value)
+void Registers::set_pc(uint64_t value)
 {
 	pc = value;
 }
 
-uint32_t Registers::read_csr(uint16_t addr) const
+uint64_t Registers::read_csr(uint16_t addr) const
 {
 	return csr[addr];
 }
 
-void Registers::write_csr(uint16_t addr, uint32_t value)
+void Registers::write_csr(uint16_t addr, uint64_t value)
 {
 	csr[addr] = value;
 }
 
-void Registers::record_history(uint32_t pc_val, uint32_t instr, const char *mnemonic)
+void Registers::record_history(uint64_t pc_val, uint32_t instr, const char *mnemonic)
 {
 	history[history_ptr] = {pc_val, instr, mnemonic};
 	history_ptr = (history_ptr + 1) % HISTORY_SIZE;
