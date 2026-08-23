@@ -12,15 +12,15 @@ struct RawKeyEvent {
 class Gui {
 public:
 	// Layout is designed in these units; actual canvas is scaled up to
-	// whatever the window's real pixel size is (default 1920x1080, an
-	// exact 3x multiple, so the baseline is pixel-crisp -- see render()).
+	// whatever the window's real pixel size is (default 1280x720, an
+	// exact 2x multiple, so the baseline is pixel-crisp -- see render()).
 	static constexpr int DESIGN_W = 640;
 	static constexpr int DESIGN_H = 360;
 
 	Gui();
 	~Gui();
 
-	bool init(int window_w = 1920, int window_h = 1080);
+	bool init(int window_w = 1280, int window_h = 720);
 
 	void render(const Snapshot &snap);
 	std::vector<RawKeyEvent> poll_input();
