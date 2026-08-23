@@ -66,5 +66,6 @@ private:
 
 	uint32_t instr_count;   // raw executed-instruction count
 	uint32_t tick_counter;  // instr_count / INSTR_PER_MS -- what MMIO_TICK exposes
+	uint32_t ms_accum;      // instructions banked toward the next tick_counter++ (avoids a divide every instruction)
 	uint32_t fb_write_count;
 };

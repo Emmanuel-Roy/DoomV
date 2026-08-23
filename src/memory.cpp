@@ -41,7 +41,7 @@ constexpr uint32_t PT_LOAD = 1;
 
 Memory::Memory()
 	: ram(RAM_SIZE + WAD_SIZE, 0), fb(FB_SIZE, 0),
-	  key_queue_head(0), key_queue_tail(0), instr_count(0), tick_counter(0), fb_write_count(0)
+	  key_queue_head(0), key_queue_tail(0), instr_count(0), tick_counter(0), ms_accum(0), fb_write_count(0)
 {
 	for (int i = 0; i < 16; i++) key_queue[i] = 0;
 }
@@ -72,6 +72,20 @@ uint32_t Memory::read32(uint32_t addr)
 	if (addr == MMIO_TICK) {
 		return tick_counter;
 	}
+
+	// Fast path: every instruction fetch and almost every load/store lands
+	// here. One range check plus a direct 4-byte copy replaces the 10-branch
+	// chain of read32 -> 2x read16 -> 4x read8. memcpy (not a pointer cast)
+	// avoids strict-aliasing UB; it produces RISC-V's little-endian byte
+	// order for free because the host (x86) is little-endian too -- already
+	// an implicit assumption everywhere else raw instruction words get
+	// manipulated directly (e.g. the decoder's immediate-field shifts).
+	if (addr >= RAM_BASE && addr <= RAM_BASE + RAM_SIZE + WAD_SIZE - 4) {
+		uint32_t val;
+		std::memcpy(&val, &ram[addr - RAM_BASE], sizeof(val));
+		return val;
+	}
+
 	return (uint32_t)read16(addr) | ((uint32_t)read16(addr + 2) << 16);
 }
 
@@ -163,5 +177,9 @@ void Memory::push_key_event(bool pressed, uint8_t doom_keycode)
 void Memory::step_instructions(uint32_t count)
 {
 	instr_count += count;
-	tick_counter = instr_count / INSTR_PER_MS;
+	ms_accum += count;
+	while (ms_accum >= INSTR_PER_MS) {
+		ms_accum -= INSTR_PER_MS;
+		tick_counter++;
+	}
 }
