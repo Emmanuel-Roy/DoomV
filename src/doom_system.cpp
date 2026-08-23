@@ -97,7 +97,11 @@ void DoomSystem::step()
 
 	uint32_t instr = memory.read32(pc);
 	DispatchResult result = decoder.decode_and_dispatch(pc, instr);
-	regs.record_history(pc, instr, result.mnemonic);
+	// A compressed instruction's raw fetch also contains the next
+	// instruction's bytes in its upper half -- mask those off so the
+	// trace log/crash dump show just the actual 16-bit encoding.
+	uint32_t recorded_instr = (result.length == 2) ? (instr & 0xFFFF) : instr;
+	regs.record_history(pc, recorded_instr, result.mnemonic);
 
 	if (debugger.should_halt(pc, result.illegal)) {
 		debugger.dump_log(regs, "crash.log");
