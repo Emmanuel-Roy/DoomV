@@ -5,6 +5,6 @@ namespace Extensions {
 	constexpr bool M = true;
 	constexpr bool A = true;
 	constexpr bool C = true;
-	constexpr bool ZICSR = false;
+	constexpr bool ZICSR = true;
 	constexpr bool V = false;
 }

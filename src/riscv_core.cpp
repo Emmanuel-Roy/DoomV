@@ -4,6 +4,24 @@
 #include <cstdint>
 #include <climits>
 
+namespace {
+// M-mode CSR addresses actually given meaning by exec_32ZICSR/enter_trap.
+// Anything else (mscratch, misa, mhartid, ...) is still fully readable/
+// writable -- Registers::csr[] backs all 4096 addresses generically -- it
+// just has no side effects, which is correct for those.
+constexpr uint16_t CSR_MSTATUS = 0x300;
+constexpr uint16_t CSR_MTVEC   = 0x305;
+constexpr uint16_t CSR_MEPC    = 0x341;
+constexpr uint16_t CSR_MCAUSE  = 0x342;
+constexpr uint16_t CSR_MTVAL   = 0x343;
+
+constexpr uint32_t MSTATUS_MIE  = 1u << 3;
+constexpr uint32_t MSTATUS_MPIE = 1u << 7;
+
+constexpr uint32_t CAUSE_BREAKPOINT   = 3;
+constexpr uint32_t CAUSE_ECALL_FROM_M = 11;
+}
+
 RiscvCore::RiscvCore() : reservation_valid(false), reservation_addr(0)
 {
 }
@@ -232,5 +250,82 @@ void RiscvCore::exec_32A(const DecodedInstruction &instr, Registers &regs, Memor
 
 	mem.write32(addr, result);
 	regs.write_x(instr.rd, loaded); // rd gets the pre-op value for every real AMO op
+	regs.set_pc(pc + instr.length);
+}
+
+void RiscvCore::enter_trap(Registers &regs, uint32_t cause, uint32_t tval)
+{
+	uint32_t pc = regs.get_pc();
+	regs.write_csr(CSR_MEPC, pc);
+	regs.write_csr(CSR_MCAUSE, cause);
+	regs.write_csr(CSR_MTVAL, tval);
+
+	// Standard M-mode enable stacking: the current interrupt-enable bit is
+	// saved to MPIE and cleared, so a handler doesn't get pre-empted by
+	// itself; MRET reverses this.
+	uint32_t mstatus = regs.read_csr(CSR_MSTATUS);
+	mstatus = (mstatus & MSTATUS_MIE) ? (mstatus | MSTATUS_MPIE) : (mstatus & ~MSTATUS_MPIE);
+	mstatus &= ~MSTATUS_MIE;
+	regs.write_csr(CSR_MSTATUS, mstatus);
+
+	// Direct mode only (mtvec[1:0] ignored) -- vectored mode's cause-based
+	// offset only applies to interrupts, and this project has no interrupt
+	// sources (no timer/external IRQ controller), only synchronous
+	// exceptions, which always go to the base address regardless of mode.
+	regs.set_pc(regs.read_csr(CSR_MTVEC) & ~0x3u);
+}
+
+void RiscvCore::exec_32ZICSR(const DecodedInstruction &instr, Registers &regs, Memory &mem)
+{
+	(void)mem;
+	uint32_t pc = regs.get_pc();
+
+	if (instr.funct3 == 0) {
+		// ECALL/EBREAK/MRET -- control transfer, not a CSR read/modify/write.
+		// Illegal-instruction detection deliberately stays a separate,
+		// unconditional debugger halt (see DoomSystem::step) rather than a
+		// real trap here: nothing in this project sets up mtvec to actually
+		// handle one, so routing illegal instructions through this same
+		// path would just spin forever re-trapping instead of surfacing a
+		// crash log.
+		switch (instr.imm) {
+		case 0x000: // ECALL
+			enter_trap(regs, CAUSE_ECALL_FROM_M, 0);
+			return;
+		case 0x001: // EBREAK
+			enter_trap(regs, CAUSE_BREAKPOINT, pc);
+			return;
+		case 0x302: { // MRET
+			uint32_t mstatus = regs.read_csr(CSR_MSTATUS);
+			mstatus = (mstatus & MSTATUS_MPIE) ? (mstatus | MSTATUS_MIE) : (mstatus & ~MSTATUS_MIE);
+			mstatus |= MSTATUS_MPIE; // MPIE reset to 1 on return, per spec
+			regs.write_csr(CSR_MSTATUS, mstatus);
+			regs.set_pc(regs.read_csr(CSR_MEPC));
+			return;
+		}
+		default:
+			// Unimplemented privileged op (WFI, SFENCE.VMA, ...) -- not
+			// expected without an OS; treated as a no-op like decode()'s
+			// other unrecognized-but-enabled encodings.
+			regs.set_pc(pc + instr.length);
+			return;
+		}
+	}
+
+	uint16_t csr = (uint16_t)instr.imm;
+	uint32_t old = regs.read_csr(csr);
+	// The *I forms (funct3 bit 2 set) use the rs1 field as a 5-bit
+	// zero-extended immediate instead of a register number.
+	uint32_t operand = (instr.funct3 & 0x4) ? instr.rs1 : regs.read_x(instr.rs1);
+
+	uint32_t updated = old;
+	switch (instr.funct3 & 0x3) {
+	case 0b01: updated = operand; break; // CSRRW/CSRRWI -- always writes
+	case 0b10: if (instr.rs1 != 0) updated = old | operand; break;  // CSRRS/CSRRSI -- rs1/uimm==0 means read-only
+	case 0b11: if (instr.rs1 != 0) updated = old & ~operand; break; // CSRRC/CSRRCI
+	}
+
+	regs.write_csr(csr, updated);
+	regs.write_x(instr.rd, old);
 	regs.set_pc(pc + instr.length);
 }

@@ -166,12 +166,31 @@ DecodedInstruction Decoder::decode(uint32_t raw_instr, Extension ext) const
 		instr.mnemonic = (funct3 == 0b001) ? "FENCE.I" : "FENCE";
 		break;
 
-	case 0b1110011:
-		if (raw_instr == 0x00000073) instr.mnemonic = "ECALL";
-		else if (raw_instr == 0x00100073) instr.mnemonic = "EBREAK";
-		else instr.mnemonic = "CSR";
-		instr.imm = imm_i;
+	case 0b1110011: {
+		// imm[11:0] here is a CSR address (0-4095), not a signed immediate --
+		// reusing imm_i would sign-extend and corrupt any address with bit
+		// 11 set (e.g. mhartid = 0xF14).
+		uint32_t csr_or_funct12 = (raw_instr >> 20) & 0xFFF;
+		instr.imm = (int32_t)csr_or_funct12;
+		if (funct3 == 0b000) {
+			if (raw_instr == 0x00000073) instr.mnemonic = "ECALL";
+			else if (raw_instr == 0x00100073) instr.mnemonic = "EBREAK";
+			else if (raw_instr == 0x30200073) instr.mnemonic = "MRET";
+			// else: unimplemented privileged op (WFI, SFENCE.VMA, ...) --
+			// mnemonic stays "???"; exec_32ZICSR treats it as a no-op since
+			// nothing in this project runs an OS that would emit one.
+		} else {
+			switch (funct3) {
+			case 0b001: instr.mnemonic = "CSRRW";  break;
+			case 0b010: instr.mnemonic = "CSRRS";  break;
+			case 0b011: instr.mnemonic = "CSRRC";  break;
+			case 0b101: instr.mnemonic = "CSRRWI"; break;
+			case 0b110: instr.mnemonic = "CSRRSI"; break;
+			case 0b111: instr.mnemonic = "CSRRCI"; break;
+			}
+		}
 		break;
+	}
 
 	case 0b0101111: { // AMO: funct7[6:2] selects the op, funct7[1:0] are aq/rl
 		uint8_t amo_op = funct7 >> 2;
@@ -380,9 +399,10 @@ DecodedInstruction Decoder::decode_compressed(uint16_t raw16) const
 				instr.mnemonic = "C.MV";
 				instr.opcode = 0b0110011; instr.funct3 = 0b000;
 				instr.rd = rd_rs1; instr.rs1 = 0; instr.rs2 = rs2;
-			} else if (rd_rs1 == 0 && rs2 == 0) { // C.EBREAK -- gated behind Zicsr like the 32-bit EBREAK, always disabled here
+			} else if (rd_rs1 == 0 && rs2 == 0) { // C.EBREAK -- same fields a real EBREAK would decode to, so exec_32ZICSR handles it identically
 				instr.mnemonic = "C.EBREAK";
 				instr.ext = Extension::ZICSR;
+				instr.opcode = 0b1110011; instr.funct3 = 0b000; instr.imm = 0x001;
 			} else if (rs2 == 0) { // C.JALR rs1 -> JALR x1, 0(rs1)
 				instr.mnemonic = "C.JALR";
 				instr.opcode = 0b1100111; instr.funct3 = 0b000;
@@ -466,6 +486,9 @@ DispatchResult Decoder::decode_and_dispatch(uint32_t pc, uint32_t raw_word)
 		break;
 	case Extension::A:
 		core.exec_32A(instr, regs, mem);
+		break;
+	case Extension::ZICSR:
+		core.exec_32ZICSR(instr, regs, mem);
 		break;
 	default:
 		return {true, instr.mnemonic, instr.length};
