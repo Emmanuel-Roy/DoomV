@@ -1,5 +1,6 @@
 #pragma once
 #include <cstdint>
+#include <vector>
 
 enum class Extension {
 	I,
@@ -34,7 +35,7 @@ class Decoder {
 public:
 	Decoder(RiscvCore &core, Registers &regs, Memory &mem);
 
-	DispatchResult decode_and_dispatch(uint32_t raw_instr);
+	DispatchResult decode_and_dispatch(uint32_t pc, uint32_t raw_instr);
 
 private:
 	RiscvCore &core;
@@ -46,4 +47,22 @@ private:
 	// RiscvCore are what actually *do* something with it, and stay stubs.
 	Extension classify(uint32_t raw_instr) const;
 	DecodedInstruction decode(uint32_t raw_instr, Extension ext) const;
+
+	// Hot loops (Doom's render/tic loop, memcpy-ish helpers, ...) execute
+	// the same handful of addresses millions of times, redoing identical
+	// classify()+decode() bitfield work every time. Direct-mapped cache
+	// keyed by (addr, raw_instr): the raw_instr tag means a stale entry
+	// from self-modified code just misses and re-decodes instead of
+	// silently executing wrong bytes -- no separate invalidation needed.
+	struct CacheEntry {
+		bool valid = false;
+		uint32_t addr = 0;
+		uint32_t raw_instr = 0;
+		DecodedInstruction decoded{};
+		bool enabled = false;
+	};
+	static constexpr uint32_t CACHE_BITS = 17;
+	static constexpr uint32_t CACHE_SIZE = 1u << CACHE_BITS;
+	static constexpr uint32_t CACHE_MASK = CACHE_SIZE - 1;
+	std::vector<CacheEntry> cache;
 };

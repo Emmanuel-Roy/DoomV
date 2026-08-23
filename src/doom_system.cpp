@@ -96,7 +96,7 @@ void DoomSystem::step()
 	}
 
 	uint32_t instr = memory.read32(pc);
-	DispatchResult result = decoder.decode_and_dispatch(instr);
+	DispatchResult result = decoder.decode_and_dispatch(pc, instr);
 	regs.record_history(pc, instr, result.mnemonic);
 
 	if (debugger.should_halt(pc, result.illegal)) {

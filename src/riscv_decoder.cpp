@@ -5,7 +5,7 @@
 #include "extensions.hpp"
 
 Decoder::Decoder(RiscvCore &core, Registers &regs, Memory &mem)
-	: core(core), regs(regs), mem(mem)
+	: core(core), regs(regs), mem(mem), cache(CACHE_SIZE)
 {
 }
 
@@ -198,26 +198,37 @@ DecodedInstruction Decoder::decode(uint32_t raw_instr, Extension ext) const
 	return instr;
 }
 
-DispatchResult Decoder::decode_and_dispatch(uint32_t raw_instr)
+DispatchResult Decoder::decode_and_dispatch(uint32_t pc, uint32_t raw_instr)
 {
-	Extension ext = classify(raw_instr);
-	// Decode unconditionally, even for a disabled extension -- cheap (a
-	// handful of shifts), and means an illegal instruction still shows a
-	// real mnemonic in the dashboard/crash log instead of "???".
-	DecodedInstruction instr = decode(raw_instr, ext);
+	CacheEntry &entry = cache[(pc >> 2) & CACHE_MASK];
 
-	bool enabled = (ext == Extension::I && Extensions::I)
-	            || (ext == Extension::M && Extensions::M)
-	            || (ext == Extension::A && Extensions::A)
-	            || (ext == Extension::C && Extensions::C)
-	            || (ext == Extension::ZICSR && Extensions::ZICSR)
-	            || (ext == Extension::V && Extensions::V);
+	DecodedInstruction instr;
+	bool enabled;
+	if (entry.valid && entry.addr == pc && entry.raw_instr == raw_instr) {
+		instr = entry.decoded;
+		enabled = entry.enabled;
+	} else {
+		Extension ext = classify(raw_instr);
+		// Decode unconditionally, even for a disabled extension -- cheap (a
+		// handful of shifts), and means an illegal instruction still shows a
+		// real mnemonic in the dashboard/crash log instead of "???".
+		instr = decode(raw_instr, ext);
+
+		enabled = (ext == Extension::I && Extensions::I)
+		       || (ext == Extension::M && Extensions::M)
+		       || (ext == Extension::A && Extensions::A)
+		       || (ext == Extension::C && Extensions::C)
+		       || (ext == Extension::ZICSR && Extensions::ZICSR)
+		       || (ext == Extension::V && Extensions::V);
+
+		entry = {true, pc, raw_instr, instr, enabled};
+	}
 
 	if (!enabled) {
 		return {true, instr.mnemonic};
 	}
 
-	switch (ext) {
+	switch (instr.ext) {
 	case Extension::I:
 		core.exec_32I(instr, regs, mem);
 		break;
