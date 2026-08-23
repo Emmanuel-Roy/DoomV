@@ -170,42 +170,44 @@ void Gui::render(const Snapshot &snap)
 
 	current_y += 12;
 
-	// REGISTER FILE
+	// REGISTER FILE -- single column, full 64-bit hex per register. A
+	// two-column grid (the old layout) can't fit 16 hex digits per entry
+	// without the columns overlapping, so the trace log moved below the
+	// game view (there's an unused strip there, y:305-360) to free up the
+	// whole right panel's height for this.
 	draw_shadow_text(hud_x, current_y, "--- REGISTER FILE ---", pal_pink);
 	int reg_start_y = current_y + 15;
 	for (int i = 0; i < 32; i++) {
-		int cx = (i < 16) ? hud_x : hud_x + 105;
-		int cy = reg_start_y + ((i % 16) * 11);
+		int cy = reg_start_y + (i * 9);
 
 		sprintf(buf, "X%02d:", i);
-		draw_shadow_text(cx, cy, buf, pal_red);
+		draw_shadow_text(hud_x, cy, buf, pal_red);
 
-		// Low 32 bits only -- full 64-bit hex doesn't fit the two-column
-		// grid without overlapping the second column. CURR PC and the
-		// trace log below (single-width lines, not column-constrained)
-		// show the full 64-bit value.
-		sprintf(buf, "%08X", (uint32_t)snap.x[i]);
-		draw_shadow_text(cx + 35, cy, buf, pal_white);
+		sprintf(buf, "%016llX", (unsigned long long)snap.x[i]);
+		draw_shadow_text(hud_x + 35, cy, buf, pal_white);
 	}
 
-	current_y = reg_start_y + (16 * 11) + 12;
-
-	// TRACE LOG
-	draw_shadow_text(hud_x, current_y, "--- TRACE LOG ---", pal_pink);
-	current_y += 15;
+	// TRACE LOG -- lives below the game view box instead of the right
+	// panel, which the register file now needs in full.
+	int trace_x = 15;
+	int trace_y = 308;
+	draw_shadow_text(trace_x, trace_y, "--- TRACE LOG ---", pal_pink);
+	trace_y += 10;
 
 	// Most recently recorded history entry == the instruction that just executed.
 	sprintf(buf, "ACTIVE: %08X %s", snap.active.instr, snap.active.mnemonic);
-	draw_shadow_text(hud_x, current_y, buf, pal_pink);
-	current_y += 12;
+	draw_shadow_text(trace_x, trace_y, buf, pal_pink);
+	trace_y += 10;
 
 	sprintf(buf, "CURR PC: %016llX", (unsigned long long)snap.pc);
-	draw_shadow_text(hud_x, current_y, buf, pal_white);
+	draw_shadow_text(trace_x, trace_y, buf, pal_white);
+	trace_y += 10;
 
-	for (int i = 0; i < 4; i++) {
+	for (int i = 0; i < 2; i++) {
 		const HistoryEntry &h = snap.trace[i];
 		sprintf(buf, "%016llX: %s", (unsigned long long)h.pc, h.mnemonic);
-		draw_shadow_text(hud_x, (current_y + 15) + (i * 11), buf, pal_stats);
+		draw_shadow_text(trace_x, trace_y, buf, pal_stats);
+		trace_y += 10;
 	}
 
 	SDL_UpdateTexture(texture, nullptr, screen_buf.data(), canvas_w * 4);
