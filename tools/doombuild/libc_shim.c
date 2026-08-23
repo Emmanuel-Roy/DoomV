@@ -49,7 +49,7 @@ int _read(int fd, char *buf, int len)
 	if (iwad_fd_offset >= WAD_LENGTH) return 0;
 	if (iwad_fd_offset + (uint32_t)len > WAD_LENGTH) len = (int)(WAD_LENGTH - iwad_fd_offset);
 
-	const volatile uint8_t *src = (const volatile uint8_t *)(WAD_BASE + iwad_fd_offset);
+	const volatile uint8_t *src = (const volatile uint8_t *)(uintptr_t)(WAD_BASE + iwad_fd_offset);
 	for (int i = 0; i < len; i++) buf[i] = (char)src[i];
 	iwad_fd_offset += (uint32_t)len;
 
@@ -113,7 +113,7 @@ void *_sbrk(int incr)
 	if (heap_ptr == 0) heap_ptr = &end;
 
 	char *prev = heap_ptr;
-	if ((uint32_t)(heap_ptr + incr) > WAD_BASE) {
+	if ((uintptr_t)(heap_ptr + incr) > WAD_BASE) {
 		errno = ENOMEM;
 		return (void *)-1;
 	}

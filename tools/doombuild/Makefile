@@ -1,4 +1,4 @@
-# Cross-compiles doomgeneric for DoomV's RV32IMA target.
+# Cross-compiles doomgeneric for DoomV's RV64IMAC_Zicsr target.
 # Needs riscv-none-elf-gcc on PATH (xPack GNU RISC-V Embedded GCC).
 #
 # Usage: make free       (shareware, DOOM1.WAD -- default)
@@ -20,7 +20,7 @@ CC = riscv-none-elf-gcc
 # translation unit must agree (doomgeneric.c allocates DG_ScreenBuffer at
 # this size, i_video.c writes into it assuming this stride). See
 # doomv_mmio.h's comment for what happens if they disagree.
-MARCH   = -march=rv32imac -mabi=ilp32
+MARCH   = -march=rv64imac_zicsr -mabi=lp64
 RESFLAGS = -DDOOMGENERIC_RESX=320 -DDOOMGENERIC_RESY=200
 CFLAGS  = $(MARCH) -nostartfiles -specs=nosys.specs -O2 $(RESFLAGS) -I. -I$(DOOMGENERIC_DIR)
 # -nostartfiles/-specs already live in CFLAGS -- this is a single compile
