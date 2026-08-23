@@ -20,10 +20,16 @@ CC = riscv-none-elf-gcc
 # translation unit must agree (doomgeneric.c allocates DG_ScreenBuffer at
 # this size, i_video.c writes into it assuming this stride). See
 # doomv_mmio.h's comment for what happens if they disagree.
-MARCH   = -march=rv32ima -mabi=ilp32
+MARCH   = -march=rv32imac -mabi=ilp32
 RESFLAGS = -DDOOMGENERIC_RESX=320 -DDOOMGENERIC_RESY=200
 CFLAGS  = $(MARCH) -nostartfiles -specs=nosys.specs -O2 $(RESFLAGS) -I. -I$(DOOMGENERIC_DIR)
-LDFLAGS = -T riscv.lds -nostartfiles -specs=nosys.specs
+# -nostartfiles/-specs already live in CFLAGS -- this is a single compile
+# +link invocation ($(CC) $(CFLAGS) ... $(LDFLAGS)), so repeating them here
+# used to pass -specs=nosys.specs twice on one command line. Harmless on
+# some gcc versions, but this toolchain's spec-file %rename directives
+# aren't idempotent and it hard-errors the second time ("attempt to rename
+# spec ... already defined").
+LDFLAGS = -T riscv.lds
 
 DOOMGENERIC_DIR = doomgeneric/doomgeneric
 
