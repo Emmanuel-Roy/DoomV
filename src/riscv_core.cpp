@@ -1,6 +1,7 @@
 #include "riscv_core.hpp"
 #include "registers.hpp"
 #include "memory.hpp"
+#include "extensions.hpp"
 #include <cstdint>
 #include <climits>
 
@@ -114,6 +115,31 @@ void RiscvCore::exec_32I(const DecodedInstruction &instr, Registers &regs, Memor
 	}
 
 	case 0b0010011: { // OP-IMM
+		if (!Extensions::XLEN64) {
+			// RV32: every integer op is inherently 32-bit -- there's no
+			// separate word-suffixed opcode the way RV64 has OP-IMM-32,
+			// this same opcode just always means 32-bit. Compute low-32,
+			// sign-extend into the 64-bit container that backs the
+			// register file regardless of XLEN (see extensions.hpp).
+			uint32_t a = (uint32_t)rs1_val;
+			uint32_t result32 = 0;
+			switch (instr.funct3) {
+			case 0b000: result32 = a + (uint32_t)instr.imm; break; // ADDI
+			case 0b010: result32 = ((int32_t)a < (int32_t)instr.imm) ? 1 : 0; break; // SLTI
+			case 0b011: result32 = (a < (uint32_t)instr.imm) ? 1 : 0; break; // SLTIU
+			case 0b100: result32 = a ^ (uint32_t)instr.imm; break; // XORI
+			case 0b110: result32 = a | (uint32_t)instr.imm; break; // ORI
+			case 0b111: result32 = a & (uint32_t)instr.imm; break; // ANDI
+			case 0b001: result32 = a << (instr.imm & 0x1F); break; // SLLI
+			case 0b101:
+				result32 = (instr.funct7 == 0b0100000)
+				         ? (uint32_t)((int32_t)a >> (instr.imm & 0x1F))  // SRAI
+				         : (a >> (instr.imm & 0x1F));                     // SRLI
+				break;
+			}
+			regs.write_x(instr.rd, sext32(result32));
+			break;
+		}
 		uint64_t result = 0;
 		switch (instr.funct3) {
 		case 0b000: result = rs1_val + imm_u; break; // ADDI
@@ -150,6 +176,28 @@ void RiscvCore::exec_32I(const DecodedInstruction &instr, Registers &regs, Memor
 	}
 
 	case 0b0110011: { // OP (R-type, I-side only -- M-side goes through exec_32M)
+		if (!Extensions::XLEN64) {
+			// RV32: same reasoning as OP-IMM above -- this opcode is
+			// always 32-bit here, there's no separate OP-32 in RV32.
+			uint32_t a = (uint32_t)rs1_val, b = (uint32_t)rs2_val;
+			uint32_t result32 = 0;
+			switch (instr.funct3) {
+			case 0b000: result32 = (instr.funct7 == 0b0100000) ? (a - b) : (a + b); break; // SUB/ADD
+			case 0b001: result32 = a << (b & 0x1F); break; // SLL
+			case 0b010: result32 = ((int32_t)a < (int32_t)b) ? 1 : 0; break; // SLT
+			case 0b011: result32 = (a < b) ? 1 : 0; break; // SLTU
+			case 0b100: result32 = a ^ b; break; // XOR
+			case 0b101:
+				result32 = (instr.funct7 == 0b0100000)
+				         ? (uint32_t)((int32_t)a >> (b & 0x1F))  // SRA
+				         : (a >> (b & 0x1F));                      // SRL
+				break;
+			case 0b110: result32 = a | b; break; // OR
+			case 0b111: result32 = a & b; break; // AND
+			}
+			regs.write_x(instr.rd, sext32(result32));
+			break;
+		}
 		uint64_t result = 0;
 		switch (instr.funct3) {
 		case 0b000: result = (instr.funct7 == 0b0100000) ? (rs1_val - rs2_val) : (rs1_val + rs2_val); break; // SUB/ADD
@@ -231,6 +279,40 @@ void RiscvCore::exec_32M(const DecodedInstruction &instr, Registers &regs, Memor
 			else result32 = (uint32_t)(a % b);
 			break;
 		case 0b111: // REMUW
+			result32 = (ub == 0) ? ua : (ua % ub);
+			break;
+		}
+		result = sext32(result32);
+	} else if (!Extensions::XLEN64) {
+		// RV32: M's base instructions are inherently 32-bit -- there's no
+		// separate OP-32 opcode in RV32 at all -- so this is the same
+		// "compute low 32, sign-extend" shape as the word_op branch above,
+		// just covering the full 8-instruction set. RV64's W-suffix group
+		// only has 5 (no MULH/MULHSU/MULHU): a 32x32 multiply's high half
+		// is redundant to expose separately once XLEN is already 64, since
+		// the full 64-bit product is already available from plain MUL.
+		int32_t a = (int32_t)rs1_val, b = (int32_t)rs2_val;
+		uint32_t ua = (uint32_t)rs1_val, ub = (uint32_t)rs2_val;
+		uint32_t result32 = 0;
+		switch (instr.funct3) {
+		case 0b000: result32 = (uint32_t)(a * b); break; // MUL
+		case 0b001: result32 = (uint32_t)(((int64_t)a * (int64_t)b) >> 32); break; // MULH
+		case 0b010: result32 = (uint32_t)(((int64_t)a * (int64_t)ub) >> 32); break; // MULHSU
+		case 0b011: result32 = (uint32_t)(((uint64_t)ua * (uint64_t)ub) >> 32); break; // MULHU
+		case 0b100: // DIV
+			if (b == 0) result32 = 0xFFFFFFFF;
+			else if (a == INT32_MIN && b == -1) result32 = (uint32_t)INT32_MIN;
+			else result32 = (uint32_t)(a / b);
+			break;
+		case 0b101: // DIVU
+			result32 = (ub == 0) ? 0xFFFFFFFF : (ua / ub);
+			break;
+		case 0b110: // REM
+			if (b == 0) result32 = (uint32_t)a;
+			else if (a == INT32_MIN && b == -1) result32 = 0;
+			else result32 = (uint32_t)(a % b);
+			break;
+		case 0b111: // REMU
 			result32 = (ub == 0) ? ua : (ua % ub);
 			break;
 		}

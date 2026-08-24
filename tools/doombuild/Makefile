@@ -1,13 +1,26 @@
-# Cross-compiles doomgeneric for DoomV's RV64IMAC_Zicsr target.
+# Cross-compiles doomgeneric for DoomV's RV64IMAC_Zicsr target (or RV32,
+# see XLEN below).
 # Needs riscv-none-elf-gcc on PATH (xPack GNU RISC-V Embedded GCC).
 #
-# Usage: make free       (shareware, DOOM1.WAD -- default)
-#        make doom       (Ultimate Doom, DOOM.WAD)
-#        make doom2      (DOOM2.WAD)
-#        make finaldoom  (Final Doom, TNT.WAD)
-#        make all        (all four)
+# Usage: make free           (shareware, DOOM1.WAD -- default)
+#        make doom           (Ultimate Doom, DOOM.WAD)
+#        make doom2          (DOOM2.WAD)
+#        make finaldoom      (Final Doom, TNT.WAD)
+#        make all            (all four)
+#        make free XLEN=32   (build for RV32IMAC_Zicsr instead of RV64 --
+#                              must match src/extensions.hpp's XLEN64 flag
+#                              on the host, and needs its own host rebuild)
 
 CC = riscv-none-elf-gcc
+
+XLEN ?= 64
+ifeq ($(XLEN),64)
+	ARCHFLAGS = -march=rv64imac_zicsr -mabi=lp64
+else ifeq ($(XLEN),32)
+	ARCHFLAGS = -march=rv32imac_zicsr -mabi=ilp32
+else
+	$(error Unknown XLEN '$(XLEN)', expected 32 or 64)
+endif
 
 # -nostartfiles (not -nostdlib) + -specs=nosys.specs: drop the toolchain's
 # own crt0 (we have our own _start in start.S) but keep newlib's real
@@ -20,9 +33,8 @@ CC = riscv-none-elf-gcc
 # translation unit must agree (doomgeneric.c allocates DG_ScreenBuffer at
 # this size, i_video.c writes into it assuming this stride). See
 # doomv_mmio.h's comment for what happens if they disagree.
-MARCH   = -march=rv64imac_zicsr -mabi=lp64
 RESFLAGS = -DDOOMGENERIC_RESX=320 -DDOOMGENERIC_RESY=200
-CFLAGS  = $(MARCH) -nostartfiles -specs=nosys.specs -O2 $(RESFLAGS) -I. -I$(DOOMGENERIC_DIR)
+CFLAGS  = $(ARCHFLAGS) -nostartfiles -specs=nosys.specs -O2 $(RESFLAGS) -I. -I$(DOOMGENERIC_DIR)
 # -nostartfiles/-specs already live in CFLAGS -- this is a single compile
 # +link invocation ($(CC) $(CFLAGS) ... $(LDFLAGS)), so repeating them here
 # used to pass -specs=nosys.specs twice on one command line. Harmless on

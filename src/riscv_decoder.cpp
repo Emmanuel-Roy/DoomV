@@ -23,12 +23,14 @@ Extension Decoder::classify(uint32_t raw_instr) const
 	case 0b0000011: // Load
 	case 0b0100011: // Store
 	case 0b0010011: // OP-IMM
-	case 0b0011011: // OP-IMM-32 (RV64): ADDIW/SLLIW/SRLIW/SRAIW
 	case 0b0001111: // FENCE / FENCE.I
 		return Extension::I;
+	case 0b0011011: // OP-IMM-32 (RV64 only): ADDIW/SLLIW/SRLIW/SRAIW -- doesn't exist in RV32's encoding space
+		return Extensions::XLEN64 ? Extension::I : Extension::ILLEGAL;
 	case 0b0110011: // OP: shared opcode, funct7 splits I (ADD/SUB/...) from M (MUL/DIV/...)
 		return (funct7 == 0b0000001) ? Extension::M : Extension::I;
-	case 0b0111011: // OP-32 (RV64): shared opcode, same funct7 split -- I (ADDW/SUBW/...) vs M (MULW/DIVW/...)
+	case 0b0111011: // OP-32 (RV64 only): same funct7 split -- I (ADDW/SUBW/...) vs M (MULW/DIVW/...)
+		if (!Extensions::XLEN64) return Extension::ILLEGAL;
 		return (funct7 == 0b0000001) ? Extension::M : Extension::I;
 	case 0b0101111: // AMO
 		return Extension::A;
@@ -113,10 +115,10 @@ DecodedInstruction Decoder::decode(uint32_t raw_instr, Extension ext) const
 		case 0b000: instr.mnemonic = "LB";  break;
 		case 0b001: instr.mnemonic = "LH";  break;
 		case 0b010: instr.mnemonic = "LW";  break;
-		case 0b011: instr.mnemonic = "LD";  break; // RV64
+		case 0b011: instr.mnemonic = "LD";  if (!Extensions::XLEN64) instr.ext = Extension::ILLEGAL; break; // RV64
 		case 0b100: instr.mnemonic = "LBU"; break;
 		case 0b101: instr.mnemonic = "LHU"; break;
-		case 0b110: instr.mnemonic = "LWU"; break; // RV64 -- zero-extended 32-bit load
+		case 0b110: instr.mnemonic = "LWU"; if (!Extensions::XLEN64) instr.ext = Extension::ILLEGAL; break; // RV64 -- zero-extended 32-bit load
 		}
 		break;
 
@@ -126,7 +128,7 @@ DecodedInstruction Decoder::decode(uint32_t raw_instr, Extension ext) const
 		case 0b000: instr.mnemonic = "SB"; break;
 		case 0b001: instr.mnemonic = "SH"; break;
 		case 0b010: instr.mnemonic = "SW"; break;
-		case 0b011: instr.mnemonic = "SD"; break; // RV64
+		case 0b011: instr.mnemonic = "SD"; if (!Extensions::XLEN64) instr.ext = Extension::ILLEGAL; break; // RV64
 		}
 		break;
 
@@ -251,6 +253,7 @@ DecodedInstruction Decoder::decode(uint32_t raw_instr, Extension ext) const
 		case 0b11000: instr.mnemonic = instr.op_64 ? "AMOMINU.D" : "AMOMINU.W"; break;
 		case 0b11100: instr.mnemonic = instr.op_64 ? "AMOMAXU.D" : "AMOMAXU.W"; break;
 		}
+		if (instr.op_64 && !Extensions::XLEN64) instr.ext = Extension::ILLEGAL; // .D forms don't exist on RV32
 		break;
 	}
 
@@ -304,7 +307,8 @@ DecodedInstruction Decoder::decode_compressed(uint16_t raw16) const
 			instr.rd = creg_prime(raw16, 2); instr.rs1 = creg_prime(raw16, 7); instr.imm = (int64_t)imm;
 			break;
 		}
-		case 0b011: { // C.LD (RV64) -> LD rd', imm(rs1')
+		case 0b011: { // RV64: C.LD -> LD rd', imm(rs1'). RV32: this slot is C.FLW (needs F ext, not implemented) -> illegal
+			if (!Extensions::XLEN64) { instr.ext = Extension::ILLEGAL; break; }
 			uint32_t imm = (((raw16 >> 10) & 0x7) << 3) | (((raw16 >> 5) & 0x3) << 6);
 			instr.mnemonic = "C.LD";
 			instr.opcode = 0b0000011; instr.funct3 = 0b011;
@@ -318,7 +322,8 @@ DecodedInstruction Decoder::decode_compressed(uint16_t raw16) const
 			instr.rs1 = creg_prime(raw16, 7); instr.rs2 = creg_prime(raw16, 2); instr.imm = (int64_t)imm;
 			break;
 		}
-		case 0b111: { // C.SD (RV64) -> SD rs2', imm(rs1')
+		case 0b111: { // RV64: C.SD -> SD rs2', imm(rs1'). RV32: this slot is C.FSW (needs F ext) -> illegal
+			if (!Extensions::XLEN64) { instr.ext = Extension::ILLEGAL; break; }
 			uint32_t imm = (((raw16 >> 10) & 0x7) << 3) | (((raw16 >> 5) & 0x3) << 6);
 			instr.mnemonic = "C.SD";
 			instr.opcode = 0b0100011; instr.funct3 = 0b011;
@@ -342,13 +347,22 @@ DecodedInstruction Decoder::decode_compressed(uint16_t raw16) const
 			instr.rd = rd; instr.rs1 = rd; instr.imm = imm;
 			break;
 		}
-		case 0b001: { // C.ADDIW (RV64) -> ADDIW rd,rd,imm -- same imm layout as C.ADDI (this slot is C.JAL on RV32)
-			int32_t imm = (int32_t)(((raw16 >> 2) & 0x1F) | (((raw16 >> 12) & 0x1) << 5));
-			if (imm & 0x20) imm |= ~0x3F;
-			uint8_t rd = creg_full(raw16, 7);
-			instr.mnemonic = "C.ADDIW";
-			instr.opcode = 0b0011011; instr.funct3 = 0b000; instr.word_op = true;
-			instr.rd = rd; instr.rs1 = rd; instr.imm = imm;
+		case 0b001: { // RV64: C.ADDIW (same imm layout as C.ADDI). RV32: this same slot is C.JAL instead
+			if (Extensions::XLEN64) {
+				int32_t imm = (int32_t)(((raw16 >> 2) & 0x1F) | (((raw16 >> 12) & 0x1) << 5));
+				if (imm & 0x20) imm |= ~0x3F;
+				uint8_t rd = creg_full(raw16, 7);
+				instr.mnemonic = "C.ADDIW";
+				instr.opcode = 0b0011011; instr.funct3 = 0b000; instr.word_op = true;
+				instr.rd = rd; instr.rs1 = rd; instr.imm = imm;
+			} else { // C.JAL -> JAL x1, imm (CJ-format, same layout as C.J below)
+				int32_t imm = (int32_t)(((raw16 >> 3) & 0x7) << 1 | ((raw16 >> 11) & 0x1) << 4 | ((raw16 >> 2) & 0x1) << 5
+				            | ((raw16 >> 7) & 0x1) << 6 | ((raw16 >> 6) & 0x1) << 7 | ((raw16 >> 9) & 0x3) << 8
+				            | ((raw16 >> 8) & 0x1) << 10 | ((raw16 >> 12) & 0x1) << 11);
+				if (imm & 0x800) imm |= ~0xFFF;
+				instr.mnemonic = "C.JAL";
+				instr.opcode = 0b1101111; instr.rd = 1; instr.imm = imm;
+			}
 			break;
 		}
 		case 0b010: { // C.LI rd,imm -> ADDI rd, x0, imm
@@ -391,17 +405,17 @@ DecodedInstruction Decoder::decode_compressed(uint16_t raw16) const
 				instr.mnemonic = "C.ANDI";
 				instr.opcode = 0b0010011; instr.funct3 = 0b111;
 				instr.rd = rd; instr.rs1 = rd; instr.imm = imm;
-			} else if ((raw16 >> 12) & 0x1) { // funct1==1 -> C.SUBW/C.ADDW (RV64) or reserved
+			} else if ((raw16 >> 12) & 0x1) { // funct1==1 -> C.SUBW/C.ADDW (RV64 only; this whole slot is reserved on RV32)
 				uint8_t rs2 = creg_prime(raw16, 2);
 				uint8_t funct2 = (raw16 >> 5) & 0x3;
-				if (funct2 == 0b00 || funct2 == 0b01) {
+				if (Extensions::XLEN64 && (funct2 == 0b00 || funct2 == 0b01)) {
 					bool is_subw = (funct2 == 0b00);
 					instr.mnemonic = is_subw ? "C.SUBW" : "C.ADDW";
 					instr.opcode = 0b0111011; instr.funct3 = 0b000; instr.word_op = true;
 					instr.funct7 = is_subw ? 0b0100000 : 0b0000000;
 					instr.rd = rd; instr.rs1 = rd; instr.rs2 = rs2;
 				} else {
-					instr.ext = Extension::ILLEGAL; // funct2 10/11 reserved
+					instr.ext = Extension::ILLEGAL; // funct2 10/11 reserved, or RV32 (whole slot reserved there)
 				}
 			} else { // C.SUB/C.XOR/C.OR/C.AND rd',rd',rs2'
 				uint8_t rs2 = creg_prime(raw16, 2);
@@ -455,7 +469,8 @@ DecodedInstruction Decoder::decode_compressed(uint16_t raw16) const
 			instr.rd = creg_full(raw16, 7); instr.rs1 = 2; instr.imm = (int64_t)imm;
 			break;
 		}
-		case 0b011: { // C.LDSP (RV64) -> LD rd, imm(x2)
+		case 0b011: { // RV64: C.LDSP -> LD rd, imm(x2). RV32: this slot is C.FLWSP (needs F ext) -> illegal
+			if (!Extensions::XLEN64) { instr.ext = Extension::ILLEGAL; break; }
 			uint32_t imm = (((raw16 >> 5) & 0x3) << 3) | (((raw16 >> 12) & 0x1) << 5) | (((raw16 >> 2) & 0x7) << 6);
 			instr.mnemonic = "C.LDSP";
 			instr.opcode = 0b0000011; instr.funct3 = 0b011;
@@ -496,7 +511,8 @@ DecodedInstruction Decoder::decode_compressed(uint16_t raw16) const
 			instr.rs1 = 2; instr.rs2 = creg_full(raw16, 2); instr.imm = (int64_t)imm;
 			break;
 		}
-		case 0b111: { // C.SDSP (RV64) -> SD rs2, imm(x2)
+		case 0b111: { // RV64: C.SDSP -> SD rs2, imm(x2). RV32: this slot is C.FSWSP (needs F ext) -> illegal
+			if (!Extensions::XLEN64) { instr.ext = Extension::ILLEGAL; break; }
 			uint32_t imm = (((raw16 >> 10) & 0x7) << 3) | (((raw16 >> 7) & 0x7) << 6);
 			instr.mnemonic = "C.SDSP";
 			instr.opcode = 0b0100011; instr.funct3 = 0b011;

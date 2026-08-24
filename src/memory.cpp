@@ -1,12 +1,43 @@
 #include "memory.hpp"
+#include "extensions.hpp"
 #include <cstdio>
 #include <cstring>
 #include <fstream>
 
-// Minimal ELF64 structures -- just enough to read PT_LOAD segments,
-// not a general-purpose ELF library. Field widths and (for Phdr) field
-// order both differ from ELF32, not just the widths.
+// Minimal ELF32/ELF64 structures -- just enough to read PT_LOAD segments,
+// not a general-purpose ELF library. Field widths AND (for Phdr) field
+// order differ between the two -- p_flags sits right after p_type in
+// Elf64_Phdr, but last in Elf32_Phdr -- so this genuinely needs two
+// struct layouts, not one templated on width.
 namespace {
+
+struct Elf32_Ehdr {
+	uint8_t  e_ident[16];
+	uint16_t e_type;
+	uint16_t e_machine;
+	uint32_t e_version;
+	uint32_t e_entry;
+	uint32_t e_phoff;
+	uint32_t e_shoff;
+	uint32_t e_flags;
+	uint16_t e_ehsize;
+	uint16_t e_phentsize;
+	uint16_t e_phnum;
+	uint16_t e_shentsize;
+	uint16_t e_shnum;
+	uint16_t e_shstrndx;
+};
+
+struct Elf32_Phdr {
+	uint32_t p_type;
+	uint32_t p_offset;
+	uint32_t p_vaddr;
+	uint32_t p_paddr;
+	uint32_t p_filesz;
+	uint32_t p_memsz;
+	uint32_t p_flags;
+	uint32_t p_align;
+};
 
 struct Elf64_Ehdr {
 	uint8_t  e_ident[16];
@@ -37,6 +68,49 @@ struct Elf64_Phdr {
 };
 
 constexpr uint32_t PT_LOAD = 1;
+
+// Both Ehdr/Phdr pairs expose the same field names despite differing
+// widths and (for Phdr) field order, so one templated loader body covers
+// both formats -- the only thing that differs is which struct types get
+// plugged in.
+template <typename Ehdr, typename Phdr>
+bool load_elf_generic(std::ifstream &file, std::vector<uint8_t> &ram)
+{
+	Ehdr ehdr;
+	file.read((char *)&ehdr, sizeof(ehdr));
+	if (!file) return false;
+	if (ehdr.e_ident[0] != 0x7F || ehdr.e_ident[1] != 'E' ||
+	    ehdr.e_ident[2] != 'L' || ehdr.e_ident[3] != 'F') {
+		return false;
+	}
+
+	for (int i = 0; i < ehdr.e_phnum; i++) {
+		Phdr phdr;
+		file.seekg((uint64_t)ehdr.e_phoff + (uint64_t)i * ehdr.e_phentsize);
+		file.read((char *)&phdr, sizeof(phdr));
+		if (!file) return false;
+
+		if (phdr.p_type != PT_LOAD) continue;
+		uint64_t vaddr = phdr.p_vaddr, memsz = phdr.p_memsz;
+		if (vaddr < Memory::RAM_BASE || vaddr + memsz > Memory::RAM_BASE + Memory::RAM_SIZE + Memory::WAD_SIZE) {
+			return false;
+		}
+
+		uint64_t ram_off = vaddr - Memory::RAM_BASE;
+
+		if (phdr.p_filesz > 0) {
+			file.seekg(phdr.p_offset);
+			file.read((char *)&ram[ram_off], phdr.p_filesz);
+			if (!file) return false;
+		}
+
+		if (phdr.p_memsz > phdr.p_filesz) {
+			std::memset(&ram[ram_off + phdr.p_filesz], 0, phdr.p_memsz - phdr.p_filesz);
+		}
+	}
+
+	return true;
+}
 
 } // namespace
 
@@ -139,39 +213,8 @@ bool Memory::load_elf(const char *path)
 	std::ifstream file(path, std::ios::binary);
 	if (!file.is_open()) return false;
 
-	Elf64_Ehdr ehdr;
-	file.read((char *)&ehdr, sizeof(ehdr));
-	if (!file) return false;
-	if (ehdr.e_ident[0] != 0x7F || ehdr.e_ident[1] != 'E' ||
-	    ehdr.e_ident[2] != 'L' || ehdr.e_ident[3] != 'F') {
-		return false;
-	}
-
-	for (int i = 0; i < ehdr.e_phnum; i++) {
-		Elf64_Phdr phdr;
-		file.seekg(ehdr.e_phoff + (uint64_t)i * ehdr.e_phentsize);
-		file.read((char *)&phdr, sizeof(phdr));
-		if (!file) return false;
-
-		if (phdr.p_type != PT_LOAD) continue;
-		if (phdr.p_vaddr < RAM_BASE || phdr.p_vaddr + phdr.p_memsz > RAM_BASE + RAM_SIZE + WAD_SIZE) {
-			return false;
-		}
-
-		uint64_t ram_off = phdr.p_vaddr - RAM_BASE;
-
-		if (phdr.p_filesz > 0) {
-			file.seekg(phdr.p_offset);
-			file.read((char *)&ram[ram_off], phdr.p_filesz);
-			if (!file) return false;
-		}
-
-		if (phdr.p_memsz > phdr.p_filesz) {
-			std::memset(&ram[ram_off + phdr.p_filesz], 0, phdr.p_memsz - phdr.p_filesz);
-		}
-	}
-
-	return true;
+	if (Extensions::XLEN64) return load_elf_generic<Elf64_Ehdr, Elf64_Phdr>(file, ram);
+	return load_elf_generic<Elf32_Ehdr, Elf32_Phdr>(file, ram);
 }
 
 bool Memory::load_wad(const uint8_t *wad_bytes, size_t len)
