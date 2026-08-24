@@ -790,7 +790,7 @@ DispatchResult Decoder::decode_and_dispatch(uint64_t pc, uint32_t raw_word)
 	}
 
 	if (!enabled) {
-		return {true, instr.mnemonic, instr.length};
+		return {true, instr};
 	}
 
 	switch (instr.ext) {
@@ -812,8 +812,8 @@ DispatchResult Decoder::decode_and_dispatch(uint64_t pc, uint32_t raw_word)
 		core.exec_FD(instr, regs, mem);
 		break;
 	default:
-		return {true, instr.mnemonic, instr.length};
+		return {true, instr};
 	}
 
-	return {false, instr.mnemonic, instr.length};
+	return {false, instr};
 }

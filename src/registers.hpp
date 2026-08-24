@@ -1,10 +1,16 @@
 #pragma once
+#include "riscv_decoder.hpp" // for DecodedInstruction, embedded in HistoryEntry below
 #include <cstdint>
 
 struct HistoryEntry {
 	uint64_t pc;
-	uint32_t instr; // still max 32 bits wide -- RV64 has no wider instruction encoding
-	const char *mnemonic;
+	uint32_t instr; // raw fetched bytes, still max 32 bits wide -- RV64 has no wider instruction encoding
+	// Full decode, not just the mnemonic string -- lets the dashboard/
+	// trace log render actual operands ("ADDI a0, a0, 4") instead of a
+	// bare "ADDI". DecodedInstruction defaults its own mnemonic to "???",
+	// so a default-constructed HistoryEntry (the ring buffer's initial
+	// fill) is already safe to display without a separate placeholder.
+	DecodedInstruction decoded;
 };
 
 class Registers {
@@ -38,7 +44,7 @@ public:
 	void set_fflags(uint8_t flags);
 	void or_fflags(uint8_t bits);
 
-	void record_history(uint64_t pc, uint32_t instr, const char *mnemonic);
+	void record_history(uint64_t pc, uint32_t instr, const DecodedInstruction &decoded);
 	const HistoryEntry &history_at(int index) const;
 	int history_pos() const;
 

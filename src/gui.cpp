@@ -1,8 +1,153 @@
 #include "gui.hpp"
+#include "riscv_decoder.hpp"
 #include <cstdio>
 #include <cstring>
 #include <cmath>
 #include <algorithm>
+
+static const char *x_name(uint8_t r)
+{
+	static const char *names[32] = {
+		"zero", "ra", "sp",  "gp",  "tp",  "t0",  "t1",  "t2",
+		"s0",   "s1", "a0",  "a1",  "a2",  "a3",  "a4",  "a5",
+		"a6",   "a7", "s2",  "s3",  "s4",  "s5",  "s6",  "s7",
+		"s8",   "s9", "s10", "s11", "t3",  "t4",  "t5",  "t6",
+	};
+	return names[r & 0x1F];
+}
+
+static const char *f_name(uint8_t r)
+{
+	static const char *names[32] = {
+		"ft0", "ft1", "ft2",  "ft3",  "ft4", "ft5", "ft6", "ft7",
+		"fs0", "fs1", "fa0",  "fa1",  "fa2", "fa3", "fa4", "fa5",
+		"fa6", "fa7", "fs2",  "fs3",  "fs4", "fs5", "fs6", "fs7",
+		"fs8", "fs9", "fs10", "fs11", "ft8", "ft9", "ft10", "ft11",
+	};
+	return names[r & 0x1F];
+}
+
+static const char *csr_name(uint16_t addr)
+{
+	switch (addr) {
+	case 0x001: return "fflags";
+	case 0x002: return "frm";
+	case 0x003: return "fcsr";
+	case 0x300: return "mstatus";
+	case 0x301: return "misa";
+	case 0x305: return "mtvec";
+	case 0x340: return "mscratch";
+	case 0x341: return "mepc";
+	case 0x342: return "mcause";
+	case 0x343: return "mtval";
+	case 0xF11: return "mvendorid";
+	case 0xF12: return "marchid";
+	case 0xF13: return "mimpid";
+	case 0xF14: return "mhartid";
+	default: return nullptr;
+	}
+}
+
+// Renders "rd, rs1, rs2"-style operand text for a decoded instruction, the
+// way a real RISC-V disassembler (objdump, etc.) would show it. Dispatches
+// on the same opcode/funct7/funct3 fields exec_32I/exec_32M/exec_FD
+// already use to decide behavior, not on the mnemonic string -- stays
+// correct for every compressed alias automatically, since a C.ADDI's
+// decoded fields already look exactly like a real ADDI's would.
+static void format_operands(char *buf, size_t buf_size, uint64_t pc, const DecodedInstruction &d)
+{
+	char imm_buf[32];
+	auto imm_str = [&](int64_t v) { sprintf(imm_buf, "%lld", (long long)v); return imm_buf; };
+
+	switch (d.opcode) {
+	case 0b0110111: // LUI
+	case 0b0010111: // AUIPC
+		snprintf(buf, buf_size, "%s, 0x%llx", x_name(d.rd), (unsigned long long)(((uint64_t)d.imm >> 12) & 0xFFFFF));
+		return;
+	case 0b1101111: // JAL -- shown as the absolute target address, like objdump does
+		snprintf(buf, buf_size, "%s, 0x%llx", x_name(d.rd), (unsigned long long)(pc + (uint64_t)d.imm));
+		return;
+	case 0b1100111: // JALR
+		snprintf(buf, buf_size, "%s, %s(%s)", x_name(d.rd), imm_str(d.imm), x_name(d.rs1));
+		return;
+	case 0b1100011: // Branch -- target shown absolute, same reasoning as JAL
+		snprintf(buf, buf_size, "%s, %s, 0x%llx", x_name(d.rs1), x_name(d.rs2), (unsigned long long)(pc + (uint64_t)d.imm));
+		return;
+	case 0b0000011: // Load (int)
+		snprintf(buf, buf_size, "%s, %s(%s)", x_name(d.rd), imm_str(d.imm), x_name(d.rs1));
+		return;
+	case 0b0100011: // Store (int)
+		snprintf(buf, buf_size, "%s, %s(%s)", x_name(d.rs2), imm_str(d.imm), x_name(d.rs1));
+		return;
+	case 0b0010011: // OP-IMM
+	case 0b0011011: // OP-IMM-32
+		snprintf(buf, buf_size, "%s, %s, %s", x_name(d.rd), x_name(d.rs1), imm_str(d.imm));
+		return;
+	case 0b0110011: // OP
+	case 0b0111011: // OP-32
+		snprintf(buf, buf_size, "%s, %s, %s", x_name(d.rd), x_name(d.rs1), x_name(d.rs2));
+		return;
+	case 0b0001111: // FENCE / FENCE.I -- no operands
+		buf[0] = '\0';
+		return;
+	case 0b1110011: { // SYSTEM: ECALL/EBREAK/MRET (no operands) or a CSR op
+		if (d.funct3 == 0) { buf[0] = '\0'; return; }
+		uint16_t csr = (uint16_t)d.imm;
+		const char *name = csr_name(csr);
+		char csr_buf[16];
+		if (!name) { sprintf(csr_buf, "0x%x", csr); name = csr_buf; }
+		if (d.funct3 & 0x4) snprintf(buf, buf_size, "%s, %s, %u", x_name(d.rd), name, d.rs1); // CSRR*I -- rs1 field holds a 5-bit immediate, not a register
+		else snprintf(buf, buf_size, "%s, %s, %s", x_name(d.rd), name, x_name(d.rs1));
+		return;
+	}
+	case 0b0101111: { // AMO
+		uint8_t amo_op = d.funct7 >> 2;
+		if (amo_op == 0b00010) snprintf(buf, buf_size, "%s, (%s)", x_name(d.rd), x_name(d.rs1)); // LR
+		else snprintf(buf, buf_size, "%s, %s, (%s)", x_name(d.rd), x_name(d.rs2), x_name(d.rs1)); // SC/AMO*
+		return;
+	}
+	case 0b0000111: // LOAD-FP
+		snprintf(buf, buf_size, "%s, %s(%s)", f_name(d.rd), imm_str(d.imm), x_name(d.rs1));
+		return;
+	case 0b0100111: // STORE-FP
+		snprintf(buf, buf_size, "%s, %s(%s)", f_name(d.rs2), imm_str(d.imm), x_name(d.rs1));
+		return;
+	case 0b1000011: case 0b1000111: case 0b1001011: case 0b1001111: // FMADD/FMSUB/FNMSUB/FNMADD
+		snprintf(buf, buf_size, "%s, %s, %s, %s", f_name(d.rd), f_name(d.rs1), f_name(d.rs2), f_name(d.rs3));
+		return;
+	case 0b1010011: // OP-FP -- funct7 re-selects the exact shape, same as exec_FD/decode()
+		switch (d.funct7) {
+		case 0b0000000: case 0b0000001: case 0b0000100: case 0b0000101: // FADD/FSUB
+		case 0b0001000: case 0b0001001: case 0b0001100: case 0b0001101: // FMUL/FDIV
+		case 0b0010000: case 0b0010001: case 0b0010100: case 0b0010101: // FSGNJ family, FMIN/FMAX
+			snprintf(buf, buf_size, "%s, %s, %s", f_name(d.rd), f_name(d.rs1), f_name(d.rs2));
+			return;
+		case 0b0101100: case 0b0101101: // FSQRT
+			snprintf(buf, buf_size, "%s, %s", f_name(d.rd), f_name(d.rs1));
+			return;
+		case 0b1010000: case 0b1010001: // FEQ/FLT/FLE -- rd integer
+			snprintf(buf, buf_size, "%s, %s, %s", x_name(d.rd), f_name(d.rs1), f_name(d.rs2));
+			return;
+		case 0b1100000: case 0b1100001: // FCVT.(W|WU|L|LU).(S|D) -- rd integer, rs1 float
+		case 0b1110000: case 0b1110001: // FMV.X.W/D, FCLASS
+			snprintf(buf, buf_size, "%s, %s", x_name(d.rd), f_name(d.rs1));
+			return;
+		case 0b1101000: case 0b1101001: // FCVT.(S|D).(W|WU|L|LU) -- rd float, rs1 integer
+		case 0b1111000: case 0b1111001: // FMV.W.X, FMV.D.X
+			snprintf(buf, buf_size, "%s, %s", f_name(d.rd), x_name(d.rs1));
+			return;
+		case 0b0100000: case 0b0100001: // FCVT.S.D / FCVT.D.S -- both float
+			snprintf(buf, buf_size, "%s, %s", f_name(d.rd), f_name(d.rs1));
+			return;
+		default:
+			buf[0] = '\0';
+			return;
+		}
+	default:
+		buf[0] = '\0';
+		return;
+	}
+}
 
 Gui::Gui() : last_sync(0)
 {
@@ -148,7 +293,7 @@ void Gui::render(const Snapshot &snap)
 		}
 	}
 
-	char buf[64];
+	char buf[96];
 	int hud_x = 425;
 
 	auto draw_shadow_text = [&](int x, int y, const char *s, uint32_t col) {
@@ -194,8 +339,11 @@ void Gui::render(const Snapshot &snap)
 	draw_shadow_text(trace_x, trace_y, "--- TRACE LOG ---", pal_pink);
 	trace_y += 10;
 
+	char op_buf[64];
+
 	// Most recently recorded history entry == the instruction that just executed.
-	sprintf(buf, "ACTIVE: %08X %s", snap.active.instr, snap.active.mnemonic);
+	format_operands(op_buf, sizeof(op_buf), snap.active.pc, snap.active.decoded);
+	sprintf(buf, "ACTIVE: %08X %s %s", snap.active.instr, snap.active.decoded.mnemonic, op_buf);
 	draw_shadow_text(trace_x, trace_y, buf, pal_pink);
 	trace_y += 10;
 
@@ -205,7 +353,8 @@ void Gui::render(const Snapshot &snap)
 
 	for (int i = 0; i < 2; i++) {
 		const HistoryEntry &h = snap.trace[i];
-		sprintf(buf, "%016llX: %s", (unsigned long long)h.pc, h.mnemonic);
+		format_operands(op_buf, sizeof(op_buf), h.pc, h.decoded);
+		sprintf(buf, "%016llX: %s %s", (unsigned long long)h.pc, h.decoded.mnemonic, op_buf);
 		draw_shadow_text(trace_x, trace_y, buf, pal_stats);
 		trace_y += 10;
 	}
@@ -319,4 +468,27 @@ void Gui::init_font()
 	set_char(':', {0x00, 0x18, 0x18, 0x00, 0x18, 0x18, 0x00, 0x00});
 	set_char('-', {0x00, 0x00, 0x00, 0x7E, 0x00, 0x00, 0x00, 0x00});
 	set_char(' ', {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00});
+
+	// Disassembly operand text (register names like "a1"/"sp"/"t0"/"fa0",
+	// CSR names like "mstatus") needs the full lowercase alphabet, not
+	// just the handful (n/s/i) existing labels used -- and needs ',' '('
+	// ')', which nothing before this needed either.
+	set_char(',', {0x00, 0x00, 0x00, 0x00, 0x00, 0x18, 0x18, 0x30});
+	set_char('(', {0x0C, 0x18, 0x30, 0x30, 0x30, 0x30, 0x18, 0x0C});
+	set_char(')', {0x30, 0x18, 0x0C, 0x0C, 0x0C, 0x0C, 0x18, 0x30});
+
+	// Same shape as the uppercase glyph for any lowercase letter that
+	// doesn't already have its own distinct bitmap above -- good enough
+	// for a debug HUD font, and far less error-prone than hand-authoring
+	// two dozen more 8x8 bitmaps from scratch.
+	for (char c = 'a'; c <= 'z'; c++) {
+		bool already_defined = false;
+		for (int i = 0; i < 8; i++) {
+			if (font8x8[(uint8_t)c][i] != 0) { already_defined = true; break; }
+		}
+		if (!already_defined) {
+			char upper = (char)(c - 'a' + 'A');
+			for (int i = 0; i < 8; i++) font8x8[(uint8_t)c][i] = font8x8[(uint8_t)upper][i];
+		}
+	}
 }

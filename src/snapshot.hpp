@@ -14,6 +14,9 @@ struct Snapshot {
 	uint64_t x[32] = {};
 	uint64_t pc = 0;
 	bool halted = false;
-	HistoryEntry active = {0, 0, "???"};
-	HistoryEntry trace[4] = {{0, 0, "???"}, {0, 0, "???"}, {0, 0, "???"}, {0, 0, "???"}};
+	// DecodedInstruction default-initializes its own mnemonic to "???"
+	// (see riscv_decoder.hpp), so value-initializing HistoryEntry here is
+	// already a safe, displayable default -- no need to spell it out.
+	HistoryEntry active{};
+	HistoryEntry trace[4]{};
 };

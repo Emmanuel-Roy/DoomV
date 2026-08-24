@@ -4,7 +4,7 @@ Registers::Registers() : pc(0), frm(0), fflags(0), history_ptr(0)
 {
 	for (int i = 0; i < 32; i++) { x[i] = 0; f[i] = 0.0; }
 	for (int i = 0; i < 4096; i++) csr[i] = 0;
-	for (int i = 0; i < HISTORY_SIZE; i++) history[i] = {0, 0, "???"};
+	for (int i = 0; i < HISTORY_SIZE; i++) history[i] = {0, 0, DecodedInstruction{}};
 }
 
 uint64_t Registers::read_x(int i) const
@@ -72,9 +72,9 @@ void Registers::or_fflags(uint8_t bits)
 	fflags |= (bits & 0x1F);
 }
 
-void Registers::record_history(uint64_t pc_val, uint32_t instr, const char *mnemonic)
+void Registers::record_history(uint64_t pc_val, uint32_t instr, const DecodedInstruction &decoded)
 {
-	history[history_ptr] = {pc_val, instr, mnemonic};
+	history[history_ptr] = {pc_val, instr, decoded};
 	history_ptr = (history_ptr + 1) % HISTORY_SIZE;
 }
 

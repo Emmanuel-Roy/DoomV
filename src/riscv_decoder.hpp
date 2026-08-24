@@ -25,7 +25,8 @@ struct DecodedInstruction {
 	bool word_op;   // true for the *W-suffixed RV64 forms (ADDIW, SLLW, MULW, ...) -- 32-bit op, sign-extend result to 64
 	bool op_64;     // true for the .D-suffixed RV64A forms (LR.D/SC.D/AMO*.D) -- selects 64-bit vs 32-bit memory width
 	bool fp_double; // true for F-extension instructions operating on double (D) instead of single (F) precision
-	const char *mnemonic; // e.g. "ADDI" -- static string, name only, no operands
+	const char *mnemonic = "???"; // e.g. "ADDI" -- static string, name only, no operands. Defaulted so a
+	                               // default-constructed DecodedInstruction (e.g. HistoryEntry's initial fill) is never a null pointer.
 };
 
 class Registers;
@@ -34,8 +35,8 @@ class RiscvCore;
 
 struct DispatchResult {
 	bool illegal;
-	const char *mnemonic;
-	uint8_t length; // 2 or 4 -- lets the caller mask a compressed instruction's raw bytes correctly for history/trace display
+	DecodedInstruction decoded; // full decode, not just the mnemonic -- the caller (DoomSystem::step, for
+	                             // history/trace-log recording) needs the operand fields too, to render more than a bare mnemonic.
 };
 
 class Decoder {
