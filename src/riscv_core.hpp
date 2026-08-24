@@ -17,6 +17,7 @@ public:
 	void exec_32M(const DecodedInstruction &instr, Registers &regs, Memory &mem);
 	void exec_32A(const DecodedInstruction &instr, Registers &regs, Memory &mem);
 	void exec_32ZICSR(const DecodedInstruction &instr, Registers &regs, Memory &mem);
+	void exec_FD(const DecodedInstruction &instr, Registers &regs, Memory &mem);
 
 private:
 	// LR/SC reservation state. Single-hart, no interrupts, so this only

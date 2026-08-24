@@ -213,7 +213,7 @@ bool Memory::load_elf(const char *path)
 	std::ifstream file(path, std::ios::binary);
 	if (!file.is_open()) return false;
 
-	if (Extensions::XLEN64) return load_elf_generic<Elf64_Ehdr, Elf64_Phdr>(file, ram);
+	if (Extensions.XLEN64) return load_elf_generic<Elf64_Ehdr, Elf64_Phdr>(file, ram);
 	return load_elf_generic<Elf32_Ehdr, Elf32_Phdr>(file, ram);
 }
 

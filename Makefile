@@ -9,7 +9,7 @@ LIBS = -Lsrc/lib -lmingw32 -lSDL2main -lSDL2
 # Source files
 SRCS = src/main.cpp src/doom_system.cpp src/memory.cpp src/registers.cpp \
        src/riscv_decoder.cpp src/riscv_core.cpp src/debugger.cpp src/gui.cpp \
-       src/controls.cpp
+       src/controls.cpp src/extensions.cpp
 OUT = riscv_doom.exe
 
 all:

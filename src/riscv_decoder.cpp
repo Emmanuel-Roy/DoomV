@@ -26,16 +26,33 @@ Extension Decoder::classify(uint32_t raw_instr) const
 	case 0b0001111: // FENCE / FENCE.I
 		return Extension::I;
 	case 0b0011011: // OP-IMM-32 (RV64 only): ADDIW/SLLIW/SRLIW/SRAIW -- doesn't exist in RV32's encoding space
-		return Extensions::XLEN64 ? Extension::I : Extension::ILLEGAL;
+		return Extensions.XLEN64 ? Extension::I : Extension::ILLEGAL;
 	case 0b0110011: // OP: shared opcode, funct7 splits I (ADD/SUB/...) from M (MUL/DIV/...)
 		return (funct7 == 0b0000001) ? Extension::M : Extension::I;
 	case 0b0111011: // OP-32 (RV64 only): same funct7 split -- I (ADDW/SUBW/...) vs M (MULW/DIVW/...)
-		if (!Extensions::XLEN64) return Extension::ILLEGAL;
+		if (!Extensions.XLEN64) return Extension::ILLEGAL;
 		return (funct7 == 0b0000001) ? Extension::M : Extension::I;
 	case 0b0101111: // AMO
 		return Extension::A;
 	case 0b1110011: // SYSTEM: ECALL/EBREAK/CSR*, all gated behind Zicsr
 		return Extension::ZICSR;
+	case 0b0000111: { // LOAD-FP: FLW (F) / FLD (D)
+		uint8_t funct3 = (raw_instr >> 12) & 0x07;
+		return (funct3 == 0b011) ? Extension::D : Extension::F;
+	}
+	case 0b0100111: { // STORE-FP: FSW (F) / FSD (D)
+		uint8_t funct3 = (raw_instr >> 12) & 0x07;
+		return (funct3 == 0b011) ? Extension::D : Extension::F;
+	}
+	case 0b1000011: // FMADD
+	case 0b1000111: // FMSUB
+	case 0b1001011: // FNMSUB
+	case 0b1001111: // FNMADD -- funct2 (bits 26:25) splits single/double, same as OP-FP's funct7 bit0
+		return (((raw_instr >> 25) & 0x3) == 0b01) ? Extension::D : Extension::F;
+	case 0b1010011: // OP-FP: almost every op's funct7 has single at an even value, double at +1 --
+		// except FCVT.S.D/FCVT.D.S (0x20/0x21), which the spec lists under D since both widths are involved.
+		if (funct7 == 0b0100000 || funct7 == 0b0100001) return Extension::D;
+		return (funct7 & 0x1) ? Extension::D : Extension::F;
 	default:
 		return Extension::ILLEGAL;
 	}
@@ -115,10 +132,10 @@ DecodedInstruction Decoder::decode(uint32_t raw_instr, Extension ext) const
 		case 0b000: instr.mnemonic = "LB";  break;
 		case 0b001: instr.mnemonic = "LH";  break;
 		case 0b010: instr.mnemonic = "LW";  break;
-		case 0b011: instr.mnemonic = "LD";  if (!Extensions::XLEN64) instr.ext = Extension::ILLEGAL; break; // RV64
+		case 0b011: instr.mnemonic = "LD";  if (!Extensions.XLEN64) instr.ext = Extension::ILLEGAL; break; // RV64
 		case 0b100: instr.mnemonic = "LBU"; break;
 		case 0b101: instr.mnemonic = "LHU"; break;
-		case 0b110: instr.mnemonic = "LWU"; if (!Extensions::XLEN64) instr.ext = Extension::ILLEGAL; break; // RV64 -- zero-extended 32-bit load
+		case 0b110: instr.mnemonic = "LWU"; if (!Extensions.XLEN64) instr.ext = Extension::ILLEGAL; break; // RV64 -- zero-extended 32-bit load
 		}
 		break;
 
@@ -128,7 +145,7 @@ DecodedInstruction Decoder::decode(uint32_t raw_instr, Extension ext) const
 		case 0b000: instr.mnemonic = "SB"; break;
 		case 0b001: instr.mnemonic = "SH"; break;
 		case 0b010: instr.mnemonic = "SW"; break;
-		case 0b011: instr.mnemonic = "SD"; if (!Extensions::XLEN64) instr.ext = Extension::ILLEGAL; break; // RV64
+		case 0b011: instr.mnemonic = "SD"; if (!Extensions.XLEN64) instr.ext = Extension::ILLEGAL; break; // RV64
 		}
 		break;
 
@@ -253,7 +270,135 @@ DecodedInstruction Decoder::decode(uint32_t raw_instr, Extension ext) const
 		case 0b11000: instr.mnemonic = instr.op_64 ? "AMOMINU.D" : "AMOMINU.W"; break;
 		case 0b11100: instr.mnemonic = instr.op_64 ? "AMOMAXU.D" : "AMOMAXU.W"; break;
 		}
-		if (instr.op_64 && !Extensions::XLEN64) instr.ext = Extension::ILLEGAL; // .D forms don't exist on RV32
+		if (instr.op_64 && !Extensions.XLEN64) instr.ext = Extension::ILLEGAL; // .D forms don't exist on RV32
+		break;
+	}
+
+	case 0b0000111: // LOAD-FP: FLW (F) / FLD (D) -- rs1 is an integer base register, rd is F/D
+		instr.imm = imm_i;
+		instr.fp_double = (funct3 == 0b011);
+		instr.mnemonic = instr.fp_double ? "FLD" : "FLW";
+		break;
+
+	case 0b0100111: // STORE-FP: FSW (F) / FSD (D)
+		instr.imm = imm_s;
+		instr.fp_double = (funct3 == 0b011);
+		instr.mnemonic = instr.fp_double ? "FSD" : "FSW";
+		break;
+
+	// Fused multiply-add family (R4-type: rs3 lives at bits[31:27], funct2
+	// at bits[26:25] -- both packed into the already-extracted funct7).
+	case 0b1000011: instr.rs3 = funct7 >> 2; instr.fp_double = (funct7 & 0x3) == 0b01;
+		instr.mnemonic = instr.fp_double ? "FMADD.D" : "FMADD.S"; break;
+	case 0b1000111: instr.rs3 = funct7 >> 2; instr.fp_double = (funct7 & 0x3) == 0b01;
+		instr.mnemonic = instr.fp_double ? "FMSUB.D" : "FMSUB.S"; break;
+	case 0b1001011: instr.rs3 = funct7 >> 2; instr.fp_double = (funct7 & 0x3) == 0b01;
+		instr.mnemonic = instr.fp_double ? "FNMSUB.D" : "FNMSUB.S"; break;
+	case 0b1001111: instr.rs3 = funct7 >> 2; instr.fp_double = (funct7 & 0x3) == 0b01;
+		instr.mnemonic = instr.fp_double ? "FNMADD.D" : "FNMADD.S"; break;
+
+	case 0b1010011: { // OP-FP -- funct7 selects the operation; rs2 doubles as a conversion-type selector for FCVT
+		instr.fp_double = (funct7 & 0x1) != 0;
+		switch (funct7) {
+		case 0b0000000: instr.mnemonic = "FADD.S";  break;
+		case 0b0000001: instr.mnemonic = "FADD.D";  break;
+		case 0b0000100: instr.mnemonic = "FSUB.S";  break;
+		case 0b0000101: instr.mnemonic = "FSUB.D";  break;
+		case 0b0001000: instr.mnemonic = "FMUL.S";  break;
+		case 0b0001001: instr.mnemonic = "FMUL.D";  break;
+		case 0b0001100: instr.mnemonic = "FDIV.S";  break;
+		case 0b0001101: instr.mnemonic = "FDIV.D";  break;
+		case 0b0101100: instr.mnemonic = "FSQRT.S"; break;
+		case 0b0101101: instr.mnemonic = "FSQRT.D"; break;
+		case 0b0010000:
+			switch (funct3) {
+			case 0b000: instr.mnemonic = "FSGNJ.S";  break;
+			case 0b001: instr.mnemonic = "FSGNJN.S"; break;
+			case 0b010: instr.mnemonic = "FSGNJX.S"; break;
+			}
+			break;
+		case 0b0010001:
+			switch (funct3) {
+			case 0b000: instr.mnemonic = "FSGNJ.D";  break;
+			case 0b001: instr.mnemonic = "FSGNJN.D"; break;
+			case 0b010: instr.mnemonic = "FSGNJX.D"; break;
+			}
+			break;
+		case 0b0010100: instr.mnemonic = (funct3 == 0b001) ? "FMAX.S" : "FMIN.S"; break;
+		case 0b0010101: instr.mnemonic = (funct3 == 0b001) ? "FMAX.D" : "FMIN.D"; break;
+		case 0b1100000: // FCVT.W/WU/L/LU .S -- rd is an integer register
+			switch (rs2) {
+			case 0b00000: instr.mnemonic = "FCVT.W.S";  break;
+			case 0b00001: instr.mnemonic = "FCVT.WU.S"; break;
+			case 0b00010: instr.mnemonic = "FCVT.L.S";  if (!Extensions.XLEN64) instr.ext = Extension::ILLEGAL; break;
+			case 0b00011: instr.mnemonic = "FCVT.LU.S"; if (!Extensions.XLEN64) instr.ext = Extension::ILLEGAL; break;
+			}
+			break;
+		case 0b1100001: // FCVT.W/WU/L/LU .D
+			switch (rs2) {
+			case 0b00000: instr.mnemonic = "FCVT.W.D";  break;
+			case 0b00001: instr.mnemonic = "FCVT.WU.D"; break;
+			case 0b00010: instr.mnemonic = "FCVT.L.D";  if (!Extensions.XLEN64) instr.ext = Extension::ILLEGAL; break;
+			case 0b00011: instr.mnemonic = "FCVT.LU.D"; if (!Extensions.XLEN64) instr.ext = Extension::ILLEGAL; break;
+			}
+			break;
+		case 0b1110000: // rs1 F -> rd integer: FMV.X.W (raw bits) / FCLASS.S
+			instr.mnemonic = (funct3 == 0b001) ? "FCLASS.S" : "FMV.X.W";
+			break;
+		case 0b1110001: // rs1 D -> rd integer: FMV.X.D (RV64 only) / FCLASS.D
+			if (funct3 == 0b001) {
+				instr.mnemonic = "FCLASS.D";
+			} else {
+				instr.mnemonic = "FMV.X.D";
+				if (!Extensions.XLEN64) instr.ext = Extension::ILLEGAL;
+			}
+			break;
+		case 0b1010000: // FLE/FLT/FEQ .S -- rd integer
+			switch (funct3) {
+			case 0b000: instr.mnemonic = "FLE.S"; break;
+			case 0b001: instr.mnemonic = "FLT.S"; break;
+			case 0b010: instr.mnemonic = "FEQ.S"; break;
+			}
+			break;
+		case 0b1010001: // FLE/FLT/FEQ .D
+			switch (funct3) {
+			case 0b000: instr.mnemonic = "FLE.D"; break;
+			case 0b001: instr.mnemonic = "FLT.D"; break;
+			case 0b010: instr.mnemonic = "FEQ.D"; break;
+			}
+			break;
+		case 0b1101000: // FCVT.S.W/WU/L/LU -- rd F, rs1 integer
+			switch (rs2) {
+			case 0b00000: instr.mnemonic = "FCVT.S.W";  break;
+			case 0b00001: instr.mnemonic = "FCVT.S.WU"; break;
+			case 0b00010: instr.mnemonic = "FCVT.S.L";  if (!Extensions.XLEN64) instr.ext = Extension::ILLEGAL; break;
+			case 0b00011: instr.mnemonic = "FCVT.S.LU"; if (!Extensions.XLEN64) instr.ext = Extension::ILLEGAL; break;
+			}
+			break;
+		case 0b1101001: // FCVT.D.W/WU/L/LU -- rd D, rs1 integer
+			switch (rs2) {
+			case 0b00000: instr.mnemonic = "FCVT.D.W";  break;
+			case 0b00001: instr.mnemonic = "FCVT.D.WU"; break;
+			case 0b00010: instr.mnemonic = "FCVT.D.L";  if (!Extensions.XLEN64) instr.ext = Extension::ILLEGAL; break;
+			case 0b00011: instr.mnemonic = "FCVT.D.LU"; if (!Extensions.XLEN64) instr.ext = Extension::ILLEGAL; break;
+			}
+			break;
+		case 0b1111000: // FMV.W.X -- rd F, rs1 integer, raw bit move
+			instr.mnemonic = "FMV.W.X";
+			break;
+		case 0b1111001: // FMV.D.X (RV64 only)
+			instr.mnemonic = "FMV.D.X";
+			if (!Extensions.XLEN64) instr.ext = Extension::ILLEGAL;
+			break;
+		case 0b0100000: // FCVT.S.D -- narrows a double to single. Touches both widths, so
+			instr.mnemonic = "FCVT.S.D"; // unlike every other F or D op here, this needs *both* flags enabled, not just one.
+			if (!Extensions.F || !Extensions.D) instr.ext = Extension::ILLEGAL;
+			break;
+		case 0b0100001: // FCVT.D.S -- widens a single to double, same both-flags requirement
+			instr.mnemonic = "FCVT.D.S";
+			if (!Extensions.F || !Extensions.D) instr.ext = Extension::ILLEGAL;
+			break;
+		}
 		break;
 	}
 
@@ -307,12 +452,39 @@ DecodedInstruction Decoder::decode_compressed(uint16_t raw16) const
 			instr.rd = creg_prime(raw16, 2); instr.rs1 = creg_prime(raw16, 7); instr.imm = (int64_t)imm;
 			break;
 		}
-		case 0b011: { // RV64: C.LD -> LD rd', imm(rs1'). RV32: this slot is C.FLW (needs F ext, not implemented) -> illegal
-			if (!Extensions::XLEN64) { instr.ext = Extension::ILLEGAL; break; }
+		case 0b001: { // C.FLD (needs D) -> FLD rd', imm(rs1') -- same imm layout as C.LD, always available regardless of XLEN
+			if (!Extensions.D) { instr.ext = Extension::ILLEGAL; break; }
 			uint32_t imm = (((raw16 >> 10) & 0x7) << 3) | (((raw16 >> 5) & 0x3) << 6);
-			instr.mnemonic = "C.LD";
-			instr.opcode = 0b0000011; instr.funct3 = 0b011;
+			instr.mnemonic = "C.FLD";
+			instr.ext = Extension::D;
+			instr.opcode = 0b0000111; instr.funct3 = 0b011; instr.fp_double = true;
 			instr.rd = creg_prime(raw16, 2); instr.rs1 = creg_prime(raw16, 7); instr.imm = (int64_t)imm;
+			break;
+		}
+		case 0b011: { // RV64: C.LD -> LD rd', imm(rs1'). RV32: this slot is C.FLW instead (needs F)
+			if (Extensions.XLEN64) {
+				uint32_t imm = (((raw16 >> 10) & 0x7) << 3) | (((raw16 >> 5) & 0x3) << 6);
+				instr.mnemonic = "C.LD";
+				instr.opcode = 0b0000011; instr.funct3 = 0b011;
+				instr.rd = creg_prime(raw16, 2); instr.rs1 = creg_prime(raw16, 7); instr.imm = (int64_t)imm;
+			} else if (Extensions.F) { // same imm layout as C.LW
+				uint32_t imm = (((raw16 >> 5) & 0x1) << 6) | (((raw16 >> 10) & 0x7) << 3) | (((raw16 >> 6) & 0x1) << 2);
+				instr.mnemonic = "C.FLW";
+				instr.ext = Extension::F;
+				instr.opcode = 0b0000111; instr.funct3 = 0b010; instr.fp_double = false;
+				instr.rd = creg_prime(raw16, 2); instr.rs1 = creg_prime(raw16, 7); instr.imm = (int64_t)imm;
+			} else {
+				instr.ext = Extension::ILLEGAL;
+			}
+			break;
+		}
+		case 0b101: { // C.FSD (needs D) -> FSD rs2', imm(rs1') -- same imm layout as C.SD
+			if (!Extensions.D) { instr.ext = Extension::ILLEGAL; break; }
+			uint32_t imm = (((raw16 >> 10) & 0x7) << 3) | (((raw16 >> 5) & 0x3) << 6);
+			instr.mnemonic = "C.FSD";
+			instr.ext = Extension::D;
+			instr.opcode = 0b0100111; instr.funct3 = 0b011; instr.fp_double = true;
+			instr.rs1 = creg_prime(raw16, 7); instr.rs2 = creg_prime(raw16, 2); instr.imm = (int64_t)imm;
 			break;
 		}
 		case 0b110: { // C.SW -> SW rs2', imm(rs1')
@@ -322,12 +494,21 @@ DecodedInstruction Decoder::decode_compressed(uint16_t raw16) const
 			instr.rs1 = creg_prime(raw16, 7); instr.rs2 = creg_prime(raw16, 2); instr.imm = (int64_t)imm;
 			break;
 		}
-		case 0b111: { // RV64: C.SD -> SD rs2', imm(rs1'). RV32: this slot is C.FSW (needs F ext) -> illegal
-			if (!Extensions::XLEN64) { instr.ext = Extension::ILLEGAL; break; }
-			uint32_t imm = (((raw16 >> 10) & 0x7) << 3) | (((raw16 >> 5) & 0x3) << 6);
-			instr.mnemonic = "C.SD";
-			instr.opcode = 0b0100011; instr.funct3 = 0b011;
-			instr.rs1 = creg_prime(raw16, 7); instr.rs2 = creg_prime(raw16, 2); instr.imm = (int64_t)imm;
+		case 0b111: { // RV64: C.SD -> SD rs2', imm(rs1'). RV32: this slot is C.FSW instead (needs F)
+			if (Extensions.XLEN64) {
+				uint32_t imm = (((raw16 >> 10) & 0x7) << 3) | (((raw16 >> 5) & 0x3) << 6);
+				instr.mnemonic = "C.SD";
+				instr.opcode = 0b0100011; instr.funct3 = 0b011;
+				instr.rs1 = creg_prime(raw16, 7); instr.rs2 = creg_prime(raw16, 2); instr.imm = (int64_t)imm;
+			} else if (Extensions.F) { // same imm layout as C.SW
+				uint32_t imm = (((raw16 >> 5) & 0x1) << 6) | (((raw16 >> 10) & 0x7) << 3) | (((raw16 >> 6) & 0x1) << 2);
+				instr.mnemonic = "C.FSW";
+				instr.ext = Extension::F;
+				instr.opcode = 0b0100111; instr.funct3 = 0b010; instr.fp_double = false;
+				instr.rs1 = creg_prime(raw16, 7); instr.rs2 = creg_prime(raw16, 2); instr.imm = (int64_t)imm;
+			} else {
+				instr.ext = Extension::ILLEGAL;
+			}
 			break;
 		}
 		default:
@@ -348,7 +529,7 @@ DecodedInstruction Decoder::decode_compressed(uint16_t raw16) const
 			break;
 		}
 		case 0b001: { // RV64: C.ADDIW (same imm layout as C.ADDI). RV32: this same slot is C.JAL instead
-			if (Extensions::XLEN64) {
+			if (Extensions.XLEN64) {
 				int32_t imm = (int32_t)(((raw16 >> 2) & 0x1F) | (((raw16 >> 12) & 0x1) << 5));
 				if (imm & 0x20) imm |= ~0x3F;
 				uint8_t rd = creg_full(raw16, 7);
@@ -408,7 +589,7 @@ DecodedInstruction Decoder::decode_compressed(uint16_t raw16) const
 			} else if ((raw16 >> 12) & 0x1) { // funct1==1 -> C.SUBW/C.ADDW (RV64 only; this whole slot is reserved on RV32)
 				uint8_t rs2 = creg_prime(raw16, 2);
 				uint8_t funct2 = (raw16 >> 5) & 0x3;
-				if (Extensions::XLEN64 && (funct2 == 0b00 || funct2 == 0b01)) {
+				if (Extensions.XLEN64 && (funct2 == 0b00 || funct2 == 0b01)) {
 					bool is_subw = (funct2 == 0b00);
 					instr.mnemonic = is_subw ? "C.SUBW" : "C.ADDW";
 					instr.opcode = 0b0111011; instr.funct3 = 0b000; instr.word_op = true;
@@ -462,6 +643,15 @@ DecodedInstruction Decoder::decode_compressed(uint16_t raw16) const
 			instr.rd = rd; instr.rs1 = rd; instr.imm = (int64_t)shamt;
 			break;
 		}
+		case 0b001: { // C.FLDSP (needs D) -> FLD rd, imm(x2) -- rd is a full 5-bit F register, no x0-style restriction
+			if (!Extensions.D) { instr.ext = Extension::ILLEGAL; break; }
+			uint32_t imm = (((raw16 >> 5) & 0x3) << 3) | (((raw16 >> 12) & 0x1) << 5) | (((raw16 >> 2) & 0x7) << 6);
+			instr.mnemonic = "C.FLDSP";
+			instr.ext = Extension::D;
+			instr.opcode = 0b0000111; instr.funct3 = 0b011; instr.fp_double = true;
+			instr.rd = creg_full(raw16, 7); instr.rs1 = 2; instr.imm = (int64_t)imm;
+			break;
+		}
 		case 0b010: { // C.LWSP rd,imm -> LW rd, imm(x2)
 			uint32_t imm = (((raw16 >> 4) & 0x7) << 2) | (((raw16 >> 12) & 0x1) << 5) | (((raw16 >> 2) & 0x3) << 6);
 			instr.mnemonic = "C.LWSP";
@@ -469,12 +659,21 @@ DecodedInstruction Decoder::decode_compressed(uint16_t raw16) const
 			instr.rd = creg_full(raw16, 7); instr.rs1 = 2; instr.imm = (int64_t)imm;
 			break;
 		}
-		case 0b011: { // RV64: C.LDSP -> LD rd, imm(x2). RV32: this slot is C.FLWSP (needs F ext) -> illegal
-			if (!Extensions::XLEN64) { instr.ext = Extension::ILLEGAL; break; }
-			uint32_t imm = (((raw16 >> 5) & 0x3) << 3) | (((raw16 >> 12) & 0x1) << 5) | (((raw16 >> 2) & 0x7) << 6);
-			instr.mnemonic = "C.LDSP";
-			instr.opcode = 0b0000011; instr.funct3 = 0b011;
-			instr.rd = creg_full(raw16, 7); instr.rs1 = 2; instr.imm = (int64_t)imm;
+		case 0b011: { // RV64: C.LDSP -> LD rd, imm(x2). RV32: this slot is C.FLWSP instead (needs F)
+			if (Extensions.XLEN64) {
+				uint32_t imm = (((raw16 >> 5) & 0x3) << 3) | (((raw16 >> 12) & 0x1) << 5) | (((raw16 >> 2) & 0x7) << 6);
+				instr.mnemonic = "C.LDSP";
+				instr.opcode = 0b0000011; instr.funct3 = 0b011;
+				instr.rd = creg_full(raw16, 7); instr.rs1 = 2; instr.imm = (int64_t)imm;
+			} else if (Extensions.F) { // same imm layout as C.LWSP
+				uint32_t imm = (((raw16 >> 4) & 0x7) << 2) | (((raw16 >> 12) & 0x1) << 5) | (((raw16 >> 2) & 0x3) << 6);
+				instr.mnemonic = "C.FLWSP";
+				instr.ext = Extension::F;
+				instr.opcode = 0b0000111; instr.funct3 = 0b010; instr.fp_double = false;
+				instr.rd = creg_full(raw16, 7); instr.rs1 = 2; instr.imm = (int64_t)imm;
+			} else {
+				instr.ext = Extension::ILLEGAL;
+			}
 			break;
 		}
 		case 0b100: {
@@ -504,6 +703,15 @@ DecodedInstruction Decoder::decode_compressed(uint16_t raw16) const
 			}
 			break;
 		}
+		case 0b101: { // C.FSDSP (needs D) -> FSD rs2, imm(x2)
+			if (!Extensions.D) { instr.ext = Extension::ILLEGAL; break; }
+			uint32_t imm = (((raw16 >> 10) & 0x7) << 3) | (((raw16 >> 7) & 0x7) << 6);
+			instr.mnemonic = "C.FSDSP";
+			instr.ext = Extension::D;
+			instr.opcode = 0b0100111; instr.funct3 = 0b011; instr.fp_double = true;
+			instr.rs1 = 2; instr.rs2 = creg_full(raw16, 2); instr.imm = (int64_t)imm;
+			break;
+		}
 		case 0b110: { // C.SWSP rs2,imm -> SW rs2, imm(x2)
 			uint32_t imm = (((raw16 >> 9) & 0xF) << 2) | (((raw16 >> 7) & 0x3) << 6);
 			instr.mnemonic = "C.SWSP";
@@ -511,12 +719,21 @@ DecodedInstruction Decoder::decode_compressed(uint16_t raw16) const
 			instr.rs1 = 2; instr.rs2 = creg_full(raw16, 2); instr.imm = (int64_t)imm;
 			break;
 		}
-		case 0b111: { // RV64: C.SDSP -> SD rs2, imm(x2). RV32: this slot is C.FSWSP (needs F ext) -> illegal
-			if (!Extensions::XLEN64) { instr.ext = Extension::ILLEGAL; break; }
-			uint32_t imm = (((raw16 >> 10) & 0x7) << 3) | (((raw16 >> 7) & 0x7) << 6);
-			instr.mnemonic = "C.SDSP";
-			instr.opcode = 0b0100011; instr.funct3 = 0b011;
-			instr.rs1 = 2; instr.rs2 = creg_full(raw16, 2); instr.imm = (int64_t)imm;
+		case 0b111: { // RV64: C.SDSP -> SD rs2, imm(x2). RV32: this slot is C.FSWSP instead (needs F)
+			if (Extensions.XLEN64) {
+				uint32_t imm = (((raw16 >> 10) & 0x7) << 3) | (((raw16 >> 7) & 0x7) << 6);
+				instr.mnemonic = "C.SDSP";
+				instr.opcode = 0b0100011; instr.funct3 = 0b011;
+				instr.rs1 = 2; instr.rs2 = creg_full(raw16, 2); instr.imm = (int64_t)imm;
+			} else if (Extensions.F) { // same imm layout as C.SWSP
+				uint32_t imm = (((raw16 >> 9) & 0xF) << 2) | (((raw16 >> 7) & 0x3) << 6);
+				instr.mnemonic = "C.FSWSP";
+				instr.ext = Extension::F;
+				instr.opcode = 0b0100111; instr.funct3 = 0b010; instr.fp_double = false;
+				instr.rs1 = 2; instr.rs2 = creg_full(raw16, 2); instr.imm = (int64_t)imm;
+			} else {
+				instr.ext = Extension::ILLEGAL;
+			}
 			break;
 		}
 		default:
@@ -535,7 +752,7 @@ DispatchResult Decoder::decode_and_dispatch(uint64_t pc, uint32_t raw_word)
 	// instruction as compressed -- checked before touching the cache, since
 	// compressed instructions only need (and are only tagged by) their
 	// 16-bit half, while a standard instruction needs the full word.
-	bool is_compressed = Extensions::C && ((raw_word & 0x3) != 0x3);
+	bool is_compressed = Extensions.C && ((raw_word & 0x3) != 0x3);
 	uint32_t tag = is_compressed ? (raw_word & 0xFFFF) : raw_word;
 
 	// Indexed by halfword, not word: compressed instructions can start on
@@ -560,12 +777,14 @@ DispatchResult Decoder::decode_and_dispatch(uint64_t pc, uint32_t raw_word)
 			instr = decode(raw_word, ext);
 		}
 
-		enabled = (instr.ext == Extension::I && Extensions::I)
-		       || (instr.ext == Extension::M && Extensions::M)
-		       || (instr.ext == Extension::A && Extensions::A)
-		       || (instr.ext == Extension::C && Extensions::C)
-		       || (instr.ext == Extension::ZICSR && Extensions::ZICSR)
-		       || (instr.ext == Extension::V && Extensions::V);
+		enabled = (instr.ext == Extension::I && Extensions.I)
+		       || (instr.ext == Extension::M && Extensions.M)
+		       || (instr.ext == Extension::A && Extensions.A)
+		       || (instr.ext == Extension::C && Extensions.C)
+		       || (instr.ext == Extension::ZICSR && Extensions.ZICSR)
+		       || (instr.ext == Extension::F && Extensions.F)
+		       || (instr.ext == Extension::D && Extensions.D)
+		       || (instr.ext == Extension::V && Extensions.V);
 
 		entry = {true, pc, tag, instr, enabled};
 	}
@@ -587,6 +806,10 @@ DispatchResult Decoder::decode_and_dispatch(uint64_t pc, uint32_t raw_word)
 		break;
 	case Extension::ZICSR:
 		core.exec_32ZICSR(instr, regs, mem);
+		break;
+	case Extension::F:
+	case Extension::D:
+		core.exec_FD(instr, regs, mem);
 		break;
 	default:
 		return {true, instr.mnemonic, instr.length};

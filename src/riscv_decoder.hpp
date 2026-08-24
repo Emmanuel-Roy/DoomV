@@ -8,6 +8,8 @@ enum class Extension {
 	A,
 	C,
 	ZICSR,
+	F,
+	D,
 	V,
 	ILLEGAL,
 };
@@ -16,11 +18,13 @@ struct DecodedInstruction {
 	Extension ext;
 	uint8_t opcode;
 	uint8_t rd, rs1, rs2;
+	uint8_t rs3;    // R4-type fourth operand -- only the fused multiply-add family (FMADD/FMSUB/FNMSUB/FNMADD) uses this
 	uint8_t funct3, funct7;
 	int64_t imm;    // sign-extends to full XLEN (64 bits)
 	uint8_t length; // 2 or 4 bytes
 	bool word_op;   // true for the *W-suffixed RV64 forms (ADDIW, SLLW, MULW, ...) -- 32-bit op, sign-extend result to 64
 	bool op_64;     // true for the .D-suffixed RV64A forms (LR.D/SC.D/AMO*.D) -- selects 64-bit vs 32-bit memory width
+	bool fp_double; // true for F-extension instructions operating on double (D) instead of single (F) precision
 	const char *mnemonic; // e.g. "ADDI" -- static string, name only, no operands
 };
 
