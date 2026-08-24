@@ -296,9 +296,9 @@ void Gui::render(const Snapshot &snap)
 	char buf[96];
 	int hud_x = 425;
 
-	auto draw_shadow_text = [&](int x, int y, const char *s, uint32_t col) {
-		draw_string(x + 1, y + 1, s, pal_dark);
-		draw_string(x, y, s, col);
+	auto draw_shadow_text = [&](int x, int y, const char *s, uint32_t col, float font_scale = 1.0f) {
+		draw_string(x + 1, y + 1, s, pal_dark, font_scale);
+		draw_string(x, y, s, col, font_scale);
 	};
 
 	// STATS
@@ -315,21 +315,31 @@ void Gui::render(const Snapshot &snap)
 
 	current_y += 12;
 
-	// REGISTER FILE -- single column, full 64-bit hex per register. A
-	// two-column grid (the old layout) can't fit 16 hex digits per entry
-	// without the columns overlapping, so the trace log moved below the
-	// game view (there's an unused strip there, y:305-360) to free up the
-	// whole right panel's height for this.
+	// REGISTER FILE -- two columns (X, V) at a shrunk font scale. Full
+	// 64-bit hex per entry at normal scale only leaves room for a single
+	// column (the previous layout); shrinking lets both X0-31 and V0-31
+	// sit side by side in the same horizontal span instead of needing a
+	// second vertical section (V is currently all zeros -- storage only,
+	// see registers.hpp -- but the layout doesn't assume that).
 	draw_shadow_text(hud_x, current_y, "--- REGISTER FILE ---", pal_pink);
 	int reg_start_y = current_y + 15;
+	const float REG_SCALE = 0.6f;
+	const int REG_ROW_H = 6;
+	const int REG_COL_W = 110; // label (4 chars) + 16 hex digits at REG_SCALE, plus a small gap
+	int x_col = hud_x;
+	int v_col = hud_x + REG_COL_W;
 	for (int i = 0; i < 32; i++) {
-		int cy = reg_start_y + (i * 9);
+		int cy = reg_start_y + (i * REG_ROW_H);
 
 		sprintf(buf, "X%02d:", i);
-		draw_shadow_text(hud_x, cy, buf, pal_red);
-
+		draw_shadow_text(x_col, cy, buf, pal_red, REG_SCALE);
 		sprintf(buf, "%016llX", (unsigned long long)snap.x[i]);
-		draw_shadow_text(hud_x + 35, cy, buf, pal_white);
+		draw_shadow_text(x_col + 20, cy, buf, pal_white, REG_SCALE);
+
+		sprintf(buf, "V%02d:", i);
+		draw_shadow_text(v_col, cy, buf, pal_red, REG_SCALE);
+		sprintf(buf, "%016llX", (unsigned long long)snap.v_lo[i]);
+		draw_shadow_text(v_col + 20, cy, buf, pal_white, REG_SCALE);
 	}
 
 	// TRACE LOG -- lives below the game view box instead of the right
@@ -378,20 +388,27 @@ std::vector<RawKeyEvent> Gui::poll_input()
 	return events;
 }
 
-void Gui::draw_char(int x, int y, char c, uint32_t col)
+void Gui::draw_char(int x, int y, char c, uint32_t col, float font_scale)
 {
 	if ((uint8_t)c >= 128) return;
 
-	int bw = (int)(scale_x + 0.5f); if (bw < 1) bw = 1;
-	int bh = (int)(scale_y + 0.5f); if (bh < 1) bh = 1;
+	// The glyph's origin (x,y) stays in the normal design-unit grid --
+	// only the 8x8 bitmap's own pixels shrink -- so a smaller-scale
+	// string still lines up with normal-scale text around it.
+	float px_scale = scale_x * font_scale;
+	float py_scale = scale_y * font_scale;
+	int bw = (int)(px_scale + 0.5f); if (bw < 1) bw = 1;
+	int bh = (int)(py_scale + 0.5f); if (bh < 1) bh = 1;
+	int origin_x = (int)(x * scale_x);
+	int origin_y = (int)(y * scale_y);
 
 	for (int r = 0; r < 8; r++) {
 		uint8_t b = font8x8[(uint8_t)c][r];
 		for (int cl = 0; cl < 8; cl++) {
 			if (!(b & (0x80 >> cl))) continue;
 
-			int px = (int)((x + cl) * scale_x);
-			int py = (int)((y + r) * scale_y);
+			int px = origin_x + (int)(cl * px_scale);
+			int py = origin_y + (int)(r * py_scale);
 			for (int by = 0; by < bh; by++) {
 				int ty = py + by;
 				if (ty < 0 || ty >= canvas_h) continue;
@@ -406,9 +423,10 @@ void Gui::draw_char(int x, int y, char c, uint32_t col)
 	}
 }
 
-void Gui::draw_string(int x, int y, const char *s, uint32_t c)
+void Gui::draw_string(int x, int y, const char *s, uint32_t c, float font_scale)
 {
-	while (*s) { draw_char(x, y, *s++, c); x += 8; }
+	int advance = (int)(8 * font_scale + 0.5f); if (advance < 1) advance = 1;
+	while (*s) { draw_char(x, y, *s++, c, font_scale); x += advance; }
 }
 
 void Gui::init_font()

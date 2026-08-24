@@ -1,8 +1,9 @@
 #include "registers.hpp"
+#include <cstring>
 
 Registers::Registers() : pc(0), frm(0), fflags(0), history_ptr(0)
 {
-	for (int i = 0; i < 32; i++) { x[i] = 0; f[i] = 0.0; }
+	for (int i = 0; i < 32; i++) { x[i] = 0; f[i] = 0.0; std::memset(v[i], 0, VLEN_BYTES); }
 	for (int i = 0; i < 4096; i++) csr[i] = 0;
 	for (int i = 0; i < HISTORY_SIZE; i++) history[i] = {0, 0, DecodedInstruction{}};
 }
@@ -25,6 +26,11 @@ double Registers::read_f(int i) const
 void Registers::write_f(int i, double value)
 {
 	f[i] = value;
+}
+
+const uint8_t *Registers::read_v(int i) const
+{
+	return v[i];
 }
 
 uint64_t Registers::get_pc() const

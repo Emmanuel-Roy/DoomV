@@ -37,8 +37,11 @@ private:
 
 	uint8_t font8x8[128][8];
 	void init_font();
-	void draw_char(int x, int y, char c, uint32_t color);
-	void draw_string(int x, int y, const char *str, uint32_t color);
+	// font_scale shrinks a glyph's rendered size without changing where its
+	// origin sits in the design-unit coordinate system -- lets one region
+	// (the register grid) pack text tighter than the rest of the HUD.
+	void draw_char(int x, int y, char c, uint32_t color, float font_scale = 1.0f);
+	void draw_string(int x, int y, const char *str, uint32_t color, float font_scale = 1.0f);
 
 	uint32_t last_sync;
 	float dashboard_fps = 0.0f;

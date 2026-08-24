@@ -28,6 +28,19 @@ public:
 	double read_f(int i) const;
 	void write_f(int i, double value);
 
+	// V (vector) register file -- storage only for now; no V instruction
+	// exists yet to read/write it (classify() never produces Extension::V),
+	// this is purely groundwork for when it does. Raw bytes, not a fixed
+	// element type: a real vector register gets reinterpreted at different
+	// element widths (SEW) from one instruction to the next, so an untyped
+	// byte array is the correct representation, not e.g. an array of
+	// uint32_t. VLEN=128 is a common, modest choice for a first
+	// implementation -- easy to widen later, nothing outside Registers
+	// assumes a specific value.
+	static constexpr int VLEN_BITS = 128;
+	static constexpr int VLEN_BYTES = VLEN_BITS / 8;
+	const uint8_t *read_v(int i) const;
+
 	uint64_t get_pc() const;
 	void set_pc(uint64_t value);
 
@@ -51,6 +64,7 @@ public:
 private:
 	uint64_t x[32];
 	double f[32];
+	uint8_t v[32][VLEN_BYTES];
 	uint64_t pc;
 	uint64_t csr[4096];
 	uint8_t frm;

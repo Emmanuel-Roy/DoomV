@@ -12,6 +12,10 @@
 struct Snapshot {
 	std::vector<uint32_t> framebuffer = std::vector<uint32_t>(Memory::FB_W * Memory::FB_H, 0);
 	uint64_t x[32] = {};
+	// Just the low 64 bits of each 128-bit V register -- plenty for a
+	// dashboard display (they're all zero until V is actually implemented
+	// anyway), not worth snapshotting the full width yet.
+	uint64_t v_lo[32] = {};
 	uint64_t pc = 0;
 	bool halted = false;
 	// DecodedInstruction default-initializes its own mnemonic to "???"

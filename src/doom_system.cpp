@@ -2,6 +2,7 @@
 #include <SDL2/SDL.h>
 #include <algorithm>
 #include <cstdio>
+#include <cstring>
 #include <fstream>
 #include <thread>
 #include <vector>
@@ -118,6 +119,7 @@ void DoomSystem::publish_snapshot()
 	std::copy(fb32, fb32 + Memory::FB_W * Memory::FB_H, snap.framebuffer.begin());
 
 	for (int i = 0; i < 32; i++) snap.x[i] = regs.read_x(i);
+	for (int i = 0; i < 32; i++) std::memcpy(&snap.v_lo[i], regs.read_v(i), sizeof(uint64_t));
 	snap.pc = regs.get_pc();
 	snap.halted = debugger.halted;
 
