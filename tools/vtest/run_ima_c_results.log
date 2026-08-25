@@ -1,0 +1,170 @@
+[39] PASS	add-01.S	1364 words match
+[40] PASS	addi-01.S	1244 words match
+[41] PASS	addiw-01.S	1256 words match
+[42] PASS	addw-01.S	1360 words match
+[43] PASS	and-01.S	1360 words match
+[44] PASS	andi-01.S	1244 words match
+[45] PASS	auipc-01.S	132 words match
+[46] PASS	beq-01.S	1364 words match
+[47] PASS	bge-01.S	1352 words match
+[48] PASS	bgeu-01.S	1648 words match
+[49] PASS	blt-01.S	1352 words match
+[50] PASS	bltu-01.S	1632 words match
+[51] PASS	bne-01.S	1360 words match
+[52] PASS	fence-01.S	8 words match
+[53] PASS	jal-01.S	68 words match
+[54] PASS	jalr-01.S	72 words match
+[55] PASS	lb-align-01.S	68 words match
+[56] PASS	lbu-align-01.S	72 words match
+[57] PASS	ld-align-01.S	68 words match
+[58] PASS	lh-align-01.S	68 words match
+[59] PASS	lhu-align-01.S	68 words match
+[60] PASS	lui-01.S	132 words match
+[61] PASS	lw-align-01.S	68 words match
+[62] PASS	lwu-align-01.S	68 words match
+[63] PASS	or-01.S	1360 words match
+[64] PASS	ori-01.S	824 words match
+[65] PASS	sb-align-01.S	276 words match
+[66] PASS	sd-align-01.S	268 words match
+[67] PASS	sh-align-01.S	272 words match
+[68] PASS	sll-01.S	312 words match
+[69] PASS	slli-01.S	308 words match
+[70] PASS	slliw-01.S	304 words match
+[71] PASS	sllw-01.S	312 words match
+[72] PASS	slt-01.S	1356 words match
+[73] PASS	slti-01.S	1240 words match
+[74] PASS	sltiu-01.S	1524 words match
+[75] PASS	sltu-01.S	1644 words match
+[76] PASS	sra-01.S	80 words match
+[77] PASS	srai-01.S	308 words match
+[78] PASS	sraiw-01.S	308 words match
+[79] PASS	sraw-01.S	76 words match
+[42] PASS	srl-01.S	312 words match
+[43] PASS	srli-01.S	312 words match
+[44] PASS	srliw-01.S	308 words match
+[45] PASS	srlw-01.S	312 words match
+[46] PASS	sub-01.S	1344 words match
+[47] PASS	subw-01.S	1360 words match
+[48] PASS	sw-align-01.S	268 words match
+[49] PASS	xor-01.S	1356 words match
+[50] PASS	xori-01.S	1252 words match
+[51] PASS	div-01.S	1488 words match
+[52] PASS	divu-01.S	1764 words match
+[53] PASS	divuw-01.S	1764 words match
+[54] PASS	divw-01.S	1488 words match
+[55] PASS	mul-01.S	1488 words match
+[56] PASS	mulh-01.S	1488 words match
+[57] PASS	mulhsu-01.S	1616 words match
+[58] PASS	mulhu-01.S	1764 words match
+[59] PASS	mulw-01.S	1488 words match
+[60] PASS	rem-01.S	1488 words match
+[61] PASS	remu-01.S	1764 words match
+[62] PASS	remuw-01.S	1764 words match
+[63] PASS	remw-01.S	1488 words match
+[64] PASS	amoadd.d-01.S	536 words match
+[65] PASS	amoadd.w-01.S	536 words match
+[66] PASS	amoand.d-01.S	536 words match
+[67] PASS	amoand.w-01.S	536 words match
+[68] PASS	amomax.d-01.S	536 words match
+[69] PASS	amomax.w-01.S	536 words match
+[70] PASS	amomaxu.d-01.S	536 words match
+[71] PASS	amomaxu.w-01.S	536 words match
+[72] PASS	amomin.d-01.S	536 words match
+[73] PASS	amomin.w-01.S	536 words match
+[74] PASS	amominu.d-01.S	536 words match
+[75] PASS	amominu.w-01.S	536 words match
+[76] PASS	amoor.d-01.S	536 words match
+[77] PASS	amoor.w-01.S	536 words match
+[78] PASS	amoswap.d-01.S	536 words match
+[79] PASS	amoswap.w-01.S	536 words match
+[80] PASS	amoxor.d-01.S	536 words match
+[81] PASS	amoxor.w-01.S	536 words match
+[82] PASS	cadd-01.S	1344 words match
+[83] PASS	caddi-01.S	884 words match
+[84] PASS	caddi16sp-01.S	268 words match
+[85] PASS	caddi4spn-01.S	44 words match
+[86] PASS	caddiw-01.S	880 words match
+[87] PASS	caddw-01.S	1360 words match
+[88] PASS	cand-01.S	1348 words match
+[89] PASS	candi-01.S	884 words match
+[90] PASS	cbeqz-01.S	304 words match
+[91] PASS	cbnez-01.S	304 words match
+[92] PASS	cebreak-01.S	8 words match
+[93] PASS	cj-01.S	40 words match
+[94] PASS	cjalr-01.S	68 words match
+[95] PASS	cjr-01.S	68 words match
+[96] COMPILE_FAIL_SPIKE	clbu-01.S	mV/tools/vtest/arch-test-src/riscv-test-suite/rv64i_m/C/src/clbu-01.S:65: Error: unrecognized opcode `c.lbu x8,0x0(x14)', extension `zcb' required
+C:/Users/royem/SWE/GitHub/DoomV/tools/vtest/arch-test-src/riscv-test-suite/rv64i_m/C/src/clbu-01.S:70: Error: unrecognized opcode `c.lbu x13,0x0(x15)', extension `zcb' required
+C:/Users/royem/SWE/GitHub/DoomV/tools/vtest/arch-test-src/riscv-test-suite/rv64i_m/C/src/clbu-01.S:75: Error: unrecognized opcode `c.lbu x10,0x0(x8)', extension `zcb' required
+
+[97] PASS	cld-01.S	32 words match
+[98] PASS	cldsp-01.S	68 words match
+[99] COMPILE_FAIL_SPIKE	clh-01.S	b/DoomV/tools/vtest/arch-test-src/riscv-test-suite/rv64i_m/C/src/clh-01.S:65: Error: unrecognized opcode `c.lh x13,0x0(x9)', extension `zcb' required
+C:/Users/royem/SWE/GitHub/DoomV/tools/vtest/arch-test-src/riscv-test-suite/rv64i_m/C/src/clh-01.S:70: Error: unrecognized opcode `c.lh x15,0x0(x12)', extension `zcb' required
+C:/Users/royem/SWE/GitHub/DoomV/tools/vtest/arch-test-src/riscv-test-suite/rv64i_m/C/src/clh-01.S:75: Error: unrecognized opcode `c.lh x14,0x0(x13)', extension `zcb' required
+
+[100] COMPILE_FAIL_SPIKE	clhu-01.S	V/tools/vtest/arch-test-src/riscv-test-suite/rv64i_m/C/src/clhu-01.S:65: Error: unrecognized opcode `c.lhu x10,0x0(x13)', extension `zcb' required
+C:/Users/royem/SWE/GitHub/DoomV/tools/vtest/arch-test-src/riscv-test-suite/rv64i_m/C/src/clhu-01.S:70: Error: unrecognized opcode `c.lhu x12,0x0(x8)', extension `zcb' required
+C:/Users/royem/SWE/GitHub/DoomV/tools/vtest/arch-test-src/riscv-test-suite/rv64i_m/C/src/clhu-01.S:75: Error: unrecognized opcode `c.lhu x15,0x0(x11)', extension `zcb' required
+
+[101] PASS	cli-01.S	68 words match
+[102] PASS	clui-01.S	68 words match
+[103] PASS	clw-01.S	32 words match
+[104] PASS	clwsp-01.S	68 words match
+[105] COMPILE_FAIL_SPIKE	cmul-01.S	unrecognized opcode `c.mul x15,x14', extension `zcb' and `zmmul', or `zcb' and `m' required
+C:/Users/royem/SWE/GitHub/DoomV/tools/vtest/arch-test-src/riscv-test-suite/rv64i_m/C/src/cmul-01.S:3417: Error: unrecognized opcode `c.mul x15,x14', extension `zcb' and `zmmul', or `zcb' and `m' required
+C:/Users/royem/SWE/GitHub/DoomV/tools/vtest/arch-test-src/riscv-test-suite/rv64i_m/C/src/cmul-01.S:3422: Error: unrecognized opcode `c.mul x15,x14', extension `zcb' and `zmmul', or `zcb' and `m' required
+
+[106] PASS	cmv-01.S	304 words match
+[107] PASS	cnop-01.S	32 words match
+[108] COMPILE_FAIL_SPIKE	cnot-01.S	s/royem/SWE/GitHub/DoomV/tools/vtest/arch-test-src/riscv-test-suite/rv64i_m/C/src/cnot-01.S:675: Error: unrecognized opcode `c.not x15', extension `zcb' required
+C:/Users/royem/SWE/GitHub/DoomV/tools/vtest/arch-test-src/riscv-test-suite/rv64i_m/C/src/cnot-01.S:680: Error: unrecognized opcode `c.not x15', extension `zcb' required
+C:/Users/royem/SWE/GitHub/DoomV/tools/vtest/arch-test-src/riscv-test-suite/rv64i_m/C/src/cnot-01.S:685: Error: unrecognized opcode `c.not x15', extension `zcb' required
+
+[109] PASS	cor-01.S	1364 words match
+[110] COMPILE_FAIL_SPIKE	csb-01.S	ub/DoomV/tools/vtest/arch-test-src/riscv-test-suite/rv64i_m/C/src/csb-01.S:70: Error: unrecognized opcode `c.sb x13,0x0(x8)', extension `zcb' required
+C:/Users/royem/SWE/GitHub/DoomV/tools/vtest/arch-test-src/riscv-test-suite/rv64i_m/C/src/csb-01.S:75: Error: unrecognized opcode `c.sb x13,0x0(x12)', extension `zcb' required
+C:/Users/royem/SWE/GitHub/DoomV/tools/vtest/arch-test-src/riscv-test-suite/rv64i_m/C/src/csb-01.S:80: Error: unrecognized opcode `c.sb x12,0x0(x9)', extension `zcb' required
+
+[111] PASS	csd-01.S	268 words match
+[112] PASS	csdsp-01.S	268 words match
+[113] COMPILE_FAIL_SPIKE	csext.b-01.S	rc/riscv-test-suite/rv64i_m/C/src/csext.b-01.S:670: Error: unrecognized opcode `c.sext.b x15', extension `zcb' and `zbb' required
+C:/Users/royem/SWE/GitHub/DoomV/tools/vtest/arch-test-src/riscv-test-suite/rv64i_m/C/src/csext.b-01.S:675: Error: unrecognized opcode `c.sext.b x15', extension `zcb' and `zbb' required
+C:/Users/royem/SWE/GitHub/DoomV/tools/vtest/arch-test-src/riscv-test-suite/rv64i_m/C/src/csext.b-01.S:680: Error: unrecognized opcode `c.sext.b x15', extension `zcb' and `zbb' required
+
+[114] COMPILE_FAIL_SPIKE	csext.h-01.S	rc/riscv-test-suite/rv64i_m/C/src/csext.h-01.S:675: Error: unrecognized opcode `c.sext.h x15', extension `zcb' and `zbb' required
+C:/Users/royem/SWE/GitHub/DoomV/tools/vtest/arch-test-src/riscv-test-suite/rv64i_m/C/src/csext.h-01.S:680: Error: unrecognized opcode `c.sext.h x15', extension `zcb' and `zbb' required
+C:/Users/royem/SWE/GitHub/DoomV/tools/vtest/arch-test-src/riscv-test-suite/rv64i_m/C/src/csext.h-01.S:685: Error: unrecognized opcode `c.sext.h x15', extension `zcb' and `zbb' required
+
+[115] COMPILE_FAIL_SPIKE	csh-01.S	ub/DoomV/tools/vtest/arch-test-src/riscv-test-suite/rv64i_m/C/src/csh-01.S:65: Error: unrecognized opcode `c.sh x10,0x0(x8)', extension `zcb' required
+C:/Users/royem/SWE/GitHub/DoomV/tools/vtest/arch-test-src/riscv-test-suite/rv64i_m/C/src/csh-01.S:70: Error: unrecognized opcode `c.sh x8,0x0(x14)', extension `zcb' required
+C:/Users/royem/SWE/GitHub/DoomV/tools/vtest/arch-test-src/riscv-test-suite/rv64i_m/C/src/csh-01.S:75: Error: unrecognized opcode `c.sh x15,0x0(x12)', extension `zcb' required
+
+[116] PASS	cslli-01.S	300 words match
+[117] PASS	csrai-01.S	300 words match
+[118] PASS	csrli-01.S	304 words match
+[119] PASS	csub-01.S	1348 words match
+[120] PASS	csubw-01.S	1344 words match
+[121] PASS	csw-01.S	268 words match
+[122] PASS	cswsp-01.S	272 words match
+[123] PASS	cxor-01.S	1332 words match
+[124] COMPILE_FAIL_SPIKE	czext.b-01.S	/DoomV/tools/vtest/arch-test-src/riscv-test-suite/rv64i_m/C/src/czext.b-01.S:670: Error: unrecognized opcode `c.zext.b x15', extension `zcb' required
+C:/Users/royem/SWE/GitHub/DoomV/tools/vtest/arch-test-src/riscv-test-suite/rv64i_m/C/src/czext.b-01.S:675: Error: unrecognized opcode `c.zext.b x15', extension `zcb' required
+C:/Users/royem/SWE/GitHub/DoomV/tools/vtest/arch-test-src/riscv-test-suite/rv64i_m/C/src/czext.b-01.S:680: Error: unrecognized opcode `c.zext.b x15', extension `zcb' required
+
+[125] COMPILE_FAIL_SPIKE	czext.h-01.S	rc/riscv-test-suite/rv64i_m/C/src/czext.h-01.S:675: Error: unrecognized opcode `c.zext.h x15', extension `zcb' and `zbb' required
+C:/Users/royem/SWE/GitHub/DoomV/tools/vtest/arch-test-src/riscv-test-suite/rv64i_m/C/src/czext.h-01.S:680: Error: unrecognized opcode `c.zext.h x15', extension `zcb' and `zbb' required
+C:/Users/royem/SWE/GitHub/DoomV/tools/vtest/arch-test-src/riscv-test-suite/rv64i_m/C/src/czext.h-01.S:685: Error: unrecognized opcode `c.zext.h x15', extension `zcb' and `zbb' required
+
+[126] COMPILE_FAIL_SPIKE	czext.w-01.S	rc/riscv-test-suite/rv64i_m/C/src/czext.w-01.S:675: Error: unrecognized opcode `c.zext.w x15', extension `zcb' and `zba' required
+C:/Users/royem/SWE/GitHub/DoomV/tools/vtest/arch-test-src/riscv-test-suite/rv64i_m/C/src/czext.w-01.S:680: Error: unrecognized opcode `c.zext.w x15', extension `zcb' and `zba' required
+C:/Users/royem/SWE/GitHub/DoomV/tools/vtest/arch-test-src/riscv-test-suite/rv64i_m/C/src/czext.w-01.S:685: Error: unrecognized opcode `c.zext.w x15', extension `zcb' and `zba' required
+
+[127] COMPILE_FAIL_SPIKE	Fencei.S	/env/test_macros.h:588:9: note: this is the location of the previous definition
+  588 | #define RVTEST_SIGUPD_CSR(_SIG, _TMP, _CSR)                             ;\
+      |         ^~~~~~~~~~~~~~~~~
+C:/Users/royem/SWE/GitHub/DoomV/tools/vtest/arch-test-src/riscv-test-suite/rv64i_m/Zifencei/src/Fencei.S: Assembler messages:
+C:/Users/royem/SWE/GitHub/DoomV/tools/vtest/arch-test-src/riscv-test-suite/rv64i_m/Zifencei/src/Fencei.S:44: Error: unrecognized opcode `fence.i', extension `zifencei' required
+
+
+==== IMA+C BATCH DONE ====

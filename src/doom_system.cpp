@@ -93,6 +93,7 @@ void DoomSystem::step()
 	uint64_t pc = regs.get_pc();
 	if (debugger.should_halt(pc, false)) {
 		debugger.dump_log(regs, "crash.log");
+		if (has_sig_range) debugger.dump_signature(memory, sig_begin, sig_end, sig_path.c_str());
 		return;
 	}
 
@@ -106,6 +107,7 @@ void DoomSystem::step()
 
 	if (debugger.should_halt(pc, result.illegal)) {
 		debugger.dump_log(regs, "crash.log");
+		if (has_sig_range) debugger.dump_signature(memory, sig_begin, sig_end, sig_path.c_str());
 	}
 
 	memory.step_instructions(1);

@@ -1,7 +1,12 @@
 #include "registers.hpp"
 #include <cstring>
 
-Registers::Registers() : pc(0), frm(0), fflags(0), history_ptr(0)
+// vtype.vill=1 (bit 63) is the spec-mandated reset state: no vset{i}vl{i}
+// has run yet, so the vector unit's configuration is not yet legal to use.
+Registers::Registers()
+	: pc(0), frm(0), fflags(0),
+	  vtype(1ull << 63), vl(0), vstart(0), vxrm(0), vxsat(0),
+	  history_ptr(0)
 {
 	for (int i = 0; i < 32; i++) { x[i] = 0; f[i] = 0.0; std::memset(v[i], 0, VLEN_BYTES); }
 	for (int i = 0; i < 4096; i++) csr[i] = 0;
@@ -29,6 +34,11 @@ void Registers::write_f(int i, double value)
 }
 
 const uint8_t *Registers::read_v(int i) const
+{
+	return v[i];
+}
+
+uint8_t *Registers::write_v(int i)
 {
 	return v[i];
 }
@@ -76,6 +86,61 @@ void Registers::set_fflags(uint8_t flags)
 void Registers::or_fflags(uint8_t bits)
 {
 	fflags |= (bits & 0x1F);
+}
+
+uint64_t Registers::get_vtype() const
+{
+	return vtype;
+}
+
+void Registers::set_vtype(uint64_t value)
+{
+	vtype = value;
+}
+
+uint64_t Registers::get_vl() const
+{
+	return vl;
+}
+
+void Registers::set_vl(uint64_t value)
+{
+	vl = value;
+}
+
+uint64_t Registers::get_vstart() const
+{
+	return vstart;
+}
+
+void Registers::set_vstart(uint64_t value)
+{
+	vstart = value;
+}
+
+uint8_t Registers::get_vxrm() const
+{
+	return vxrm;
+}
+
+void Registers::set_vxrm(uint8_t mode)
+{
+	vxrm = mode & 0x3;
+}
+
+uint8_t Registers::get_vxsat() const
+{
+	return vxsat;
+}
+
+void Registers::set_vxsat(uint8_t flag)
+{
+	vxsat = flag & 0x1;
+}
+
+void Registers::or_vxsat(uint8_t flag)
+{
+	vxsat |= (flag & 0x1);
 }
 
 void Registers::record_history(uint64_t pc_val, uint32_t instr, const DecodedInstruction &decoded)

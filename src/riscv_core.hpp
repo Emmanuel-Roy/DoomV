@@ -5,6 +5,11 @@
 class Registers;
 class Memory;
 
+// sign-extend the low 32 bits of a 64-bit value to the full 64 -- the
+// operation every *W-suffixed RV64 instruction ends with. Shared by
+// ext_i.cpp and ext_m.cpp.
+inline uint64_t sext32(uint32_t v) { return (uint64_t)(int64_t)(int32_t)v; }
+
 class RiscvCore {
 public:
 	RiscvCore();
@@ -18,6 +23,7 @@ public:
 	void exec_32A(const DecodedInstruction &instr, Registers &regs, Memory &mem);
 	void exec_32ZICSR(const DecodedInstruction &instr, Registers &regs, Memory &mem);
 	void exec_FD(const DecodedInstruction &instr, Registers &regs, Memory &mem);
+	void exec_V(const DecodedInstruction &instr, Registers &regs, Memory &mem);
 
 private:
 	// LR/SC reservation state. Single-hart, no interrupts, so this only

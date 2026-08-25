@@ -28,18 +28,19 @@ public:
 	double read_f(int i) const;
 	void write_f(int i, double value);
 
-	// V (vector) register file -- storage only for now; no V instruction
-	// exists yet to read/write it (classify() never produces Extension::V),
-	// this is purely groundwork for when it does. Raw bytes, not a fixed
-	// element type: a real vector register gets reinterpreted at different
-	// element widths (SEW) from one instruction to the next, so an untyped
-	// byte array is the correct representation, not e.g. an array of
-	// uint32_t. VLEN=128 is a common, modest choice for a first
-	// implementation -- easy to widen later, nothing outside Registers
-	// assumes a specific value.
+	// V (vector) register file. Raw bytes, not a fixed element type: a real
+	// vector register gets reinterpreted at different element widths (SEW)
+	// from one instruction to the next, so an untyped byte array is the
+	// correct representation, not e.g. an array of uint32_t. VLEN=128 is a
+	// common, modest choice -- nothing outside Registers assumes a specific
+	// value. write_v() hands back a mutable pointer rather than an
+	// element-level setter because the V extension code needs to memcpy
+	// arbitrary EEW-sized/LMUL-grouped spans across register boundaries;
+	// that addressing logic lives with the V instructions, not here.
 	static constexpr int VLEN_BITS = 128;
 	static constexpr int VLEN_BYTES = VLEN_BITS / 8;
 	const uint8_t *read_v(int i) const;
+	uint8_t *write_v(int i);
 
 	uint64_t get_pc() const;
 	void set_pc(uint64_t value);
@@ -57,6 +58,27 @@ public:
 	void set_fflags(uint8_t flags);
 	void or_fflags(uint8_t bits);
 
+	// V's own CSR-ish state. vtype/vl are nominally CSRs (0xC21/0xC20) but
+	// are read-only except through vset{i}vl{i} -- exec_32ZICSR still lets
+	// a plain CSRRS/etc *read* them (matching real hardware), it just never
+	// routes a write there. vstart(0x008)/vxrm(0x00A)/vxsat(0x009) are
+	// ordinary read-write CSRs, dedicated fields for the same reason
+	// fflags/frm are: vxsat in particular accumulates (OR) from fixed-point
+	// ops. vtype is stored as its raw 64-bit encoding (vill at bit 63, vma/
+	// vta/vsew/vlmul packed in the low byte per spec) -- decoding those
+	// fields into SEW/LMUL is V-instruction-execution logic, not state.
+	uint64_t get_vtype() const;
+	void set_vtype(uint64_t value);
+	uint64_t get_vl() const;
+	void set_vl(uint64_t value);
+	uint64_t get_vstart() const;
+	void set_vstart(uint64_t value);
+	uint8_t get_vxrm() const;
+	void set_vxrm(uint8_t mode);
+	uint8_t get_vxsat() const;
+	void set_vxsat(uint8_t flag);
+	void or_vxsat(uint8_t flag);
+
 	void record_history(uint64_t pc, uint32_t instr, const DecodedInstruction &decoded);
 	const HistoryEntry &history_at(int index) const;
 	int history_pos() const;
@@ -69,6 +91,12 @@ private:
 	uint64_t csr[4096];
 	uint8_t frm;
 	uint8_t fflags;
+
+	uint64_t vtype;
+	uint64_t vl;
+	uint64_t vstart;
+	uint8_t vxrm;
+	uint8_t vxsat;
 
 	HistoryEntry history[HISTORY_SIZE];
 	int history_ptr;

@@ -56,6 +56,18 @@ private:
 	Extension classify(uint32_t raw_instr) const;
 	DecodedInstruction decode(uint32_t raw_instr, Extension ext) const;
 
+	// decode() is a thin dispatcher over these -- one per extension, each
+	// living alongside its matching RiscvCore::exec_* in ext_*.cpp, and each
+	// self-sufficiently re-extracting whatever raw_instr fields it needs
+	// (same independent-extraction convention classify()/decode_compressed()
+	// already use) rather than sharing a prelude across files.
+	DecodedInstruction decode_i(uint32_t raw_instr, Extension ext) const;
+	DecodedInstruction decode_m(uint32_t raw_instr) const;
+	DecodedInstruction decode_a(uint32_t raw_instr) const;
+	DecodedInstruction decode_zicsr(uint32_t raw_instr) const;
+	DecodedInstruction decode_fd(uint32_t raw_instr, Extension ext) const;
+	DecodedInstruction decode_v(uint32_t raw_instr) const;
+
 	// Compressed (RVC) instructions are entirely an encoding-space trick --
 	// every one of them is defined as an alias for some standard 32-bit
 	// instruction. So instead of giving RiscvCore a parallel exec_16C, this

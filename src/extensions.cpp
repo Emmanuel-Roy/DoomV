@@ -3,7 +3,7 @@
 void parse_march(const std::string &march)
 {
 	Extensions.I = true; // base integer ISA is implied by any march string
-	Extensions.M = Extensions.A = Extensions.C = Extensions.F = Extensions.D = Extensions.ZICSR = false;
+	Extensions.M = Extensions.A = Extensions.C = Extensions.F = Extensions.D = Extensions.ZICSR = Extensions.V = false;
 
 	size_t pos = 0;
 	if (march.rfind("rv64", 0) == 0) { Extensions.XLEN64 = true; pos = 4; }
@@ -20,6 +20,7 @@ void parse_march(const std::string &march)
 		case 'f': Extensions.F = true; break;
 		case 'd': Extensions.D = true; break;
 		case 'c': Extensions.C = true; break;
+		case 'v': Extensions.V = true; break;
 		case 'g': Extensions.I = Extensions.M = Extensions.A = Extensions.F = Extensions.D = true; break;
 		default: break; // unrecognized letter -- ignored, not a strict validator
 		}
@@ -31,4 +32,10 @@ void parse_march(const std::string &march)
 	// silently misbehave on the FCVT.S.D/FCVT.D.S instructions that need
 	// both, just pull F along with D here.
 	if (Extensions.D) Extensions.F = true;
+
+	// The V extension (as opposed to one of the embedded Zve* subsets)
+	// requires double-precision vector element support, i.e. D -- and
+	// transitively F. Vector FP ops reuse the same host-float helpers F/D
+	// already built, so this isn't just a spec formality here.
+	if (Extensions.V) { Extensions.D = true; Extensions.F = true; }
 }

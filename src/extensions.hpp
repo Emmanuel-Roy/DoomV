@@ -19,7 +19,7 @@ struct ExtensionConfig {
 	// parse_march enforces this; hand-setting the fields yourself doesn't.
 	bool F = true;
 	bool D = true;
-	bool V = false; // not implemented -- no classify() case ever produces Extension::V, so this can't actually be turned on yet
+	bool V = false; // off by default like the rest -- opt in with -march=...v
 
 	// Base ISA width, not an optional extension. Registers/Memory always
 	// store values in 64-bit containers regardless of this flag: RV32

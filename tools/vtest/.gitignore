@@ -1,0 +1,15 @@
+# arch-test-src is a sparse checkout of riscv-non-isa/riscv-arch-test
+# (old-framework-3.x branch) fetched during verification -- ~500MB of
+# upstream test sources, not something to vendor into this repo. Only
+# doomv_env/ (this project's own port of the model_test.h contract) is
+# ours to track.
+arch-test-src/*
+!arch-test-src/doomv_env
+
+# Scratch build/run artifacts produced while iterating.
+*.elf
+*.exe
+*.dll
+*.sig
+__pycache__/
+dbgbuild/
