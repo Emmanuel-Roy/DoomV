@@ -1,44 +1,44 @@
-[39] PASS	add-01.S	1364 words match
-[40] PASS	addi-01.S	1244 words match
-[41] PASS	addiw-01.S	1256 words match
-[42] PASS	addw-01.S	1360 words match
-[43] PASS	and-01.S	1360 words match
-[44] PASS	andi-01.S	1244 words match
-[45] PASS	auipc-01.S	132 words match
-[46] PASS	beq-01.S	1364 words match
-[47] PASS	bge-01.S	1352 words match
-[48] PASS	bgeu-01.S	1648 words match
-[49] PASS	blt-01.S	1352 words match
-[50] PASS	bltu-01.S	1632 words match
-[51] PASS	bne-01.S	1360 words match
-[52] PASS	fence-01.S	8 words match
-[53] PASS	jal-01.S	68 words match
-[54] PASS	jalr-01.S	72 words match
-[55] PASS	lb-align-01.S	68 words match
-[56] PASS	lbu-align-01.S	72 words match
-[57] PASS	ld-align-01.S	68 words match
-[58] PASS	lh-align-01.S	68 words match
-[59] PASS	lhu-align-01.S	68 words match
-[60] PASS	lui-01.S	132 words match
-[61] PASS	lw-align-01.S	68 words match
-[62] PASS	lwu-align-01.S	68 words match
-[63] PASS	or-01.S	1360 words match
-[64] PASS	ori-01.S	824 words match
-[65] PASS	sb-align-01.S	276 words match
-[66] PASS	sd-align-01.S	268 words match
-[67] PASS	sh-align-01.S	272 words match
-[68] PASS	sll-01.S	312 words match
-[69] PASS	slli-01.S	308 words match
-[70] PASS	slliw-01.S	304 words match
-[71] PASS	sllw-01.S	312 words match
-[72] PASS	slt-01.S	1356 words match
-[73] PASS	slti-01.S	1240 words match
-[74] PASS	sltiu-01.S	1524 words match
-[75] PASS	sltu-01.S	1644 words match
-[76] PASS	sra-01.S	80 words match
-[77] PASS	srai-01.S	308 words match
-[78] PASS	sraiw-01.S	308 words match
-[79] PASS	sraw-01.S	76 words match
+[1] PASS	add-01.S	1364 words match
+[2] PASS	addi-01.S	1244 words match
+[3] PASS	addiw-01.S	1256 words match
+[4] PASS	addw-01.S	1360 words match
+[5] PASS	and-01.S	1360 words match
+[6] PASS	andi-01.S	1244 words match
+[7] PASS	auipc-01.S	132 words match
+[8] PASS	beq-01.S	1364 words match
+[9] PASS	bge-01.S	1352 words match
+[10] PASS	bgeu-01.S	1648 words match
+[11] PASS	blt-01.S	1352 words match
+[12] PASS	bltu-01.S	1632 words match
+[13] PASS	bne-01.S	1360 words match
+[14] PASS	fence-01.S	8 words match
+[15] PASS	jal-01.S	68 words match
+[16] PASS	jalr-01.S	72 words match
+[17] PASS	lb-align-01.S	68 words match
+[18] PASS	lbu-align-01.S	72 words match
+[19] PASS	ld-align-01.S	68 words match
+[20] PASS	lh-align-01.S	68 words match
+[21] PASS	lhu-align-01.S	68 words match
+[22] PASS	lui-01.S	132 words match
+[23] PASS	lw-align-01.S	68 words match
+[24] PASS	lwu-align-01.S	68 words match
+[25] PASS	or-01.S	1360 words match
+[26] PASS	ori-01.S	824 words match
+[27] PASS	sb-align-01.S	276 words match
+[28] PASS	sd-align-01.S	268 words match
+[29] PASS	sh-align-01.S	272 words match
+[30] PASS	sll-01.S	312 words match
+[31] PASS	slli-01.S	308 words match
+[32] PASS	slliw-01.S	304 words match
+[33] PASS	sllw-01.S	312 words match
+[34] PASS	slt-01.S	1356 words match
+[35] PASS	slti-01.S	1240 words match
+[36] PASS	sltiu-01.S	1524 words match
+[37] PASS	sltu-01.S	1644 words match
+[38] PASS	sra-01.S	80 words match
+[39] PASS	srai-01.S	308 words match
+[40] PASS	sraiw-01.S	308 words match
+[41] PASS	sraw-01.S	76 words match
 [42] PASS	srl-01.S	312 words match
 [43] PASS	srli-01.S	312 words match
 [44] PASS	srliw-01.S	308 words match
@@ -160,11 +160,6 @@ C:/Users/royem/SWE/GitHub/DoomV/tools/vtest/arch-test-src/riscv-test-suite/rv64i
 C:/Users/royem/SWE/GitHub/DoomV/tools/vtest/arch-test-src/riscv-test-suite/rv64i_m/C/src/czext.w-01.S:680: Error: unrecognized opcode `c.zext.w x15', extension `zcb' and `zba' required
 C:/Users/royem/SWE/GitHub/DoomV/tools/vtest/arch-test-src/riscv-test-suite/rv64i_m/C/src/czext.w-01.S:685: Error: unrecognized opcode `c.zext.w x15', extension `zcb' and `zba' required
 
-[127] COMPILE_FAIL_SPIKE	Fencei.S	/env/test_macros.h:588:9: note: this is the location of the previous definition
-  588 | #define RVTEST_SIGUPD_CSR(_SIG, _TMP, _CSR)                             ;\
-      |         ^~~~~~~~~~~~~~~~~
-C:/Users/royem/SWE/GitHub/DoomV/tools/vtest/arch-test-src/riscv-test-suite/rv64i_m/Zifencei/src/Fencei.S: Assembler messages:
-C:/Users/royem/SWE/GitHub/DoomV/tools/vtest/arch-test-src/riscv-test-suite/rv64i_m/Zifencei/src/Fencei.S:44: Error: unrecognized opcode `fence.i', extension `zifencei' required
-
+[127] PASS	Fencei.S	8 words match
 
 ==== IMA+C BATCH DONE ====

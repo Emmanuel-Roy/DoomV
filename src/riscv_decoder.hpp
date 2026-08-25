@@ -8,6 +8,7 @@ enum class Extension {
 	A,
 	C,
 	ZICSR,
+	ZIFENCEI,
 	F,
 	D,
 	V,

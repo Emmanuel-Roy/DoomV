@@ -15,6 +15,7 @@ struct ExtensionConfig {
 	bool A = true;
 	bool C = true;
 	bool ZICSR = true;
+	bool ZIFENCEI = true;
 	// D requires F per spec (a hart can't have double without single) --
 	// parse_march enforces this; hand-setting the fields yourself doesn't.
 	bool F = true;
@@ -34,15 +35,17 @@ struct ExtensionConfig {
 };
 
 // Single global instance, mutated once at startup by parse_march() (or left
-// at its rv64imafdc_zicsr-equivalent defaults above) before DoomSystem
-// constructs anything that reads it. Not touched again after that -- reads
-// happen constantly (every decode), writes happen at most once per run.
+// at its rv64imafdc_zicsr_zifencei-equivalent defaults above) before
+// DoomSystem constructs anything that reads it. Not touched again after
+// that -- reads happen constantly (every decode), writes happen at most
+// once per run.
 inline ExtensionConfig Extensions;
 
 // Parses a GCC/toolchain-style march string ("rv64imafdc_zicsr",
 // "rv32ima", ...): resets every extension to off, sets XLEN64 from the
 // rv32/rv64 prefix, turns on one flag per recognized base letter (i/m/a/f/
-// d/c, plus g as shorthand for imafd), and checks for a "zicsr" token
-// after an underscore. Unrecognized letters/tokens are silently ignored
-// (this isn't trying to be a strict validator, just a convenience toggle).
+// d/c, plus g as shorthand for imafd), and checks for "zicsr"/"zifencei"
+// tokens after an underscore. Unrecognized letters/tokens are silently
+// ignored (this isn't trying to be a strict validator, just a convenience
+// toggle).
 void parse_march(const std::string &march);

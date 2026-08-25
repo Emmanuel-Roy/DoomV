@@ -3,7 +3,8 @@
 void parse_march(const std::string &march)
 {
 	Extensions.I = true; // base integer ISA is implied by any march string
-	Extensions.M = Extensions.A = Extensions.C = Extensions.F = Extensions.D = Extensions.ZICSR = Extensions.V = false;
+	Extensions.M = Extensions.A = Extensions.C = Extensions.F = Extensions.D
+	             = Extensions.ZICSR = Extensions.ZIFENCEI = Extensions.V = false;
 
 	size_t pos = 0;
 	if (march.rfind("rv64", 0) == 0) { Extensions.XLEN64 = true; pos = 4; }
@@ -27,6 +28,7 @@ void parse_march(const std::string &march)
 	}
 
 	if (march.find("zicsr") != std::string::npos) Extensions.ZICSR = true;
+	if (march.find("zifencei") != std::string::npos) Extensions.ZIFENCEI = true;
 
 	// D without F is a spec violation (D always implies F) -- rather than
 	// silently misbehave on the FCVT.S.D/FCVT.D.S instructions that need

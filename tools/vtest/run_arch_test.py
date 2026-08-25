@@ -25,7 +25,7 @@ def run(cmd, **kw):
 	return subprocess.run(cmd, capture_output=True, text=True, timeout=kw.get("timeout", 60))
 
 def compile_test(src, env_dir, link_ld, out_elf, flen, freg, fregwidth):
-	cmd = [GCC, "-march=rv64imafdc_zicsr", "-mabi=lp64d", "-static", "-mcmodel=medany",
+	cmd = [GCC, "-march=rv64imafdc_zicsr_zifencei", "-mabi=lp64d", "-static", "-mcmodel=medany",
 	       "-fvisibility=hidden", "-nostdlib", "-nostartfiles",
 	       "-I", os.path.join(SRC_ROOT, "riscv-test-suite", "env"),
 	       "-I", env_dir,
@@ -60,7 +60,7 @@ def run_spike_signature(elf):
 	elf_posix = elf.replace("\\", "/")
 	spike_posix = SPIKE.replace("\\", "/")
 	sig_posix = sig_path.replace("\\", "/")
-	bash_cmd = (f'timeout 20 "{spike_posix}" --isa=rv64imafdc_zicsr --instructions=100000000 '
+	bash_cmd = (f'timeout 20 "{spike_posix}" --isa=rv64imafdc_zicsr_zifencei --instructions=100000000 '
 	            f'+signature="{sig_posix}" +signature-granularity=4 "{elf_posix}"')
 	run([MSYS_BASH, "-lc", bash_cmd], timeout=25)
 	if not os.path.exists(sig_path):
@@ -99,7 +99,7 @@ def run_doomv_signature(elf, begin, end, halt_addr):
 	try:
 		sig_path = os.path.join(DOOMV_DIR, "signature.log")
 		if os.path.exists(sig_path): os.remove(sig_path)
-		cmd = [DOOMV, DUMMY_WAD, elf, "-march=rv64imafdc_zicsr",
+		cmd = [DOOMV, DUMMY_WAD, elf, "-march=rv64imafdc_zicsr_zifencei",
 		       f"-break=0x{halt_addr:x}", f"-sig={begin:x}:{end:x}"]
 		# DoomV is a GUI app whose run() loop never returns on its own --
 		# the CPU thread hits the breakpoint and writes signature.log

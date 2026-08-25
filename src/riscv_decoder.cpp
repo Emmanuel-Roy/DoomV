@@ -23,8 +23,11 @@ Extension Decoder::classify(uint32_t raw_instr) const
 	case 0b0000011: // Load
 	case 0b0100011: // Store
 	case 0b0010011: // OP-IMM
-	case 0b0001111: // FENCE / FENCE.I
 		return Extension::I;
+	case 0b0001111: { // FENCE (I) / FENCE.I (Zifencei) -- split by funct3
+		uint8_t funct3 = (raw_instr >> 12) & 0x07;
+		return (funct3 == 0b001) ? Extension::ZIFENCEI : Extension::I;
+	}
 	case 0b0011011: // OP-IMM-32 (RV64 only): ADDIW/SLLIW/SRLIW/SRAIW -- doesn't exist in RV32's encoding space
 		return Extensions.XLEN64 ? Extension::I : Extension::ILLEGAL;
 	case 0b0110011: // OP: shared opcode, funct7 splits I (ADD/SUB/...) from M (MUL/DIV/...)
@@ -137,6 +140,7 @@ DispatchResult Decoder::decode_and_dispatch(uint64_t pc, uint32_t raw_word)
 		       || (instr.ext == Extension::A && Extensions.A)
 		       || (instr.ext == Extension::C && Extensions.C)
 		       || (instr.ext == Extension::ZICSR && Extensions.ZICSR)
+		       || (instr.ext == Extension::ZIFENCEI && Extensions.ZIFENCEI)
 		       || (instr.ext == Extension::F && Extensions.F)
 		       || (instr.ext == Extension::D && Extensions.D)
 		       || (instr.ext == Extension::V && Extensions.V);
@@ -161,6 +165,9 @@ DispatchResult Decoder::decode_and_dispatch(uint64_t pc, uint32_t raw_word)
 		break;
 	case Extension::ZICSR:
 		core.exec_32ZICSR(instr, regs, mem);
+		break;
+	case Extension::ZIFENCEI: // FENCE.I -- same no-op path as plain FENCE, see exec_32I
+		core.exec_32I(instr, regs, mem);
 		break;
 	case Extension::F:
 	case Extension::D:
