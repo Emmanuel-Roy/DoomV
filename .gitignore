@@ -11,9 +11,22 @@
 *.obj
 *.exe
 *.elf
+*.bin
 riscv_doom.exe
 
 # Runtime files the guest may write (config save, crash dumps)
 .default.cfg
 .savegame/
 crash.log
+
+# Out-of-tree build directories for the external tool submodules under
+# tools/ (spike, and eventually the Linux kernel) -- their own in-repo
+# .gitignore files (opensbi, doomgeneric) already cover build output
+# generated *inside* those submodules; this covers build dirs DoomV's
+# own build.sh scripts create as siblings of src/.
+tools/*/build/
+
+# Kernel build output -- extensionless, so *.elf/*.bin above don't
+# catch these.
+tools/linux/Image
+tools/linux/vmlinux

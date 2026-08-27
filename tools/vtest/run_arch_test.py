@@ -5,8 +5,9 @@
 # port (spike's native `+signature=` mechanism -- fast and exact, unlike
 # the --log-commits-parsing approach this file used earlier, which turned
 # out both catastrophically slow *and* unreliable to capture -- see git
-# history/session notes). DoomV side uses tools/vtest/arch-test-src/
-# doomv_env/ (this project's own port of the same test-format contract).
+# history/session notes). DoomV side uses tools/vtest/doomv_env/ (this
+# project's own port of the same test-format contract -- a sibling of
+# the arch-test-src submodule, not nested inside it).
 import subprocess, sys, os
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -14,10 +15,10 @@ SRC_ROOT = os.path.join(ROOT, "arch-test-src")
 TC_BIN = r"C:\Users\royem\SWE\toolchains\xpack-riscv-none-elf-gcc-15.2.0-1\bin"
 GCC = os.path.join(TC_BIN, "riscv-none-elf-gcc-15.2.0.exe")
 NM = os.path.join(TC_BIN, "riscv-none-elf-nm.exe")
-SPIKE = r"C:\Users\royem\SWE\toolchains\spike\build\spike.exe"
-SPIKE_ENV = r"C:\Users\royem\SWE\toolchains\spike\arch_test_target\spike"
 DOOMV = r"C:\Users\royem\SWE\GitHub\DoomV\riscv_doom.exe"
 DOOMV_DIR = r"C:\Users\royem\SWE\GitHub\DoomV"
+SPIKE = os.path.join(DOOMV_DIR, "tools", "spike", "spike.exe")
+SPIKE_ENV = os.path.join(DOOMV_DIR, "tools", "spike", "src", "arch_test_target", "spike")
 DUMMY_WAD = os.path.join(DOOMV_DIR, "tools", "doombuild", "DOOM1.WAD")
 MSYS_BASH = r"C:\msys64\usr\bin\bash.exe"
 
@@ -153,7 +154,7 @@ def run_one(src_path, category):
 	spike_elf = os.path.join(ROOT, f"tmp_{tag}_spike.elf")
 	doomv_elf = os.path.join(ROOT, f"tmp_{tag}_doomv.elf")
 	spike_link = os.path.join(SPIKE_ENV, "link.ld")
-	doomv_env = os.path.join(SRC_ROOT, "doomv_env")
+	doomv_env = os.path.join(ROOT, "doomv_env")
 	doomv_link = os.path.join(doomv_env, "link.ld")
 
 	ok, err = compile_test(src_path, SPIKE_ENV, spike_link, spike_elf, flen, freg, fregwidth)
