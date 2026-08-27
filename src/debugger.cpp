@@ -53,7 +53,7 @@ bool Debugger::should_halt(uint64_t pc, bool instr_was_illegal)
 	return false;
 }
 
-void Debugger::dump_log(const Registers &regs, const char *path)
+void Debugger::dump_log(const Registers &regs, Memory &mem, const char *path)
 {
 	std::ofstream file(path);
 	if (!file.is_open()) return;
@@ -63,6 +63,35 @@ void Debugger::dump_log(const Registers &regs, const char *path)
 	};
 
 	file << "pc "; hex(regs.get_pc(), 16) << "\n";
+	file << "priv " << (int)regs.get_priv() << "\n"; // 0=U, 1=S, 3=M -- see PrivMode
+	// A handful of privileged CSRs relevant to trap/paging debugging --
+	// named by raw address (their symbolic constants are private to
+	// ext_zicsr.cpp) rather than the full generic csr[] array, which is
+	// mostly zero/irrelevant noise for this dump's purpose.
+	file << "mstatus "; hex(regs.read_csr(0x300), 16) << "\n";
+	file << "medeleg "; hex(regs.read_csr(0x302), 16) << "\n";
+	file << "mtvec ";   hex(regs.read_csr(0x305), 16) << "\n";
+	file << "mepc ";    hex(regs.read_csr(0x341), 16) << "\n";
+	file << "mcause ";  hex(regs.read_csr(0x342), 16) << "\n";
+	file << "mtval ";   hex(regs.read_csr(0x343), 16) << "\n";
+	file << "stvec ";   hex(regs.read_csr(0x105), 16) << "\n";
+	file << "sepc ";    hex(regs.read_csr(0x141), 16) << "\n";
+	file << "scause ";  hex(regs.read_csr(0x142), 16) << "\n";
+	file << "stval ";   hex(regs.read_csr(0x143), 16) << "\n";
+	file << "satp ";    hex(regs.read_csr(0x180), 16) << "\n";
+	// Stage 2 (timer + AIA): mip/sie are shown raw (the software-writable
+	// shadow this project stores, not the computed effective value
+	// ext_zicsr.cpp's compute_mip/read_sie produce -- that logic is
+	// private to that file) -- still useful alongside mie/mideleg/
+	// menvcfg/stimecmp and the timer's own state for confirming what a
+	// hand-written interrupt test actually did.
+	file << "mie ";      hex(regs.read_csr(0x304), 16) << "\n";
+	file << "mip_raw ";  hex(regs.read_csr(0x344), 16) << "\n";
+	file << "mideleg ";  hex(regs.read_csr(0x303), 16) << "\n";
+	file << "menvcfg ";  hex(regs.read_csr(0x30A), 16) << "\n";
+	file << "stimecmp "; hex(regs.read_csr(0x14D), 16) << "\n";
+	file << "mtime ";    hex(mem.get_timer().get_mtime(), 16) << "\n";
+	file << "mtimecmp "; hex(mem.get_timer().get_mtimecmp(), 16) << "\n";
 	for (int i = 0; i < 32; i++) {
 		file << "x" << std::dec << i << " "; hex(regs.read_x(i), 16) << "\n";
 	}

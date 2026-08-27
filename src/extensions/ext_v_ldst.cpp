@@ -3,12 +3,23 @@
 // identically since this emulator is single-threaded so element ordering
 // never observably matters), all with segment (nf) support.
 //
-// Fault-only-first behaves exactly like a normal unit-stride load here: its
-// whole purpose is letting a load past the first element terminate early
-// and shrink vl instead of trapping on a page fault it wasn't sure existed
-// yet -- there's no MMU/page-fault concept in this bare-metal emulator, so
-// "no fault ever occurs" is a trivially spec-legal outcome, not a shortcut.
+// Fault-only-first is still just treated like a normal unit-stride load --
+// implementing its actual point (let a load past the first element
+// terminate early and shrink vl instead of trapping) would need knowing a
+// fault is *about to* happen without taking it, which the current
+// translate-and-trap-immediately plumbing doesn't distinguish. Since a
+// spurious page fault where FOF would have quietly shrunk vl is strictly
+// more correct than this emulator's old "no MMU exists" behavior, this is
+// a known gap, not a regression.
+//
+// Precise mid-instruction fault behavior (per spec, vstart should land
+// exactly on the faulting element for a possible restart) isn't
+// implemented either -- a fault sets a flag checked before each remaining
+// element's access so nothing after the fault touches memory, but vl/
+// vstart aren't trimmed. V is opt-in and not required for anything this
+// project boots yet, so this is deferred rather than solved preemptively.
 #include "riscv_decoder.hpp"
+#include "riscv_core.hpp"
 #include "registers.hpp"
 #include "memory.hpp"
 #include "ext_v_common.hpp"
@@ -52,9 +63,10 @@ void st_eew(Memory &mem, uint64_t addr, int eew, uint64_t value)
 
 namespace vcommon {
 
-void exec_v_ldst(const DecodedInstruction &instr, Registers &regs, Memory &mem)
+bool exec_v_ldst(const DecodedInstruction &instr, Registers &regs, Memory &mem, RiscvCore &core)
 {
 	bool is_load = (instr.opcode == 0b0000111);
+	AccessType access = is_load ? AccessType::Load : AccessType::Store;
 	uint8_t f7 = instr.funct7;
 	uint8_t nf = ldst_nf(f7) + 1; // segment count (1 = no segmentation)
 	uint8_t mop = ldst_mop(f7);
@@ -75,10 +87,12 @@ void exec_v_ldst(const DecodedInstruction &instr, Registers &regs, Memory &mem)
 		uint64_t total = (uint64_t)nreg * Registers::VLEN_BITS / inst_eew;
 		for (uint64_t i = 0; i < total; i++) {
 			uint64_t addr = base_addr + i * (uint64_t)(inst_eew / 8);
-			if (is_load) write_velem(regs, instr.rd, inst_eew, i, ld_eew(mem, addr, inst_eew));
-			else st_eew(mem, addr, inst_eew, read_velem(regs, instr.rd, inst_eew, i));
+			uint64_t paddr;
+			if (!core.translate_or_trap(regs, mem, addr, access, paddr)) return false;
+			if (is_load) write_velem(regs, instr.rd, inst_eew, i, ld_eew(mem, paddr, inst_eew));
+			else st_eew(mem, paddr, inst_eew, read_velem(regs, instr.rd, inst_eew, i));
 		}
-		return;
+		return true;
 	}
 
 	// Mask load/store (vlm.v/vsm.v): mop=0, lumop=0x0b. Always EEW=8,
@@ -88,10 +102,12 @@ void exec_v_ldst(const DecodedInstruction &instr, Registers &regs, Memory &mem)
 		uint64_t nbytes = (vl + 7) / 8;
 		for (uint64_t i = 0; i < nbytes; i++) {
 			uint64_t addr = base_addr + i;
-			if (is_load) write_velem(regs, instr.rd, 8, i, ld_eew(mem, addr, 8));
-			else st_eew(mem, addr, 8, read_velem(regs, instr.rd, 8, i));
+			uint64_t paddr;
+			if (!core.translate_or_trap(regs, mem, addr, access, paddr)) return false;
+			if (is_load) write_velem(regs, instr.rd, 8, i, ld_eew(mem, paddr, 8));
+			else st_eew(mem, paddr, 8, read_velem(regs, instr.rd, 8, i));
 		}
-		return;
+		return true;
 	}
 
 	// Everything else -- normal/fault-only-first unit-stride, strided,
@@ -110,7 +126,14 @@ void exec_v_ldst(const DecodedInstruction &instr, Registers &regs, Memory &mem)
 	int emul_den = vt.lmul_den * sew;
 	int span = (emul_num > emul_den) ? (emul_num / emul_den) : 1; // physical registers per segment field
 
+	// See the file header: a fault mid-instruction just stops any further
+	// memory access for the remaining elements rather than precisely
+	// trimming vl/vstart. `faulted` short-circuits every remaining call of
+	// the lambda below rather than actually breaking the loop, since
+	// for_each_active always runs it to completion.
+	bool faulted = false;
 	for_each_active(regs, vm, vl, [&](uint64_t i) {
+		if (faulted) return;
 		uint64_t seg_addr;
 		if (mop == 0b10) { // strided: rs2 is a signed byte stride
 			int64_t stride = (int64_t)regs.read_x(instr.rs2);
@@ -125,10 +148,13 @@ void exec_v_ldst(const DecodedInstruction &instr, Registers &regs, Memory &mem)
 		for (int f = 0; f < nf; f++) {
 			uint64_t field_addr = seg_addr + (uint64_t)f * (uint64_t)(data_eew / 8);
 			int reg_base = instr.rd + f * span;
-			if (is_load) write_velem(regs, reg_base, data_eew, i, ld_eew(mem, field_addr, data_eew));
-			else st_eew(mem, field_addr, data_eew, read_velem(regs, reg_base, data_eew, i));
+			uint64_t paddr;
+			if (!core.translate_or_trap(regs, mem, field_addr, access, paddr)) { faulted = true; return; }
+			if (is_load) write_velem(regs, reg_base, data_eew, i, ld_eew(mem, paddr, data_eew));
+			else st_eew(mem, paddr, data_eew, read_velem(regs, reg_base, data_eew, i));
 		}
 	});
+	return !faulted;
 }
 
 } // namespace vcommon

@@ -209,15 +209,24 @@ void RiscvCore::exec_32I(const DecodedInstruction &instr, Registers &regs, Memor
 
 	case 0b0000011: { // Load
 		uint64_t addr = rs1_val + imm_u;
+		// One translation per instruction, at the base address -- correct
+		// for any naturally-aligned access (the overwhelming common case;
+		// the compiler never emits anything else), since an aligned access
+		// of width <= its own alignment can never itself cross a 4KB page
+		// boundary. A deliberately misaligned access that straddles a page
+		// boundary would read from the wrong second page; not something
+		// worth the per-byte-translation cost until it's an actual problem.
+		uint64_t paddr;
+		if (!translate_or_trap(regs, mem, addr, AccessType::Load, paddr)) return;
 		uint64_t val = 0;
 		switch (instr.funct3) {
-		case 0b000: val = (uint64_t)(int64_t)(int8_t)mem.read8(addr);   break; // LB
-		case 0b001: val = (uint64_t)(int64_t)(int16_t)mem.read16(addr); break; // LH
-		case 0b010: val = (uint64_t)(int64_t)(int32_t)mem.read32(addr); break; // LW -- sign-extends on RV64
-		case 0b011: val = mem.read64(addr);                             break; // LD
-		case 0b100: val = mem.read8(addr);                              break; // LBU
-		case 0b101: val = mem.read16(addr);                             break; // LHU
-		case 0b110: val = mem.read32(addr);                             break; // LWU -- zero-extends
+		case 0b000: val = (uint64_t)(int64_t)(int8_t)mem.read8(paddr);   break; // LB
+		case 0b001: val = (uint64_t)(int64_t)(int16_t)mem.read16(paddr); break; // LH
+		case 0b010: val = (uint64_t)(int64_t)(int32_t)mem.read32(paddr); break; // LW -- sign-extends on RV64
+		case 0b011: val = mem.read64(paddr);                             break; // LD
+		case 0b100: val = mem.read8(paddr);                              break; // LBU
+		case 0b101: val = mem.read16(paddr);                             break; // LHU
+		case 0b110: val = mem.read32(paddr);                             break; // LWU -- zero-extends
 		}
 		regs.write_x(instr.rd, val);
 		break;
@@ -225,19 +234,21 @@ void RiscvCore::exec_32I(const DecodedInstruction &instr, Registers &regs, Memor
 
 	case 0b0100011: { // Store
 		uint64_t addr = rs1_val + imm_u;
+		uint64_t paddr; // see the Load case above re: single-translation-per-access
+		if (!translate_or_trap(regs, mem, addr, AccessType::Store, paddr)) return;
 		switch (instr.funct3) {
 		case 0b000: // SB
-			mem.write8(addr, (uint8_t)rs2_val);
+			mem.write8(paddr, (uint8_t)rs2_val);
 			break;
 		case 0b001: // SH
-			mem.write8(addr, (uint8_t)(rs2_val & 0xFF));
-			mem.write8(addr + 1, (uint8_t)((rs2_val >> 8) & 0xFF));
+			mem.write8(paddr, (uint8_t)(rs2_val & 0xFF));
+			mem.write8(paddr + 1, (uint8_t)((rs2_val >> 8) & 0xFF));
 			break;
 		case 0b010: // SW
-			mem.write32(addr, (uint32_t)rs2_val);
+			mem.write32(paddr, (uint32_t)rs2_val);
 			break;
 		case 0b011: // SD
-			mem.write64(addr, rs2_val);
+			mem.write64(paddr, rs2_val);
 			break;
 		}
 		break;

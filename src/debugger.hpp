@@ -13,7 +13,7 @@ public:
 	void add_breakpoint(uint64_t addr);
 	bool should_halt(uint64_t pc, bool instr_was_illegal);
 
-	void dump_log(const Registers &regs, const char *path);
+	void dump_log(const Registers &regs, Memory &mem, const char *path);
 
 	// Test/verification hook: dumps [begin, end) as one 32-bit hex word per
 	// line, matching the riscv-arch-test convention closely enough to diff

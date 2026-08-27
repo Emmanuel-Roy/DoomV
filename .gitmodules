@@ -1,3 +1,17 @@
 [submodule "tools/doombuild/doomgeneric"]
 	path = tools/doombuild/doomgeneric
 	url = https://github.com/ozkl/doomgeneric.git
+[submodule "tools/opensbi/src"]
+	path = tools/opensbi/src
+	url = https://github.com/riscv-software-src/opensbi.git
+[submodule "tools/linux/src"]
+	path = tools/linux/src
+	url = https://github.com/torvalds/linux.git
+	shallow = true
+[submodule "tools/spike/src"]
+	path = tools/spike/src
+	url = https://github.com/riscv-software-src/riscv-isa-sim.git
+[submodule "tools/vtest/arch-test-src"]
+	path = tools/vtest/arch-test-src
+	url = https://github.com/riscv-non-isa/riscv-arch-test.git
+	branch = old-framework-3.x

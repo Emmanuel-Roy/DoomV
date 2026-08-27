@@ -1,4 +1,7 @@
 #pragma once
+#include "timer.hpp"
+#include "imsic.hpp"
+#include "aplic.hpp"
 #include <cstdint>
 #include <mutex>
 #include <vector>
@@ -21,6 +24,18 @@ public:
 	static constexpr uint64_t RAM_SIZE  = 16 * 1024 * 1024;
 	static constexpr uint64_t WAD_BASE  = 0x11041000;
 	static constexpr uint64_t WAD_SIZE  = 20 * 1024 * 1024;
+
+	// Platform devices added for Stage 2 (timer + AIA interrupt
+	// controller) -- addresses follow common real-hardware/QEMU-virt
+	// convention (helps Stage 3's device tree resemble known-good
+	// examples), and don't collide with anything above.
+	static constexpr uint64_t CLINT_BASE = 0x02000000;
+	static constexpr uint64_t CLINT_SIZE = 0x10000;
+	static constexpr uint64_t APLIC_BASE = 0x0C000000;
+	static constexpr uint64_t APLIC_SIZE = 0x4000;
+	static constexpr uint64_t IMSIC_M_BASE = 0x24000000;
+	static constexpr uint64_t IMSIC_S_BASE = 0x28000000;
+	static constexpr uint64_t IMSIC_SIZE   = 0x1000;
 
 	Memory();
 
@@ -55,6 +70,13 @@ public:
 	// the counter. Used for the doom_fps dashboard metric.
 	uint32_t take_fb_write_count();
 
+	// Exposed for ext_zicsr.cpp's mip/mie/miselect-mireg CSR handling and
+	// RiscvCore::check_and_take_interrupt -- CSR logic needs to read the
+	// timer/IMSIC state that backs the computed MTIP/STIP/MEIP/SEIP bits.
+	Timer &get_timer() { return timer; }
+	Imsic &get_imsic_m() { return imsic_m; }
+	Imsic &get_imsic_s() { return imsic_s; }
+
 private:
 	// RAM and WAD are contiguous (RAM_BASE..RAM_BASE+RAM_SIZE == WAD_BASE),
 	// so one backing buffer covers both -- see the memory map in PLAN.md.
@@ -73,4 +95,13 @@ private:
 	uint32_t tick_counter;  // instr_count / INSTR_PER_MS -- what MMIO_TICK exposes
 	uint32_t ms_accum;      // instructions banked toward the next tick_counter++ (avoids a divide every instruction)
 	uint32_t fb_write_count;
+
+	// Declaration order matters here: aplic's constructor takes a
+	// reference to imsic_s, so imsic_s must finish constructing first --
+	// C++ initializes members in declaration order regardless of the
+	// initializer-list order in memory.cpp.
+	Timer timer;
+	Imsic imsic_m;
+	Imsic imsic_s;
+	Aplic aplic;
 };

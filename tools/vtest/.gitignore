@@ -1,10 +1,7 @@
-# arch-test-src is a sparse checkout of riscv-non-isa/riscv-arch-test
-# (old-framework-3.x branch) fetched during verification -- ~500MB of
-# upstream test sources, not something to vendor into this repo. Only
-# doomv_env/ (this project's own port of the model_test.h contract) is
-# ours to track.
-arch-test-src/*
-!arch-test-src/doomv_env
+# arch-test-src is now a proper submodule (see .gitmodules) of
+# riscv-non-isa/riscv-arch-test, old-framework-3.x branch. doomv_env/
+# (this project's own port of the model_test.h contract) lives as its
+# own sibling directory here, not nested inside the submodule.
 
 # Scratch build/run artifacts produced while iterating.
 *.elf

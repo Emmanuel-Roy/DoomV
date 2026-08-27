@@ -90,14 +90,29 @@ void DoomSystem::step()
 {
 	if (debugger.halted) return;
 
+	if (core.check_and_take_interrupt(regs, memory)) {
+		// pc has already been redirected into the trap handler -- this
+		// "step" was the interrupt itself, not whatever instruction was
+		// about to execute at the old pc.
+		memory.step_instructions(1);
+		return;
+	}
+
 	uint64_t pc = regs.get_pc();
 	if (debugger.should_halt(pc, false)) {
-		debugger.dump_log(regs, "crash.log");
+		debugger.dump_log(regs, memory, "crash.log");
 		if (has_sig_range) debugger.dump_signature(memory, sig_begin, sig_end, sig_path.c_str());
 		return;
 	}
 
-	uint32_t instr = memory.read32(pc);
+	uint64_t fetch_paddr;
+	if (!core.translate_or_trap(regs, memory, pc, AccessType::Fetch, fetch_paddr)) {
+		// A page fault redirected pc into the trap handler already --
+		// nothing more to do for this step.
+		memory.step_instructions(1);
+		return;
+	}
+	uint32_t instr = memory.read32(fetch_paddr);
 	DispatchResult result = decoder.decode_and_dispatch(pc, instr);
 	// A compressed instruction's raw fetch also contains the next
 	// instruction's bytes in its upper half -- mask those off so the
@@ -106,7 +121,7 @@ void DoomSystem::step()
 	regs.record_history(pc, recorded_instr, result.decoded);
 
 	if (debugger.should_halt(pc, result.illegal)) {
-		debugger.dump_log(regs, "crash.log");
+		debugger.dump_log(regs, memory, "crash.log");
 		if (has_sig_range) debugger.dump_signature(memory, sig_begin, sig_end, sig_path.c_str());
 	}
 

@@ -4,7 +4,7 @@
 // vtype.vill=1 (bit 63) is the spec-mandated reset state: no vset{i}vl{i}
 // has run yet, so the vector unit's configuration is not yet legal to use.
 Registers::Registers()
-	: pc(0), frm(0), fflags(0),
+	: pc(0), priv(PrivMode::M), frm(0), fflags(0),
 	  vtype(1ull << 63), vl(0), vstart(0), vxrm(0), vxsat(0),
 	  history_ptr(0)
 {
@@ -51,6 +51,16 @@ uint64_t Registers::get_pc() const
 void Registers::set_pc(uint64_t value)
 {
 	pc = value;
+}
+
+PrivMode Registers::get_priv() const
+{
+	return priv;
+}
+
+void Registers::set_priv(PrivMode mode)
+{
+	priv = mode;
 }
 
 uint64_t Registers::read_csr(uint16_t addr) const

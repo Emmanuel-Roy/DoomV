@@ -61,10 +61,21 @@ void RiscvCore::exec_32A(const DecodedInstruction &instr, Registers &regs, Memor
 	uint8_t amo_op = instr.funct7 >> 2;
 	bool is64 = instr.op_64;
 
+	// LR needs R, SC needs W, every other AMO needs both per spec -- see
+	// AccessType::Amo. Note the reservation itself is still tracked by
+	// virtual address (not paddr): that's fine since nothing here models
+	// a second hart or address-space switch that could alias two virtual
+	// addresses onto the same physical reservation mid-sequence.
+	AccessType amo_access = (amo_op == 0b00010) ? AccessType::Load
+	                       : (amo_op == 0b00011) ? AccessType::Store
+	                                              : AccessType::Amo;
+	uint64_t paddr;
+	if (!translate_or_trap(regs, mem, addr, amo_access, paddr)) return;
+
 	if (amo_op == 0b00011) { // SC.W/SC.D
 		if (reservation_valid && reservation_addr == addr) {
-			if (is64) mem.write64(addr, rs2_val);
-			else mem.write32(addr, (uint32_t)rs2_val);
+			if (is64) mem.write64(paddr, rs2_val);
+			else mem.write32(paddr, (uint32_t)rs2_val);
 			regs.write_x(instr.rd, 0); // success
 		} else {
 			regs.write_x(instr.rd, 1); // failure
@@ -76,7 +87,7 @@ void RiscvCore::exec_32A(const DecodedInstruction &instr, Registers &regs, Memor
 
 	// Pre-image, already sign-extended for the .W case -- AMO*.W and LR.W
 	// both return the loaded value sign-extended to 64 bits per spec.
-	uint64_t loaded = is64 ? mem.read64(addr) : sext32(mem.read32(addr));
+	uint64_t loaded = is64 ? mem.read64(paddr) : sext32(mem.read32(paddr));
 
 	if (amo_op == 0b00010) { // LR.W/LR.D
 		reservation_valid = true;
@@ -101,7 +112,7 @@ void RiscvCore::exec_32A(const DecodedInstruction &instr, Registers &regs, Memor
 		case 0b11100: result = (loaded > rs2_val) ? loaded : rs2_val; break;             // AMOMAXU.D
 		default: break;
 		}
-		mem.write64(addr, result);
+		mem.write64(paddr, result);
 	} else {
 		uint32_t loaded32 = (uint32_t)loaded, rs2_32 = (uint32_t)rs2_val;
 		int32_t loaded_s = (int32_t)loaded32, rs2_s = (int32_t)rs2_32;
@@ -118,7 +129,7 @@ void RiscvCore::exec_32A(const DecodedInstruction &instr, Registers &regs, Memor
 		case 0b11100: result32 = (loaded32 > rs2_32) ? loaded32 : rs2_32; break;               // AMOMAXU.W
 		default: break;
 		}
-		mem.write32(addr, result32);
+		mem.write32(paddr, result32);
 	}
 
 	regs.write_x(instr.rd, loaded); // rd gets the pre-op value for every real AMO op

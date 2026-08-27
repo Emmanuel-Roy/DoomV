@@ -9,6 +9,7 @@
 #include <cstring>
 
 class Memory;
+class RiscvCore;
 
 namespace vcommon {
 
@@ -214,7 +215,10 @@ inline __int128 vxrm_round(__int128 v, int shift, uint8_t vxrm)
 // project-wide "self-sufficient re-extraction, no shared prelude" decode
 // convention -- exec_V's job is purely routing, not field extraction.
 void exec_v_config(const DecodedInstruction &instr, Registers &regs);
-void exec_v_ldst(const DecodedInstruction &instr, Registers &regs, Memory &mem);
+// Returns false if a page fault happened partway through (pc has already
+// been redirected into the trap handler by then -- the caller must not
+// then overwrite it by advancing pc normally).
+bool exec_v_ldst(const DecodedInstruction &instr, Registers &regs, Memory &mem, RiscvCore &core);
 void exec_v_int(const DecodedInstruction &instr, Registers &regs);
 void exec_v_muldiv(const DecodedInstruction &instr, Registers &regs);
 void exec_v_mask(const DecodedInstruction &instr, Registers &regs);

@@ -116,7 +116,8 @@ bool load_elf_generic(std::ifstream &file, std::vector<uint8_t> &ram)
 
 Memory::Memory()
 	: ram(RAM_SIZE + WAD_SIZE, 0), fb(FB_SIZE, 0),
-	  key_queue_head(0), key_queue_tail(0), instr_count(0), tick_counter(0), ms_accum(0), fb_write_count(0)
+	  key_queue_head(0), key_queue_tail(0), instr_count(0), tick_counter(0), ms_accum(0), fb_write_count(0),
+	  aplic(imsic_s)
 {
 	for (int i = 0; i < 16; i++) key_queue[i] = 0;
 }
@@ -147,6 +148,10 @@ uint32_t Memory::read32(uint64_t addr)
 	if (addr == MMIO_TICK) {
 		return tick_counter;
 	}
+	if (addr >= CLINT_BASE && addr < CLINT_BASE + CLINT_SIZE) return timer.read32(addr - CLINT_BASE);
+	if (addr >= APLIC_BASE && addr < APLIC_BASE + APLIC_SIZE) return aplic.read32(addr - APLIC_BASE);
+	if (addr >= IMSIC_M_BASE && addr < IMSIC_M_BASE + IMSIC_SIZE) return 0; // seteipnum_le reads as zero, per spec
+	if (addr >= IMSIC_S_BASE && addr < IMSIC_S_BASE + IMSIC_SIZE) return 0;
 
 	// Fast path: every instruction fetch and almost every load/store lands
 	// here. One range check plus a direct 4-byte copy replaces the 10-branch
@@ -196,6 +201,24 @@ uint32_t Memory::take_fb_write_count()
 
 void Memory::write32(uint64_t addr, uint32_t val)
 {
+	// Unlike the byte-addressable devices below (RAM/framebuffer/debug
+	// putchar, all handled through write8), these are register-file-style
+	// devices whose writes need to land atomically (e.g. setipnum's
+	// side effect must see the whole 32-bit value at once, not one byte
+	// at a time) -- so they're intercepted here, before any byte
+	// decomposition, exactly like read32 already special-cases
+	// MMIO_INPUT/MMIO_TICK ahead of its own RAM fast path.
+	if (addr >= CLINT_BASE && addr < CLINT_BASE + CLINT_SIZE) { timer.write32(addr - CLINT_BASE, val); return; }
+	if (addr >= APLIC_BASE && addr < APLIC_BASE + APLIC_SIZE) { aplic.write32(addr - APLIC_BASE, val); return; }
+	if (addr >= IMSIC_M_BASE && addr < IMSIC_M_BASE + IMSIC_SIZE) {
+		if (addr - IMSIC_M_BASE == 0) imsic_m.set_pending(val); // seteipnum_le
+		return;
+	}
+	if (addr >= IMSIC_S_BASE && addr < IMSIC_S_BASE + IMSIC_SIZE) {
+		if (addr - IMSIC_S_BASE == 0) imsic_s.set_pending(val);
+		return;
+	}
+
 	write8(addr + 0, (val >> 0) & 0xFF);
 	write8(addr + 1, (val >> 8) & 0xFF);
 	write8(addr + 2, (val >> 16) & 0xFF);
@@ -242,4 +265,5 @@ void Memory::step_instructions(uint32_t count)
 		ms_accum -= INSTR_PER_MS;
 		tick_counter++;
 	}
+	timer.tick(count);
 }

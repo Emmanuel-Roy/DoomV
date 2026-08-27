@@ -180,16 +180,20 @@ void RiscvCore::exec_FD(const DecodedInstruction &instr, Registers &regs, Memory
 
 	if (instr.opcode == 0b0000111) { // LOAD-FP: FLW/FLD -- rs1 is an integer base register
 		uint64_t addr = regs.read_x(instr.rs1) + (uint64_t)instr.imm;
-		if (instr.fp_double) regs.write_f(instr.rd, f64_from_bits(mem.read64(addr)));
-		else regs.write_f(instr.rd, f64_from_bits(box_f32(mem.read32(addr))));
+		uint64_t paddr;
+		if (!translate_or_trap(regs, mem, addr, AccessType::Load, paddr)) return;
+		if (instr.fp_double) regs.write_f(instr.rd, f64_from_bits(mem.read64(paddr)));
+		else regs.write_f(instr.rd, f64_from_bits(box_f32(mem.read32(paddr))));
 		regs.set_pc(pc + instr.length);
 		return;
 	}
 
 	if (instr.opcode == 0b0100111) { // STORE-FP: FSW/FSD -- raw low bits, no unboxing/canonicalization needed
 		uint64_t addr = regs.read_x(instr.rs1) + (uint64_t)instr.imm;
-		if (instr.fp_double) mem.write64(addr, bits_from_f64(regs.read_f(instr.rs2)));
-		else mem.write32(addr, (uint32_t)bits_from_f64(regs.read_f(instr.rs2)));
+		uint64_t paddr;
+		if (!translate_or_trap(regs, mem, addr, AccessType::Store, paddr)) return;
+		if (instr.fp_double) mem.write64(paddr, bits_from_f64(regs.read_f(instr.rs2)));
+		else mem.write32(paddr, (uint32_t)bits_from_f64(regs.read_f(instr.rs2)));
 		regs.set_pc(pc + instr.length);
 		return;
 	}

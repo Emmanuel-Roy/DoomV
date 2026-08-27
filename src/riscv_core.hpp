@@ -1,5 +1,6 @@
 #pragma once
 #include "riscv_decoder.hpp"
+#include "mmu.hpp"
 #include <cstdint>
 
 class Registers;
@@ -25,6 +26,22 @@ public:
 	void exec_FD(const DecodedInstruction &instr, Registers &regs, Memory &mem);
 	void exec_V(const DecodedInstruction &instr, Registers &regs, Memory &mem);
 
+	// Sv39 address translation, shared by every load/store/AMO/FP-load/
+	// vector-load call site and by DoomSystem::step()'s instruction fetch.
+	// On a page fault this enters a trap itself (same as enter_trap below)
+	// and returns false -- the caller should just abort the instruction
+	// without touching Memory, since pc has already been redirected.
+	bool translate_or_trap(Registers &regs, Memory &mem, uint64_t vaddr, AccessType type, uint64_t &paddr);
+
+	// Called once per DoomSystem::step(), before fetch. Computes the
+	// effective mip & mie, picks the highest-priority pending+enabled+
+	// unmasked interrupt (if any) per the spec's fixed priority order,
+	// and -- if one is actually deliverable at the current privilege/
+	// mstatus.xIE state -- takes it via enter_trap. Returns true if an
+	// interrupt was taken (the caller should skip the rest of this step,
+	// same shape translate_or_trap already established for page faults).
+	bool check_and_take_interrupt(Registers &regs, Memory &mem);
+
 private:
 	// LR/SC reservation state. Single-hart, no interrupts, so this only
 	// ever needs to survive the immediate LR->SC pair a retry loop does --
@@ -38,5 +55,5 @@ private:
 	// (illegal-instruction detection stays a separate debugger safety net,
 	// see exec_32ZICSR's comment -- this is only for the deliberate,
 	// explicit trap-requesting instructions).
-	void enter_trap(Registers &regs, uint64_t cause, uint64_t tval);
+	void enter_trap(Registers &regs, uint64_t cause, uint64_t tval, bool is_interrupt = false);
 };

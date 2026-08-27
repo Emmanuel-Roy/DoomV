@@ -249,8 +249,9 @@ void RiscvCore::exec_V(const DecodedInstruction &instr, Registers &regs, Memory 
 	uint64_t pc = regs.get_pc();
 
 	if (instr.opcode == 0b0000111 || instr.opcode == 0b0100111) {
-		exec_v_ldst(instr, regs, mem);
-		regs.set_pc(pc + instr.length);
+		// A page fault mid-instruction already redirected pc into the trap
+		// handler -- must not then stomp it with the normal advance below.
+		if (exec_v_ldst(instr, regs, mem, *this)) regs.set_pc(pc + instr.length);
 		return;
 	}
 

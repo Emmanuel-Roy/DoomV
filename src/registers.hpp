@@ -2,6 +2,16 @@
 #include "riscv_decoder.hpp" // for DecodedInstruction, embedded in HistoryEntry below
 #include <cstdint>
 
+// Values match the spec's own privilege encoding (used directly in
+// mstatus.MPP/sstatus.SPP, both 2-bit fields with this same numbering --
+// there is no privilege level encoded as 2) so a trap/return can just
+// store/compare this enum without a translation table.
+enum class PrivMode : uint8_t {
+	U = 0,
+	S = 1,
+	M = 3,
+};
+
 struct HistoryEntry {
 	uint64_t pc;
 	uint32_t instr; // raw fetched bytes, still max 32 bits wide -- RV64 has no wider instruction encoding
@@ -44,6 +54,13 @@ public:
 
 	uint64_t get_pc() const;
 	void set_pc(uint64_t value);
+
+	// Current privilege level. Defaults to M -- every prior version of
+	// this project ran exclusively in M-mode, so M is the only backward-
+	// compatible reset state. Nothing outside trap-entry/xRET (ext_zicsr.cpp)
+	// and the MMU should ever need to write this.
+	PrivMode get_priv() const;
+	void set_priv(PrivMode mode);
 
 	uint64_t read_csr(uint16_t addr) const;
 	void write_csr(uint16_t addr, uint64_t value);
@@ -88,6 +105,7 @@ private:
 	double f[32];
 	uint8_t v[32][VLEN_BYTES];
 	uint64_t pc;
+	PrivMode priv;
 	uint64_t csr[4096];
 	uint8_t frm;
 	uint8_t fflags;
