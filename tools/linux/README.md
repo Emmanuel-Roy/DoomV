@@ -7,7 +7,8 @@ future clones/updates only fetch that one commit, not kernel history).
 `Image` and `vmlinux` in this directory (gitignored build output, same
 as the other `tools/*` build artifacts) are `defconfig` builds for
 `ARCH=riscv`, entry point `0xffffffff80000000` (standard Sv39 kernel
-high-half mapping).
+high-half mapping), with one config override on top of defconfig:
+`CONFIG_RISCV_SBI_V01=y` (see below).
 
 ## Built via WSL, not natively on this machine
 
@@ -39,6 +40,22 @@ wsl -d Ubuntu -- bash -c "mkdir -p /root/build && \
 
 wsl -d Ubuntu -- bash -c "cd /root/build/linux && \
     make ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- defconfig"
+
+# CONFIG_RISCV_SBI_V01=y (Stage 4): OpenSBI hardcodes
+# SBI_ECALL_VERSION_MAJOR/MINOR = 1.0 (tools/opensbi/src/include/sbi/
+# sbi_ecall.h) -- it always reports SBI spec v1.0 via the BASE extension,
+# regardless of what it actually implements (it does implement SBI DBCN,
+# confirmed via lib/sbi/sbi_ecall_dbcn.c). Linux only tries DBCN when the
+# *reported* spec version is >= 2.0 (arch/riscv/kernel/sbi.c), so against
+# this OpenSBI version that path never activates -- both
+# drivers/tty/serial/earlycon-riscv-sbi.c and drivers/tty/hvc/
+# hvc_riscv_sbi.c fall through to legacy SBI v0.1 console_putchar
+# instead, which needs this config on (off by default in defconfig).
+# Without it, the kernel boots with a completely silent, unusable
+# console -- not a hang, just zero output the entire time.
+wsl -d Ubuntu -- bash -c "cd /root/build/linux && \
+    sed -i 's/# CONFIG_RISCV_SBI_V01 is not set/CONFIG_RISCV_SBI_V01=y/' .config && \
+    make ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- olddefconfig < /dev/null"
 
 # `Image` specifically, not the default `all` target -- `all` also
 # tries to build device trees for every vendor board the kernel

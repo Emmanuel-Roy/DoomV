@@ -13,7 +13,7 @@ int main(int argc, char *argv[])
 	bool have_breakpoint = false;
 	uint64_t sig_begin = 0, sig_end = 0;
 	bool have_sig = false;
-	std::string opensbi_path, kernel_path, dtb_path;
+	std::string opensbi_path, kernel_path, dtb_path, initrd_path;
 	for (int i = 1; i < argc; i++) {
 		std::string arg = argv[i];
 		if (arg.rfind("-march=", 0) == 0) {
@@ -33,6 +33,8 @@ int main(int argc, char *argv[])
 			kernel_path = arg.substr(8);
 		} else if (arg.rfind("-dtb=", 0) == 0) {
 			dtb_path = arg.substr(5);
+		} else if (arg.rfind("-initrd=", 0) == 0) {
+			initrd_path = arg.substr(8);
 		} else {
 			positional.push_back(arg);
 		}
@@ -43,21 +45,21 @@ int main(int argc, char *argv[])
 	// only call it when the flag was actually passed.
 	if (!march.empty()) parse_march(march);
 
-	bool linux_boot = !opensbi_path.empty() || !kernel_path.empty() || !dtb_path.empty();
-	if (linux_boot && (opensbi_path.empty() || kernel_path.empty() || dtb_path.empty())) {
-		std::cout << "Usage: " << argv[0] << " -opensbi=<path> -kernel=<path> -dtb=<path> [-march=...] [-break=<hex_pc>]\n";
+	bool linux_boot = !opensbi_path.empty() || !kernel_path.empty() || !dtb_path.empty() || !initrd_path.empty();
+	if (linux_boot && (opensbi_path.empty() || kernel_path.empty() || dtb_path.empty() || initrd_path.empty())) {
+		std::cout << "Usage: " << argv[0] << " -opensbi=<path> -kernel=<path> -dtb=<path> -initrd=<path> [-march=...] [-break=<hex_pc>]\n";
 		return -1;
 	}
 
 	DoomSystem system;
 	if (linux_boot) {
-		if (!system.init_linux_boot(opensbi_path.c_str(), kernel_path.c_str(), dtb_path.c_str())) {
+		if (!system.init_linux_boot(opensbi_path.c_str(), kernel_path.c_str(), dtb_path.c_str(), initrd_path.c_str())) {
 			return -1;
 		}
 	} else {
 		if (positional.size() < 2) {
 			std::cout << "Usage: " << argv[0] << " <wad_path> <elf_path> [-march=rv64imafdc_zicsr] [-break=<hex_pc>] [-sig=<hex_begin>:<hex_end>]\n"
-			          << "   or: " << argv[0] << " -opensbi=<path> -kernel=<path> -dtb=<path> [-march=...] [-break=<hex_pc>]\n";
+			          << "   or: " << argv[0] << " -opensbi=<path> -kernel=<path> -dtb=<path> -initrd=<path> [-march=...] [-break=<hex_pc>]\n";
 			return -1;
 		}
 		if (!system.init(positional[0].c_str(), positional[1].c_str())) {

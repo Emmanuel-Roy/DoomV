@@ -60,9 +60,11 @@ DecodedInstruction Decoder::decode_zicsr(uint32_t raw_instr) const
 
 namespace {
 // M-mode CSR addresses actually given meaning by exec_32ZICSR/enter_trap.
-// Anything else (mscratch, misa, mhartid, ...) is still fully readable/
-// writable -- Registers::csr[] backs all 4096 addresses generically -- it
-// just has no side effects, which is correct for those.
+// Anything else (mscratch, mhartid, ...) is still fully readable/writable
+// -- Registers::csr[] backs all 4096 addresses generically -- it just has
+// no side effects, which is correct for those. misa (below) and satp
+// (see write_satp) are the two exceptions in this block: both need real
+// side effects, not just a name.
 constexpr uint16_t CSR_MISA    = 0x301;
 constexpr uint16_t CSR_MSTATUS = 0x300;
 constexpr uint16_t CSR_MEDELEG = 0x302;
@@ -81,6 +83,7 @@ constexpr uint16_t CSR_STVEC   = 0x105;
 constexpr uint16_t CSR_SEPC    = 0x141;
 constexpr uint16_t CSR_SCAUSE  = 0x142;
 constexpr uint16_t CSR_STVAL   = 0x143;
+constexpr uint16_t CSR_SATP    = 0x180; // must match mmu.cpp's own CSR_SATP
 
 // Interrupt-related CSRs (Stage 2). mie/mip/sie/sip keep the base-spec bit
 // positions unchanged -- AIA doesn't move them. miselect/siselect need no
@@ -217,6 +220,33 @@ uint64_t compute_misa()
 	bit('U');
 	v |= (Extensions.XLEN64 ? 2ull : 1ull) << (Extensions.XLEN64 ? 62 : 30);
 	return v;
+}
+
+// satp.MODE is WARL (Write Any, Read Legal): real hardware that doesn't
+// implement a given paging mode clamps an unsupported MODE write so a
+// readback never reports support that isn't really there. mmu.cpp only
+// implements MODE 0 (bare) and 8 (Sv39) -- everything else used to just
+// fall through to plain csr[] storage, meaning a write of an unsupported
+// mode read back exactly as written.
+//
+// Linux's own set_satp_mode() (arch/riscv/mm/init.c) relies on exactly
+// this WARL behavior to autodetect paging depth: it writes a candidate
+// satp (Sv57 first) and immediately reads it back via csr_swap -- if the
+// value didn't stick, it falls back to Sv48 then Sv39. Without this
+// rejection, DoomV always reported "yes, Sv57 stuck" (nothing was
+// clamping it), so the kernel proceeded to actually run under Sv57 --
+// which mmu_translate doesn't implement (it treats any non-Sv39,
+// non-bare mode as raw identity passthrough), producing a garbage
+// instruction fetch once the kernel started using its own high-half
+// Sv57-style virtual addresses as if they were physical. Confirmed by
+// bisecting crash.log: it halted on an illegal instruction at
+// pc=0xffffffff80001146 (canonical high-half kernel VA) with
+// satp.MODE=0xa (Sv57) already active.
+void write_satp(Registers &regs, uint64_t value)
+{
+	uint64_t mode = value >> 60;
+	if (mode != 0 && mode != 8) return; // reject the whole write, not just the MODE field -- matches real WARL clamping
+	regs.write_csr(CSR_SATP, value);
 }
 
 uint64_t read_sstatus(Registers &regs)
@@ -462,6 +492,7 @@ void RiscvCore::exec_32ZICSR(const DecodedInstruction &instr, Registers &regs, M
 	}
 
 	if (csr == 0x100) write_sstatus(regs, updated);
+	else if (csr == CSR_SATP) write_satp(regs, updated);
 	else if (csr == CSR_SIE) write_sie(regs, updated);
 	else if (csr == CSR_SIP) write_sip(regs, updated);
 	else if (csr == CSR_MIP) regs.write_csr(CSR_MIP, updated & MIP_SHADOW_MASK);

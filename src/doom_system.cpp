@@ -32,9 +32,10 @@ bool DoomSystem::init(const char *wad_path, const char *elf_path)
 	return true;
 }
 
-bool DoomSystem::init_linux_boot(const char *sbi_path, const char *kernel_path, const char *dtb_path)
+bool DoomSystem::init_linux_boot(const char *sbi_path, const char *kernel_path, const char *dtb_path, const char *initrd_path)
 {
 	if (!gui.init()) return false;
+	linux_mode = true;
 
 	// fw_jump.elf's own build-time FW_TEXT_START already is RAM_BASE (see
 	// tools/opensbi/build.sh) -- load_elf places it there unmodified, same
@@ -43,8 +44,13 @@ bool DoomSystem::init_linux_boot(const char *sbi_path, const char *kernel_path, 
 
 	// Offsets match what fw_jump.elf was built expecting: FW_JUMP_ADDR =
 	// FW_TEXT_START + 0x200000, FW_JUMP_FDT_ADDR = FW_TEXT_START + 0x2200000.
+	// The initrd offset (+0x2300000) is DoomV's own choice, not something
+	// fw_jump.elf cares about -- it just needs to sit past the DTB with
+	// headroom and match the DTB's own linux,initrd-start (see
+	// tools/rootfs/README.md).
 	if (!memory.load_blob(kernel_path, Memory::RAM_BASE + 0x200000)) return false;
 	if (!memory.load_blob(dtb_path, Memory::RAM_BASE + 0x2200000)) return false;
+	if (!memory.load_blob(initrd_path, Memory::RAM_BASE + 0x2300000)) return false;
 
 	regs.set_pc(Memory::RAM_BASE);
 	regs.write_x(10, 0);                                // a0: hart id
@@ -105,6 +111,55 @@ uint8_t DoomSystem::translate_key(uint32_t sdl_keysym) const
 		if (sdl_keysym >= 0x20 && sdl_keysym < 0x7f) return (uint8_t)sdl_keysym;
 		return 0;
 	}
+}
+
+uint8_t DoomSystem::translate_console_key(uint32_t sdl_keysym) const
+{
+	switch (sdl_keysym) {
+	case SDLK_RETURN:    return '\r';
+	case SDLK_BACKSPACE: return 0x7f;
+	case SDLK_TAB:       return '\t';
+	case SDLK_ESCAPE:    return 0x1b;
+	default: break;
+	}
+
+	// SDL_Keycode is already ASCII for unshifted printable keys (a-z as
+	// lowercase, digits, space, and most punctuation) -- shift only needs
+	// handling for letters (case) and the punctuation keys whose shifted
+	// glyph isn't just "the next character along".
+	bool shift = (SDL_GetModState() & KMOD_SHIFT) != 0;
+	if (sdl_keysym >= 'a' && sdl_keysym <= 'z') {
+		return shift ? (uint8_t)(sdl_keysym - 'a' + 'A') : (uint8_t)sdl_keysym;
+	}
+	if (shift) {
+		switch (sdl_keysym) {
+		case '1': return '!';
+		case '2': return '@';
+		case '3': return '#';
+		case '4': return '$';
+		case '5': return '%';
+		case '6': return '^';
+		case '7': return '&';
+		case '8': return '*';
+		case '9': return '(';
+		case '0': return ')';
+		case '-': return '_';
+		case '=': return '+';
+		case '[': return '{';
+		case ']': return '}';
+		case '\\': return '|';
+		case ';': return ':';
+		case '\'': return '"';
+		case ',': return '<';
+		case '.': return '>';
+		case '/': return '?';
+		case '`': return '~';
+		default: break;
+		}
+	}
+
+	if (sdl_keysym >= 0x20 && sdl_keysym < 0x7f) return (uint8_t)sdl_keysym;
+	return 0;
 }
 
 void DoomSystem::step()
@@ -199,7 +254,16 @@ void DoomSystem::run()
 
 	while (true) {
 		for (const RawKeyEvent &ev : gui.poll_input()) {
-			memory.push_key_event(ev.pressed, translate_key(ev.sdl_keysym));
+			if (linux_mode) {
+				// One byte per keypress, not per press+release -- unlike
+				// Doom's own key_queue (which needs up/down edges for
+				// movement), a console only ever wants the character once.
+				if (!ev.pressed) continue;
+				uint8_t ch = translate_console_key(ev.sdl_keysym);
+				if (ch != 0) memory.get_uart().push_rx(ch);
+			} else {
+				memory.push_key_event(ev.pressed, translate_key(ev.sdl_keysym));
+			}
 		}
 
 		Snapshot snap;

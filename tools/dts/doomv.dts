@@ -14,13 +14,20 @@
 	model = "DoomV";
 
 	chosen {
-		// earlycon/console/ignore_loglevel are harmless no-ops until a
-		// real console device exists (Stage 4). Deliberately no
-		// stdout-path: DoomV has no UART yet, and OpenSBI's own
-		// sbi_console_init() treats a missing console as non-fatal
-		// (lib/sbi/sbi_console.c), not a hang -- booting console-less
-		// is an intended interim state for this stage, not an oversight.
-		bootargs = "earlycon=sbi console=hvc0 ignore_loglevel";
+		// rdinit=/bin/sh: exec BusyBox's own shell applet directly as
+		// PID 1 out of the initramfs below -- no init script needed
+		// (see tools/rootfs/README.md).
+		bootargs = "earlycon=sbi console=hvc0 ignore_loglevel rdinit=/bin/sh";
+		stdout-path = "/soc/serial@10000100";
+
+		// tools/rootfs/initramfs.cpio, loaded by Memory::load_blob at
+		// RAM_BASE + 0x2300000 (see src/doom_system.cpp's
+		// init_linux_boot). End address must match that file's exact
+		// built size -- see tools/rootfs/README.md's last section for
+		// why this can't be computed automatically and must be kept in
+		// sync by hand when the initramfs is rebuilt.
+		linux,initrd-start = <0x82300000>;
+		linux,initrd-end = <0x824ee600>;
 	};
 
 	cpus {
@@ -33,7 +40,19 @@
 			reg = <0>;
 			status = "okay";
 			compatible = "riscv";
-			riscv,isa = "rv64imafdc_zicsr_zifencei";
+			// smaia/ssaia/sstc appended (canonical S*-class order after
+			// the Z* tokens): DoomV genuinely implements all three
+			// (Stage 2's AIA/APLIC/IMSIC and Sstc timer work), but the
+			// kernel only trusts the DT string here, not OpenSBI's own
+			// runtime-detected extensions (which already report these
+			// correctly in its banner) -- without ssaia specifically,
+			// drivers/irqchip/irq-riscv-imsic-state.c's
+			// riscv_isa_extension_available(NULL, SxAIA) check fails
+			// ("AIA support not available"), the kernel's IMSIC driver
+			// never attaches, and it silently falls back to SBI-only
+			// IPIs -- degraded, not fatal by itself, but suspected of
+			// contributing to a later hang once interrupts are enabled.
+			riscv,isa = "rv64imafdc_zicsr_zifencei_smaia_ssaia_sstc";
 			mmu-type = "riscv,sv39";
 
 			cpu0_intc: interrupt-controller {
@@ -130,6 +149,21 @@
 			msi-parent = <&imsic_s>;
 			#interrupt-cells = <2>;
 			interrupt-controller;
+		};
+
+		// compatible="ns16550a" confirmed against
+		// lib/utils/serial/fdt_serial_uart8250.c's match table.
+		// reg-shift/reg-io-width/reg-offset all omitted -- their
+		// defaults (0/1/0, see lib/utils/fdt/fdt_helper.c's
+		// DEFAULT_UART_REG_* constants) already match src/uart.cpp's
+		// plain byte-spaced register layout exactly. No interrupts
+		// property: OpenSBI's own console driver polls LSR, and Linux
+		// talks to it only through SBI ecalls (earlycon=sbi/console=hvc0
+		// in bootargs above), never touching this device directly -- no
+		// IRQ wiring needed either side.
+		serial@10000100 {
+			compatible = "ns16550a";
+			reg = <0x0 0x10000100 0x0 0x100>;
 		};
 	};
 };

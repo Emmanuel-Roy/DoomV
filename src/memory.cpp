@@ -128,6 +128,8 @@ uint8_t Memory::read8(uint64_t addr)
 		return ram[addr - RAM_BASE];
 	if (addr >= MMIO_FB && addr < MMIO_FB + FB_SIZE)
 		return fb[addr - MMIO_FB];
+	if (addr >= UART_BASE && addr < UART_BASE + UART_SIZE)
+		return uart.read(addr - UART_BASE);
 	return 0;
 }
 
@@ -189,6 +191,8 @@ void Memory::write8(uint64_t addr, uint8_t val)
 	} else if (addr == MMIO_DEBUG) {
 		std::putchar(val);
 		std::fflush(stdout);
+	} else if (addr >= UART_BASE && addr < UART_BASE + UART_SIZE) {
+		uart.write(addr - UART_BASE, val);
 	}
 }
 

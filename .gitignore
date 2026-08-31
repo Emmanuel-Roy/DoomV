@@ -30,3 +30,7 @@ tools/*/build/
 # catch these.
 tools/linux/Image
 tools/linux/vmlinux
+
+# BusyBox initramfs build output -- also extensionless-adjacent
+# (.cpio isn't covered by *.bin/*.elf above).
+tools/rootfs/initramfs.cpio

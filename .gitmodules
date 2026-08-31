@@ -15,3 +15,6 @@
 	path = tools/vtest/arch-test-src
 	url = https://github.com/riscv-non-isa/riscv-arch-test.git
 	branch = old-framework-3.x
+[submodule "tools/rootfs/src"]
+	path = tools/rootfs/src
+	url = https://github.com/mirror/busybox.git

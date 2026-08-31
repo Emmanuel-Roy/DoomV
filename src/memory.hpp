@@ -2,6 +2,7 @@
 #include "timer.hpp"
 #include "imsic.hpp"
 #include "aplic.hpp"
+#include "uart.hpp"
 #include <cstdint>
 #include <mutex>
 #include <vector>
@@ -15,6 +16,11 @@ public:
 	static constexpr uint64_t MMIO_TICK  = 0x10000004;
 	static constexpr uint64_t MMIO_DEBUG = 0x10000008;
 	static constexpr uint64_t MMIO_FB    = 0x10001000;
+
+	// Stage 4's UART -- clear of MMIO_INPUT/TICK/DEBUG above (which end at
+	// 0x1000000B) and MMIO_FB below.
+	static constexpr uint64_t UART_BASE = 0x10000100;
+	static constexpr uint64_t UART_SIZE = 0x100;
 
 	static constexpr int FB_W = 320;
 	static constexpr int FB_H = 200;
@@ -93,6 +99,10 @@ public:
 	Imsic &get_imsic_m() { return imsic_m; }
 	Imsic &get_imsic_s() { return imsic_s; }
 
+	// Exposed for DoomSystem's console-key input routing (Stage 4) to push
+	// typed bytes into the UART's RX ring.
+	Uart &get_uart() { return uart; }
+
 private:
 	// RAM and WAD are contiguous (RAM_BASE..RAM_BASE+RAM_SIZE == WAD_BASE),
 	// so one backing buffer covers both -- see the memory map in PLAN.md.
@@ -120,4 +130,5 @@ private:
 	Imsic imsic_m;
 	Imsic imsic_s;
 	Aplic aplic;
+	Uart uart;
 };

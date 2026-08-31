@@ -19,13 +19,14 @@ public:
 	// Alternative boot path (Stage 3): OpenSBI + Linux kernel + device
 	// tree instead of Doom's own guest ELF. Loads fw_jump.elf via the
 	// existing load_elf (works unmodified once RAM_BASE matches its
-	// FW_TEXT_START -- see src/memory.hpp), the kernel Image and the
-	// compiled DTB via load_blob at the offsets fw_jump.elf itself was
-	// built expecting (FW_JUMP_ADDR / FW_JUMP_FDT_ADDR, see
-	// tools/opensbi/build.sh), then sets up the M-mode entry state the
-	// RISC-V SBI/Linux boot protocol requires: pc at RAM_BASE, a0=hart
-	// id, a1=DTB pointer.
-	bool init_linux_boot(const char *sbi_path, const char *kernel_path, const char *dtb_path);
+	// FW_TEXT_START -- see src/memory.hpp), the kernel Image, the
+	// initramfs, and the compiled DTB via load_blob at the offsets
+	// fw_jump.elf/the DTB itself were built expecting (FW_JUMP_ADDR /
+	// FW_JUMP_FDT_ADDR, see tools/opensbi/build.sh, and
+	// tools/rootfs/README.md for the initrd offset), then sets up the
+	// M-mode entry state the RISC-V SBI/Linux boot protocol requires: pc
+	// at RAM_BASE, a0=hart id, a1=DTB pointer.
+	bool init_linux_boot(const char *sbi_path, const char *kernel_path, const char *dtb_path, const char *initrd_path);
 
 	void run();
 	void step();
@@ -65,6 +66,17 @@ private:
 	// controls.json via ControlMap; everything else is fixed here, with
 	// printable-ASCII passthrough as the final fallback.
 	uint8_t translate_key(uint32_t sdl_keysym) const;
+
+	// True from init_linux_boot, false from init -- selects which of
+	// translate_key/translate_console_key the input-polling loop in
+	// run() feeds SDL key events through.
+	bool linux_mode = false;
+
+	// SDL keysym + current shift state -> raw ASCII byte, for typing at
+	// the Linux-boot console (UART RX). Best-effort: covers normal
+	// command typing (letters/digits/space/enter/backspace/tab/common
+	// QWERTY-shifted punctuation), not a full keyboard-layout engine.
+	uint8_t translate_console_key(uint32_t sdl_keysym) const;
 
 	// CPU execution runs on its own thread so rendering isn't blocked on
 	// (or blocking) instruction bursts. Only this thread ever touches
