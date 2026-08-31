@@ -3,7 +3,9 @@ ENTRY(rvtest_entry_point)
 
 MEMORY
 {
-    RAM (rwx) : ORIGIN = 0x10041000, LENGTH = 16M
+    /* Matches Memory::RAM_BASE/RAM_SIZE (src/memory.hpp) -- see
+       tools/vtest/vtest.lds for why this moved from 0x10041000. */
+    RAM (rwx) : ORIGIN = 0x80000000, LENGTH = 256M
 }
 
 SECTIONS

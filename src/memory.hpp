@@ -20,9 +20,19 @@ public:
 	static constexpr int FB_H = 200;
 	static constexpr uint32_t FB_SIZE = FB_W * FB_H * 4; // 32bpp, matches doomgeneric's native output
 
-	static constexpr uint64_t RAM_BASE  = 0x10041000;
-	static constexpr uint64_t RAM_SIZE  = 16 * 1024 * 1024;
-	static constexpr uint64_t WAD_BASE  = 0x11041000;
+	// RAM_BASE moved from the original 0x10041000 for Stage 3: OpenSBI's
+	// `generic` platform build hardcodes its own load/entry address
+	// (FW_TEXT_START, see tools/opensbi/build.sh) to 0x80000000 and
+	// requires it 2MB-aligned -- 0x10041000 wasn't, and rather than
+	// override+rebuild OpenSBI to match some other aligned address,
+	// matching OpenSBI's own already-built default is strictly simpler
+	// (real hardware/QEMU-virt convention too). RAM_SIZE grew from 16MB
+	// since even just the DTB load offset OpenSBI expects
+	// (FW_TEXT_START + 0x2200000) is ~34MB in, before the ~23MB kernel
+	// Image or any of Linux's own runtime allocation.
+	static constexpr uint64_t RAM_BASE  = 0x80000000;
+	static constexpr uint64_t RAM_SIZE  = 256 * 1024 * 1024;
+	static constexpr uint64_t WAD_BASE  = RAM_BASE + RAM_SIZE;
 	static constexpr uint64_t WAD_SIZE  = 20 * 1024 * 1024;
 
 	// Platform devices added for Stage 2 (timer + AIA interrupt
@@ -48,6 +58,12 @@ public:
 	void     write64(uint64_t addr, uint64_t val);
 
 	bool load_elf(const char *path);
+
+	// For anything that isn't an ELF -- the Linux kernel's `Image` (a raw
+	// flat binary) and a compiled device tree blob. Reads the whole file
+	// and copies it in starting at `addr` (physical), bounds-checked
+	// against the RAM+WAD span the same way load_elf's segments are.
+	bool load_blob(const char *path, uint64_t addr);
 
 	// Copies wad_bytes into the WAD region at WAD_BASE.
 	bool load_wad(const uint8_t *wad_bytes, size_t len);

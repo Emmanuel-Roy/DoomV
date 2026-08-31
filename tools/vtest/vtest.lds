@@ -1,9 +1,11 @@
 MEMORY
 {
-    /* Right after the framebuffer (0x10001000 + 256K); see doomv_mmio.h.
-       16MB covers code/data/bss/heap/stack. WAD region starts where this
-       ends (0x11041000), sized separately -- not part of this image. */
-    RAM (rwx) : ORIGIN = 0x10041000, LENGTH = 16M
+    /* Matches Memory::RAM_BASE/RAM_SIZE (src/memory.hpp) -- moved to
+       0x80000000 for Stage 3 to match OpenSBI's own hardcoded, 2MB-aligned
+       load address. 256MB covers code/data/bss/heap/stack for this test
+       binary. WAD region starts where this ends, sized separately -- not
+       part of this image. */
+    RAM (rwx) : ORIGIN = 0x80000000, LENGTH = 256M
 }
 
 SECTIONS

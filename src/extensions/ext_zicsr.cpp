@@ -63,6 +63,7 @@ namespace {
 // Anything else (mscratch, misa, mhartid, ...) is still fully readable/
 // writable -- Registers::csr[] backs all 4096 addresses generically -- it
 // just has no side effects, which is correct for those.
+constexpr uint16_t CSR_MISA    = 0x301;
 constexpr uint16_t CSR_MSTATUS = 0x300;
 constexpr uint16_t CSR_MEDELEG = 0x302;
 constexpr uint16_t CSR_MIDELEG = 0x303;
@@ -189,6 +190,34 @@ constexpr uint64_t CAUSE_BREAKPOINT   = 3;
 // mode is allowed to see/touch -- SUM/MXR are read-write pass-through,
 // SIE/SPIE/SPP alias the same-named mstatus bits directly.
 constexpr uint64_t SSTATUS_MASK = MSTATUS_SIE | MSTATUS_SPIE | MSTATUS_SPP | (1ull << 18) | (1ull << 19);
+
+// misa isn't plain csr[] storage -- it's computed fresh from Extensions on
+// every read (WARL/hardwired: a write still lands in the generic array via
+// the fallthrough below, but nothing ever reads that stored value back).
+// This exists specifically because OpenSBI's sbi_init() calls
+// misa_extension('S') to decide whether a hart is even eligible to become
+// the coldboot hart for a next_mode==PRV_S jump -- with misa reading 0
+// (its state before this existed), that check always fails, no hart ever
+// wins the coldboot lottery, and hart 0 spins forever in
+// init_warmboot's wait_for_coldboot(). S/U are set unconditionally (unlike
+// I/M/A/C/F/D/V below): privilege modes have had no -march= toggle since
+// Stage 1 (see registers.hpp's PrivMode), DoomV always supports them.
+uint64_t compute_misa()
+{
+	uint64_t v = 0;
+	auto bit = [&v](char c) { v |= 1ull << (c - 'A'); };
+	if (Extensions.I) bit('I');
+	if (Extensions.M) bit('M');
+	if (Extensions.A) bit('A');
+	if (Extensions.C) bit('C');
+	if (Extensions.F) bit('F');
+	if (Extensions.D) bit('D');
+	if (Extensions.V) bit('V');
+	bit('S');
+	bit('U');
+	v |= (Extensions.XLEN64 ? 2ull : 1ull) << (Extensions.XLEN64 ? 62 : 30);
+	return v;
+}
 
 uint64_t read_sstatus(Registers &regs)
 {
@@ -383,6 +412,7 @@ void RiscvCore::exec_32ZICSR(const DecodedInstruction &instr, Registers &regs, M
 	// fflags in bits[4:0]).
 	uint64_t old;
 	if (csr == 0x100) old = read_sstatus(regs); // sstatus -- masked view of mstatus, see the helper above
+	else if (csr == CSR_MISA) old = compute_misa(); // computed, not stored -- see compute_misa's comment above
 	// Interrupt CSRs (Stage 2): mip/sip are computed (timer + IMSIC
 	// aggregate OR'd with their software-writable shadow bits), not plain
 	// storage -- see compute_mip/read_sip above. sie is mie masked by

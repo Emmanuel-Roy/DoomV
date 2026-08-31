@@ -1,0 +1,135 @@
+/dts-v1/;
+
+// Device tree for DoomV's platform: single RV64 hart, Sv39, CLINT timer,
+// AIA (APLIC in MSI mode + M-file/S-file IMSIC), 256MB RAM at 0x80000000.
+// Every compatible string, property name, and register-offset assumption
+// below was checked against the actual pinned OpenSBI source
+// (tools/opensbi/src), not recalled from memory -- see the comments by
+// each node for what was verified and where.
+
+/ {
+	#address-cells = <2>;
+	#size-cells = <2>;
+	compatible = "doomv,virt";
+	model = "DoomV";
+
+	chosen {
+		// earlycon/console/ignore_loglevel are harmless no-ops until a
+		// real console device exists (Stage 4). Deliberately no
+		// stdout-path: DoomV has no UART yet, and OpenSBI's own
+		// sbi_console_init() treats a missing console as non-fatal
+		// (lib/sbi/sbi_console.c), not a hang -- booting console-less
+		// is an intended interim state for this stage, not an oversight.
+		bootargs = "earlycon=sbi console=hvc0 ignore_loglevel";
+	};
+
+	cpus {
+		#address-cells = <1>;
+		#size-cells = <0>;
+		timebase-frequency = <10000000>;
+
+		cpu0: cpu@0 {
+			device_type = "cpu";
+			reg = <0>;
+			status = "okay";
+			compatible = "riscv";
+			riscv,isa = "rv64imafdc_zicsr_zifencei";
+			mmu-type = "riscv,sv39";
+
+			cpu0_intc: interrupt-controller {
+				compatible = "riscv,cpu-intc";
+				interrupt-controller;
+				#interrupt-cells = <1>;
+			};
+		};
+	};
+
+	memory@80000000 {
+		device_type = "memory";
+		// Matches Memory::RAM_BASE/RAM_SIZE (src/memory.hpp).
+		reg = <0x0 0x80000000 0x0 0x10000000>;
+	};
+
+	soc {
+		#address-cells = <2>;
+		#size-cells = <2>;
+		compatible = "simple-bus";
+		ranges;
+
+		// compatible="riscv,clint0" confirmed against
+		// lib/utils/timer/fdt_timer_mtimer.c and lib/utils/ipi/fdt_ipi_mswi.c
+		// (both match on it). mtimecmp/mtime offsets from a "riscv,clint0"
+		// reg base: mtimecmp_addr = reg + 0x4000, mtime_addr = reg + 0xBFF8
+		// (ACLINT_DEFAULT_MTIMECMP_OFFSET=0 and ACLINT_DEFAULT_MTIME_OFFSET
+		// =0x7ff8, both then shifted by the SiFive-quirk CLINT_MTIMER_OFFSET
+		// =0x4000 -- see include/sbi_utils/timer/aclint_mtimer.h) -- matches
+		// Timer::MTIMECMP_OFF/MTIME_OFF (src/timer.hpp) exactly.
+		//
+		// Both IRQ 3 (M-soft) and IRQ 7 (M-timer) are required: the MSWI
+		// (IPI) driver's cold_init hard-fails with SBI_EINVAL
+		// (lib/utils/ipi/aclint_mswi.c's "!mswi->hart_count" check) if no
+		// IRQ 3 entry is present, even though DoomV's Timer has no real
+		// MSIP register backing it (harmless on this single-hart system --
+		// the write just never lands anywhere real).
+		clint@2000000 {
+			compatible = "riscv,clint0";
+			reg = <0x0 0x02000000 0x0 0x10000>;
+			interrupts-extended = <&cpu0_intc 3 &cpu0_intc 7>;
+		};
+
+		// Two IMSIC files (M and S), each its own node -- compatible=
+		// "riscv,imsics" confirmed against lib/utils/irqchip/fdt_irqchip_imsic.c.
+		// fdt_parse_imsic_node requires riscv,num-ids (SBI_EINVAL without
+		// it) and derives targets_mmode purely from whether
+		// interrupts-extended contains IRQ_M_EXT(11) -- the S-file's IRQ 9
+		// (S-ext) means it's correctly seen as *not* M-targeting, so
+		// OpenSBI's own M-mode IMSIC irqchip driver silently skips it
+		// (irqchip_imsic_cold_init returns success without doing anything
+		// for a non-M-targeting node -- it's the kernel's own AIA driver
+		// that drives the S-file at kernel boot, not OpenSBI).
+		imsic_m: interrupt-controller@24000000 {
+			compatible = "riscv,imsics";
+			reg = <0x0 0x24000000 0x0 0x1000>;
+			interrupts-extended = <&cpu0_intc 11>;
+			riscv,num-ids = <63>;
+			#interrupt-cells = <0>;
+			interrupt-controller;
+			msi-controller;
+		};
+
+		imsic_s: interrupt-controller@28000000 {
+			compatible = "riscv,imsics";
+			reg = <0x0 0x28000000 0x0 0x1000>;
+			interrupts-extended = <&cpu0_intc 9>;
+			riscv,num-ids = <63>;
+			#interrupt-cells = <0>;
+			interrupt-controller;
+			msi-controller;
+		};
+
+		// compatible="riscv,aplic" confirmed against
+		// lib/utils/irqchip/fdt_irqchip_aplic.c. msi-parent (not
+		// interrupts-extended) selects MSI-delivery mode in
+		// fdt_parse_aplic_node -- matches src/aplic.cpp's actual model
+		// (a single flat domain that, on a setipnum write to an
+		// active+enabled source, directly calls the target IMSIC's
+		// pending-set logic). Pointing msi-parent straight at the S-file
+		// IMSIC means fdt_parse_aplic_node sees targets_mmode=false for
+		// it, so aplic_cold_irqchip_init's msicfg validation (which is
+		// itself gated on aplic->targets_mmode) is skipped entirely --
+		// cold_init still succeeds, it just resets domaincfg/sourcecfg/
+		// target to their default-disabled state without needing a
+		// resolved MSI target layout, since nothing in that reset path
+		// depends on msicfg. riscv,num-sources=31 matches
+		// Aplic::NUM_SOURCES=32 (source 0 is never used; sources 1..31
+		// are the 31 real ones -- src/aplic.hpp).
+		aplic@c000000 {
+			compatible = "riscv,aplic";
+			reg = <0x0 0x0c000000 0x0 0x4000>;
+			riscv,num-sources = <31>;
+			msi-parent = <&imsic_s>;
+			#interrupt-cells = <2>;
+			interrupt-controller;
+		};
+	};
+};

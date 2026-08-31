@@ -14,10 +14,17 @@
 CC = riscv-none-elf-gcc
 
 XLEN ?= 64
+# -mcmodel=medany: the default medlow model addresses symbols with a single
+# 32-bit signed HI20/LO12 pair, reachable only from the low or (sign-extended)
+# high 2GiB. RAM_BASE=0x80000000 (see riscv.lds) sits just past the low 2GiB
+# and isn't sign-extension-compatible with the high range either, so every
+# absolute symbol reference overflowed ("relocation truncated to fit")
+# once RAM moved there for Stage 3. medany uses AUIPC-relative addressing
+# instead, reachable from anywhere.
 ifeq ($(XLEN),64)
-	ARCHFLAGS = -march=rv64imac_zicsr -mabi=lp64
+	ARCHFLAGS = -march=rv64imac_zicsr -mabi=lp64 -mcmodel=medany
 else ifeq ($(XLEN),32)
-	ARCHFLAGS = -march=rv32imac_zicsr -mabi=ilp32
+	ARCHFLAGS = -march=rv32imac_zicsr -mabi=ilp32 -mcmodel=medany
 else
 	$(error Unknown XLEN '$(XLEN)', expected 32 or 64)
 endif

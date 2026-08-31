@@ -32,6 +32,27 @@ bool DoomSystem::init(const char *wad_path, const char *elf_path)
 	return true;
 }
 
+bool DoomSystem::init_linux_boot(const char *sbi_path, const char *kernel_path, const char *dtb_path)
+{
+	if (!gui.init()) return false;
+
+	// fw_jump.elf's own build-time FW_TEXT_START already is RAM_BASE (see
+	// tools/opensbi/build.sh) -- load_elf places it there unmodified, same
+	// as Doom's own guest ELF above.
+	if (!memory.load_elf(sbi_path)) return false;
+
+	// Offsets match what fw_jump.elf was built expecting: FW_JUMP_ADDR =
+	// FW_TEXT_START + 0x200000, FW_JUMP_FDT_ADDR = FW_TEXT_START + 0x2200000.
+	if (!memory.load_blob(kernel_path, Memory::RAM_BASE + 0x200000)) return false;
+	if (!memory.load_blob(dtb_path, Memory::RAM_BASE + 0x2200000)) return false;
+
+	regs.set_pc(Memory::RAM_BASE);
+	regs.write_x(10, 0);                                // a0: hart id
+	regs.write_x(11, Memory::RAM_BASE + 0x2200000);      // a1: DTB pointer, SBI/Linux boot convention
+
+	return true;
+}
+
 uint8_t DoomSystem::translate_key(uint32_t sdl_keysym) const
 {
 	uint8_t mapped = controls.translate(sdl_keysym);

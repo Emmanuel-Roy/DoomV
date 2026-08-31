@@ -25,15 +25,17 @@
 // 320*200*4 = 256000 bytes, padded to a 256K page.
 #define MMIO_FB      0x10001000u
 
-// RAM (.text/.data/.bss/heap/stack) starts right after the framebuffer
-// page -- see riscv.lds. 16MB region, WAD sits right after it ends.
-#define RAM_BASE     0x10041000u
-#define RAM_SIZE     0x01000000u   // 16MB
+// RAM (.text/.data/.bss/heap/stack) -- see riscv.lds. Moved to 0x80000000
+// for Stage 3 to match OpenSBI's own hardcoded, 2MB-aligned load address
+// (Memory::RAM_BASE, src/memory.hpp); no longer adjacent to the MMIO
+// region below it. 256MB region, WAD sits right after it ends.
+#define RAM_BASE     0x80000000u
+#define RAM_SIZE     0x10000000u   // 256MB
 
 // WAD blob, placed by the host loader, read directly by w_file_doomv.c.
 // 20MB covers the largest real WAD (Final Doom's plutonia.wad/tnt.wad,
 // ~18-19MB) with headroom, well above doom2.wad (~14MB) or doom.wad (~12MB).
-#define WAD_BASE     0x11041000u
+#define WAD_BASE     0x90000000u
 #define WAD_SIZE     0x01400000u   // 20MB
 
 // DOOMGENERIC_RESX/RESY are NOT defined here on purpose -- a #define in

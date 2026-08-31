@@ -3,17 +3,22 @@
 # a0/a1/a2 back out of crash.log.
 #
 # M-mode delegates page faults to S and MRETs into S-mode code that builds
-# a single-entry Sv39 root table mapping [0, 1GB) identity via one 1GB
-# superpage (V|R|W|X|A|D, ppn=0 -- covers this program's own code, so
-# execution keeps running seamlessly once satp goes live), enables paging,
-# then: (Test A) stores/loads a scratch word through the now-mapped
-# region and expects it to just work, and (Test B) loads from an address
-# whose VPN[2] index was never given a valid entry, expecting a load page
-# fault (cause 13) with stval equal to the faulting VA.
+# a single-entry Sv39 root table mapping [0x80000000, 0xC0000000) identity
+# via one 1GB superpage (V|R|W|X|A|D, ppn=RAM_BASE>>12 -- covers this
+# program's own code, so execution keeps running seamlessly once satp goes
+# live), enables paging, then: (Test A) stores/loads a scratch word through
+# the now-mapped region and expects it to just work, and (Test B) loads
+# from an address whose VPN[2] index was never given a valid entry,
+# expecting a load page fault (cause 13) with stval equal to the faulting VA.
 .section .text.start
 .global _start
 
-.equ ROOT_TABLE,   0x10043000
+# ROOT_TABLE = RAM_BASE + 0x2000 -- must be a real RAM address (page tables
+# are walked via ordinary physical loads/stores), just past this tiny
+# ELF's own code+data. RAM_BASE moved to 0x80000000 for Stage 3, which
+# also moved which gigapage (VPN[2] index) covers it -- see the table[0]
+# comment below.
+.equ ROOT_TABLE,   0x80002000
 .equ UNMAPPED_VA,  0x40000000   # VPN[2]=1 -- deliberately left invalid
 
 _start:
@@ -49,12 +54,17 @@ s_entry:
 	addi t1, t1, -1
 	bnez t1, 1b
 
-	# table[0]: a 1GB superpage leaf identity-mapping [0, 1GB) --
-	# V|R|W|X|A|D set, ppn=0 (see mmu.cpp: PA = (ppn<<12) | (va & mask),
-	# so ppn=0 over a range means PA==VA within it).
+	# table[2]: VPN[2]=2 covers VA [0x80000000, 0xC0000000) -- RAM_BASE's
+	# own gigapage, since RAM_BASE=0x80000000 (see comment above). A 1GB
+	# superpage leaf identity-mapping it: V|R|W|X|A|D set, ppn=0x80000000>>12
+	# (see mmu.cpp: PA = (ppn<<12) | (va & mask), so ppn==VA>>12 over this
+	# range means PA==VA within it).
 	li   t0, ROOT_TABLE
 	li   t2, 0xCF
-	sd   t2, 0(t0)
+	li   t3, 0x80000000 >> 12
+	slli t3, t3, 10        # PTE ppn field starts at bit 10
+	or   t2, t2, t3
+	sd   t2, 16(t0)
 
 	li   t0, ROOT_TABLE
 	srli t0, t0, 12   # satp.PPN = table's physical page number

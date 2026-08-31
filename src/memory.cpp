@@ -240,6 +240,19 @@ bool Memory::load_elf(const char *path)
 	return load_elf_generic<Elf32_Ehdr, Elf32_Phdr>(file, ram);
 }
 
+bool Memory::load_blob(const char *path, uint64_t addr)
+{
+	std::ifstream file(path, std::ios::binary | std::ios::ate);
+	if (!file.is_open()) return false;
+	size_t len = (size_t)file.tellg();
+	file.seekg(0);
+
+	if (addr < RAM_BASE || addr + len > RAM_BASE + RAM_SIZE + WAD_SIZE) return false;
+
+	file.read((char *)&ram[addr - RAM_BASE], len);
+	return (bool)file;
+}
+
 bool Memory::load_wad(const uint8_t *wad_bytes, size_t len)
 {
 	if (len > WAD_SIZE) return false;
