@@ -100,6 +100,17 @@ public:
 	const HistoryEntry &history_at(int index) const;
 	int history_pos() const;
 
+	// Distinct CSR *addresses* touched by CSR instructions (exec_32ZICSR
+	// calls this once per CSRR*/CSRR*I), most-recently-used first -- for
+	// the dashboard's CSRs panel, which wants "what's actually in use"
+	// rather than every address in the 4096-entry space (nothing touches
+	// almost all of it). Separate from history[] above, which tracks
+	// executed instructions broadly, not CSR addresses specifically.
+	static constexpr int CSR_HISTORY_SIZE = 20;
+	void record_csr_access(uint16_t addr);
+	uint16_t csr_history_at(int index) const; // 0 = most recently accessed
+	int csr_history_count() const;
+
 private:
 	uint64_t x[32];
 	double f[32];
@@ -118,4 +129,7 @@ private:
 
 	HistoryEntry history[HISTORY_SIZE];
 	int history_ptr;
+
+	uint16_t csr_history[CSR_HISTORY_SIZE];
+	int csr_history_len; // valid entries so far -- grows to CSR_HISTORY_SIZE, then stays
 };

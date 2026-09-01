@@ -263,6 +263,44 @@ void write_sstatus(Registers &regs, uint64_t value)
 }
 }
 
+// What a CSR read actually returns -- shared by exec_32ZICSR's real read
+// side and anything else that just wants to *peek* a live value (the
+// dashboard's CSRs panel, via DoomSystem::publish_snapshot). Several CSRs
+// are computed, not plain csr[] storage: sstatus is a masked view of
+// mstatus; mip/sip fold in the timer + IMSIC aggregate; misa is computed
+// fresh from Extensions (Stage 3, see compute_misa's own comment); time
+// is a read-only mtime alias (Stage 4); mireg/sireg/mtopei/stopei read
+// through to the IMSIC files owned by Memory; fflags/frm/fcsr and V's
+// vstart/vxsat/vxrm/vl/vtype/vlenb live in Registers' own dedicated
+// fields, not csr[], for the same OR-accumulate/read-only-in-practice
+// reasons noted at each accessor's declaration (registers.hpp). Side-
+// effect free either way -- topei_value() is a plain peek; claim() is a
+// separate call the real write side makes only on an actual write.
+uint64_t RiscvCore::read_csr_effective(Registers &regs, Memory &mem, uint16_t csr)
+{
+	if (csr == 0x100) return read_sstatus(regs);
+	if (csr == CSR_MISA) return compute_misa();
+	if (csr == CSR_SIE) return read_sie(regs);
+	if (csr == CSR_SIP) return read_sip(regs, mem);
+	if (csr == CSR_MIP) return compute_mip(regs, mem);
+	if (csr == CSR_MIREG) return mem.get_imsic_m().read_indirect(regs.read_csr(CSR_MISELECT));
+	if (csr == CSR_SIREG) return mem.get_imsic_s().read_indirect(regs.read_csr(CSR_SISELECT));
+	if (csr == CSR_MTOPEI) return mem.get_imsic_m().topei_value();
+	if (csr == CSR_STOPEI) return mem.get_imsic_s().topei_value();
+	if (csr == CSR_TIME) return mem.get_timer().get_mtime();
+	if (csr == 0x001) return regs.get_fflags();
+	if (csr == 0x002) return regs.get_frm();
+	if (csr == 0x003) return ((uint64_t)regs.get_frm() << 5) | regs.get_fflags();
+	if (csr == 0x008) return regs.get_vstart();
+	if (csr == 0x009) return regs.get_vxsat();
+	if (csr == 0x00A) return regs.get_vxrm();
+	if (csr == 0x00F) return ((uint64_t)regs.get_vxrm() << 1) | regs.get_vxsat();
+	if (csr == 0xC20) return regs.get_vl();
+	if (csr == 0xC21) return regs.get_vtype();
+	if (csr == 0xC22) return Registers::VLEN_BYTES;
+	return regs.read_csr(csr);
+}
+
 bool RiscvCore::translate_or_trap(Registers &regs, Memory &mem, uint64_t vaddr, AccessType type, uint64_t &paddr)
 {
 	uint64_t cause, tval;
@@ -436,58 +474,8 @@ void RiscvCore::exec_32ZICSR(const DecodedInstruction &instr, Registers &regs, M
 	}
 
 	uint16_t csr = (uint16_t)instr.imm;
-	// fflags(0x001)/frm(0x002)/fcsr(0x003) live in Registers' dedicated
-	// fields, not the generic csr[] array -- fflags needs OR-accumulate
-	// semantics from FP ops that a plain array slot can't express, and
-	// fcsr is just those two fields packed together (frm in bits[7:5],
-	// fflags in bits[4:0]).
-	uint64_t old;
-	if (csr == 0x100) old = read_sstatus(regs); // sstatus -- masked view of mstatus, see the helper above
-	else if (csr == CSR_MISA) old = compute_misa(); // computed, not stored -- see compute_misa's comment above
-	// Interrupt CSRs (Stage 2): mip/sip are computed (timer + IMSIC
-	// aggregate OR'd with their software-writable shadow bits), not plain
-	// storage -- see compute_mip/read_sip above. sie is mie masked by
-	// mideleg. mireg/sireg/mtopei/stopei all read through to the IMSIC
-	// files owned by Memory, keyed by the current miselect/siselect value
-	// (which itself needs no special handling -- it's plain csr[] storage).
-	else if (csr == CSR_SIE) old = read_sie(regs);
-	else if (csr == CSR_SIP) old = read_sip(regs, mem);
-	else if (csr == CSR_MIP) old = compute_mip(regs, mem);
-	else if (csr == CSR_MIREG) old = mem.get_imsic_m().read_indirect(regs.read_csr(CSR_MISELECT));
-	else if (csr == CSR_SIREG) old = mem.get_imsic_s().read_indirect(regs.read_csr(CSR_SISELECT));
-	else if (csr == CSR_MTOPEI) old = mem.get_imsic_m().topei_value();
-	else if (csr == CSR_STOPEI) old = mem.get_imsic_s().topei_value();
-	// time (0xC01): the unprivileged read-only mtime alias every real
-	// implementation provides. Without this, Linux's own
-	// get_cycles()/get_cycles64() (arch/riscv/include/asm/timex.h, used by
-	// riscv_clock_next_event to compute "now + delta" when arming stimecmp
-	// for its Sstc-based clockevent) read 0 forever from generic csr[]
-	// storage -- every computed deadline lands far in mtime's past (mtime
-	// is already tens of millions of retired instructions in by the time
-	// the timer subsystem inits), so stip_from_sstc reports pending
-	// immediately and perpetually: a real, silent interrupt storm, not a
-	// hang -- found by bisecting exactly where boot stalled (right after
-	// "Timer interrupt in S-mode is available via sstc extension") and
-	// tracing riscv_timer_starting_cpu -> riscv_clock_next_event's actual
-	// deadline math.
-	else if (csr == CSR_TIME) old = mem.get_timer().get_mtime();
-	else if (csr == 0x001) old = regs.get_fflags();
-	else if (csr == 0x002) old = regs.get_frm();
-	else if (csr == 0x003) old = ((uint64_t)regs.get_frm() << 5) | regs.get_fflags();
-	// V's own dedicated-field CSRs, same reasoning as fflags/frm/fcsr above.
-	// vstart/vxsat/vxrm/vcsr are ordinary read-write; vl/vtype/vlenb are
-	// read-only in practice (only vset{i}vl{i} ever changes them) -- a
-	// write instruction targeting one still runs (real hardware would trap
-	// as illegal, but nothing here relies on that), it just lands in the
-	// generic csr[] array below and is never looked at again.
-	else if (csr == 0x008) old = regs.get_vstart();
-	else if (csr == 0x009) old = regs.get_vxsat();
-	else if (csr == 0x00A) old = regs.get_vxrm();
-	else if (csr == 0x00F) old = ((uint64_t)regs.get_vxrm() << 1) | regs.get_vxsat();
-	else if (csr == 0xC20) old = regs.get_vl();
-	else if (csr == 0xC21) old = regs.get_vtype();
-	else if (csr == 0xC22) old = Registers::VLEN_BYTES;
-	else old = regs.read_csr(csr);
+	regs.record_csr_access(csr); // dashboard's CSRs panel -- see registers.hpp
+	uint64_t old = read_csr_effective(regs, mem, csr);
 
 	// The *I forms (funct3 bit 2 set) use the rs1 field as a 5-bit
 	// zero-extended immediate instead of a register number.

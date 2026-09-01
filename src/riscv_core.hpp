@@ -42,6 +42,17 @@ public:
 	// same shape translate_or_trap already established for page faults).
 	bool check_and_take_interrupt(Registers &regs, Memory &mem);
 
+	// The same "what does a CSR read actually return" logic
+	// exec_32ZICSR's read side uses (ext_zicsr.cpp) -- several CSRs are
+	// computed, not plain csr[] storage (sstatus, mip, misa, time, the
+	// IMSIC-backed indirect/claim registers, ...), so a caller that just
+	// wants to *peek* a live value (the dashboard's CSRs panel) needs
+	// this instead of Registers::read_csr directly, or it'd see stale/
+	// wrong values for exactly the CSRs most worth watching. Side-effect
+	// free -- topei_value() (used here) is a plain peek; claim() is a
+	// separate call exec_32ZICSR only makes on an actual write.
+	uint64_t read_csr_effective(Registers &regs, Memory &mem, uint16_t csr);
+
 private:
 	// LR/SC reservation state. Single-hart, no interrupts, so this only
 	// ever needs to survive the immediate LR->SC pair a retry loop does --

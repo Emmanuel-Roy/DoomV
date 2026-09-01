@@ -6,7 +6,7 @@
 Registers::Registers()
 	: pc(0), priv(PrivMode::M), frm(0), fflags(0),
 	  vtype(1ull << 63), vl(0), vstart(0), vxrm(0), vxsat(0),
-	  history_ptr(0)
+	  history_ptr(0), csr_history_len(0)
 {
 	for (int i = 0; i < 32; i++) { x[i] = 0; f[i] = 0.0; std::memset(v[i], 0, VLEN_BYTES); }
 	for (int i = 0; i < 4096; i++) csr[i] = 0;
@@ -167,4 +167,29 @@ const HistoryEntry &Registers::history_at(int index) const
 int Registers::history_pos() const
 {
 	return history_ptr;
+}
+
+void Registers::record_csr_access(uint16_t addr)
+{
+	// Move-to-front: find it if already tracked, otherwise the insertion
+	// point is the end of the valid range (growing it, up to the cap).
+	int pos = csr_history_len;
+	for (int i = 0; i < csr_history_len; i++) {
+		if (csr_history[i] == addr) { pos = i; break; }
+	}
+	if (pos == csr_history_len && csr_history_len < CSR_HISTORY_SIZE) csr_history_len++;
+	else if (pos == csr_history_len) pos = CSR_HISTORY_SIZE - 1; // full and new -- evict the oldest
+
+	for (int i = pos; i > 0; i--) csr_history[i] = csr_history[i - 1];
+	csr_history[0] = addr;
+}
+
+uint16_t Registers::csr_history_at(int index) const
+{
+	return csr_history[index];
+}
+
+int Registers::csr_history_count() const
+{
+	return csr_history_len;
 }

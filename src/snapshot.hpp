@@ -22,5 +22,16 @@ struct Snapshot {
 	// (see riscv_decoder.hpp), so value-initializing HistoryEntry here is
 	// already a safe, displayable default -- no need to spell it out.
 	HistoryEntry active{};
-	HistoryEntry trace[4]{};
+	HistoryEntry trace[13]{};
+
+	// CSRs panel (dashboard) -- mirrors Registers::csr_history, but with
+	// each entry's *live* value already read out too, so the panel shows
+	// current contents, not just which addresses have been touched.
+	struct CsrEntry {
+		uint16_t addr = 0;
+		uint64_t value = 0;
+	};
+	static constexpr int CSR_PANEL_SIZE = Registers::CSR_HISTORY_SIZE;
+	CsrEntry csrs[CSR_PANEL_SIZE]{};
+	int csr_count = 0;
 };

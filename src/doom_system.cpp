@@ -218,9 +218,15 @@ void DoomSystem::publish_snapshot()
 
 	int active_idx = (regs.history_pos() + Registers::HISTORY_SIZE - 1) % Registers::HISTORY_SIZE;
 	snap.active = regs.history_at(active_idx);
-	for (int i = 0; i < 4; i++) {
+	for (int i = 0; i < 13; i++) {
 		int pos = (regs.history_pos() + i) % Registers::HISTORY_SIZE;
 		snap.trace[i] = regs.history_at(pos);
+	}
+
+	snap.csr_count = regs.csr_history_count();
+	for (int i = 0; i < snap.csr_count; i++) {
+		uint16_t addr = regs.csr_history_at(i);
+		snap.csrs[i] = { addr, core.read_csr_effective(regs, memory, addr) };
 	}
 
 	std::lock_guard<std::mutex> lock(snapshot_mutex);
