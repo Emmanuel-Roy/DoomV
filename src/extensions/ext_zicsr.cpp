@@ -99,6 +99,7 @@ constexpr uint16_t CSR_MIE      = 0x304;
 constexpr uint16_t CSR_MIP      = 0x344;
 constexpr uint16_t CSR_MENVCFG  = 0x30A;
 constexpr uint16_t CSR_STIMECMP = 0x14D; // Sstc, RV64 only (no stimecmph split)
+constexpr uint16_t CSR_TIME     = 0xC01; // unprivileged, read-only mtime alias -- see the read-dispatch comment below
 constexpr uint16_t CSR_MISELECT = 0x350;
 constexpr uint16_t CSR_MIREG    = 0x351;
 constexpr uint16_t CSR_SISELECT = 0x150;
@@ -456,6 +457,20 @@ void RiscvCore::exec_32ZICSR(const DecodedInstruction &instr, Registers &regs, M
 	else if (csr == CSR_SIREG) old = mem.get_imsic_s().read_indirect(regs.read_csr(CSR_SISELECT));
 	else if (csr == CSR_MTOPEI) old = mem.get_imsic_m().topei_value();
 	else if (csr == CSR_STOPEI) old = mem.get_imsic_s().topei_value();
+	// time (0xC01): the unprivileged read-only mtime alias every real
+	// implementation provides. Without this, Linux's own
+	// get_cycles()/get_cycles64() (arch/riscv/include/asm/timex.h, used by
+	// riscv_clock_next_event to compute "now + delta" when arming stimecmp
+	// for its Sstc-based clockevent) read 0 forever from generic csr[]
+	// storage -- every computed deadline lands far in mtime's past (mtime
+	// is already tens of millions of retired instructions in by the time
+	// the timer subsystem inits), so stip_from_sstc reports pending
+	// immediately and perpetually: a real, silent interrupt storm, not a
+	// hang -- found by bisecting exactly where boot stalled (right after
+	// "Timer interrupt in S-mode is available via sstc extension") and
+	// tracing riscv_timer_starting_cpu -> riscv_clock_next_event's actual
+	// deadline math.
+	else if (csr == CSR_TIME) old = mem.get_timer().get_mtime();
 	else if (csr == 0x001) old = regs.get_fflags();
 	else if (csr == 0x002) old = regs.get_frm();
 	else if (csr == 0x003) old = ((uint64_t)regs.get_frm() << 5) | regs.get_fflags();

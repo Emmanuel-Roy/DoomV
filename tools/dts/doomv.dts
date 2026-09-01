@@ -33,7 +33,27 @@
 	cpus {
 		#address-cells = <1>;
 		#size-cells = <0>;
-		timebase-frequency = <10000000>;
+		// 1GHz, not the original placeholder 10MHz -- mtime advances one
+		// tick per *retired instruction* (Memory::step_instructions ->
+		// Timer::tick, see src/timer.hpp), so this value directly sets
+		// how many raw mtime units land between periodic ticks:
+		// timebase-frequency / CONFIG_HZ (=250, confirmed against the
+		// pinned kernel's actual .config). At 10MHz that's only 40,000
+		// mtime units (= 40,000 real instructions) per tick -- smaller
+		// than the real instruction cost of handling one generic-kernel
+		// periodic tick (RCU/scheduler/entropy processing), so every
+		// tick handler's own execution pushed mtime past the *next*
+		// tick's deadline before ever returning -- a genuine, permanent
+		// interrupt storm (confirmed via temporary instrumentation in
+		// check_and_take_interrupt: the S-timer interrupt re-fired from
+		// the exact same PC, immediately after local_irq_enable(),
+		// every single time). 1GHz gives 4,000,000 mtime units/tick --
+		// comfortable headroom -- and also shrinks the "apparent
+		// elapsed wall-clock time" by the point boot enables interrupts
+		// (mtime/timebase-frequency), reducing how large a first-tick
+		// catch-up burst the kernel's own tick-catchup logic has to
+		// process.
+		timebase-frequency = <1000000000>;
 
 		cpu0: cpu@0 {
 			device_type = "cpu";
