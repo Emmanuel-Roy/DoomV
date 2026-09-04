@@ -106,6 +106,8 @@ constexpr uint16_t CSR_SISELECT = 0x150;
 constexpr uint16_t CSR_SIREG    = 0x151;
 constexpr uint16_t CSR_MTOPEI   = 0x35C;
 constexpr uint16_t CSR_STOPEI   = 0x15C;
+constexpr uint16_t CSR_MTOPI    = 0xFB0; // Smaia top-interrupt, read-only
+constexpr uint16_t CSR_STOPI    = 0xDB0; // Ssaia top-interrupt, read-only
 
 constexpr uint64_t MIP_SSIP = 1ull << 1;
 constexpr uint64_t MIP_MSIP = 1ull << 3;
@@ -154,6 +156,40 @@ uint64_t compute_mip(Registers &regs, Memory &mem)
 	return mip;
 }
 
+// Smaia/Ssaia mtopi/stopi: the highest-priority interrupt that is both
+// pending and enabled for the given privilege level, encoded as
+// {IID[27:16], IPRIO[7:0]}, or 0 when there is none.
+//
+// This is not optional decoration once the DT advertises smaia/ssaia:
+// Linux's irq-riscv-intc then installs riscv_intc_aia_irq, whose entire
+// body is `while ((topi = csr_read(CSR_TOPI))) generic_handle_domain_irq(
+// intc_domain, topi >> TOPI_IID_SHIFT);`. With stopi reading 0 the loop
+// never runs, so the interrupt is never dispatched *or* acknowledged --
+// STIP stays asserted (only the timer handler re-arms stimecmp), the hart
+// immediately re-traps, and the kernel livelocks silently: still
+// executing, never progressing, no illegal instruction to catch it.
+//
+// IPRIO is reported as 1 (the default when no priority has been
+// programmed); Linux only consumes the IID field, but the spec defines
+// a nonzero default priority and 0 would be indistinguishable from
+// "no interrupt".
+uint64_t compute_topi(Registers &regs, Memory &mem, bool s_level)
+{
+	uint64_t mideleg = regs.read_csr(CSR_MIDELEG);
+	uint64_t candidates = compute_mip(regs, mem) & regs.read_csr(CSR_MIE);
+	candidates &= s_level ? mideleg : ~mideleg;
+
+	// AIA default major-interrupt priority order, high to low, within a
+	// level: external, then software, then timer.
+	static const int s_order[] = { (int)CAUSE_S_EXTERNAL, (int)CAUSE_S_SOFTWARE, (int)CAUSE_S_TIMER };
+	static const int m_order[] = { (int)CAUSE_M_EXTERNAL, (int)CAUSE_M_SOFTWARE, (int)CAUSE_M_TIMER };
+	const int *order = s_level ? s_order : m_order;
+
+	for (int i = 0; i < 3; i++) {
+		if (candidates & (1ull << order[i])) return ((uint64_t)order[i] << 16) | 1u;
+	}
+	return 0;
+}
 uint64_t read_sie(Registers &regs)
 {
 	return regs.read_csr(CSR_MIE) & regs.read_csr(CSR_MIDELEG);
@@ -287,6 +323,8 @@ uint64_t RiscvCore::read_csr_effective(Registers &regs, Memory &mem, uint16_t cs
 	if (csr == CSR_SIREG) return mem.get_imsic_s().read_indirect(regs.read_csr(CSR_SISELECT));
 	if (csr == CSR_MTOPEI) return mem.get_imsic_m().topei_value();
 	if (csr == CSR_STOPEI) return mem.get_imsic_s().topei_value();
+	if (csr == CSR_MTOPI) return compute_topi(regs, mem, /*s_level=*/false);
+	if (csr == CSR_STOPI) return compute_topi(regs, mem, /*s_level=*/true);
 	if (csr == CSR_TIME) return mem.get_timer().get_mtime();
 	if (csr == 0x001) return regs.get_fflags();
 	if (csr == 0x002) return regs.get_frm();
@@ -503,6 +541,7 @@ void RiscvCore::exec_32ZICSR(const DecodedInstruction &instr, Registers &regs, M
 	else if (csr == CSR_SIREG) mem.get_imsic_s().write_indirect(regs.read_csr(CSR_SISELECT), updated);
 	else if (csr == CSR_MTOPEI) { if (did_write) mem.get_imsic_m().claim(); }
 	else if (csr == CSR_STOPEI) { if (did_write) mem.get_imsic_s().claim(); }
+	else if (csr == CSR_MTOPI || csr == CSR_STOPI) { /* read-only */ }
 	else if (csr == 0x001) regs.set_fflags((uint8_t)updated);
 	else if (csr == 0x002) regs.set_frm((uint8_t)updated);
 	else if (csr == 0x003) { regs.set_frm((uint8_t)(updated >> 5)); regs.set_fflags((uint8_t)updated); }
