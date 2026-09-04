@@ -36,7 +36,7 @@ wsl -d Ubuntu -- bash -c "apt-get update && apt-get install -y \
 # a 90k-file kernel tree checked out via git or copied via rsync across
 # the 9p/drvfs boundary is dramatically slower there than natively.
 wsl -d Ubuntu -- bash -c "mkdir -p /root/build && \
-    rsync -a /mnt/c/Users/royem/SWE/GitHub/DoomV/tools/linux/src/ /root/build/linux/"
+    rsync -a $DOOMV/tools/linux/src/ /root/build/linux/"
 
 wsl -d Ubuntu -- bash -c "cd /root/build/linux && \
     make ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- defconfig"
@@ -57,6 +57,25 @@ wsl -d Ubuntu -- bash -c "cd /root/build/linux && \
     sed -i 's/# CONFIG_RISCV_SBI_V01 is not set/CONFIG_RISCV_SBI_V01=y/' .config && \
     make ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- olddefconfig < /dev/null"
 
+# CONFIG_NONPORTABLE=y + CONFIG_HVC_RISCV_SBI=y: the bootargs in
+# tools/dts/doomv.dts ask for `console=hvc0`, and hvc0 only exists if the
+# SBI console driver is built in. It is NOT reachable from defconfig:
+# drivers/tty/hvc/Kconfig gates it on `depends on RISCV_SBI && NONPORTABLE`,
+# and NONPORTABLE is off by default -- so the symbol is never even offered
+# and shows up *absent* from .config rather than as "is not set".
+# CONFIG_RISCV_SBI_V01 above is necessary but not sufficient: it only gets
+# you the earlycon (earlycon=sbi / SERIAL_EARLYCON_RISCV_SBI, already in
+# defconfig). Without hvc0 the bootconsole is never replaced, so the log
+# stops the moment the real console would take over and rdinit=/bin/sh has
+# no console at all. With it, the handover is visible in the boot log:
+#     printk: legacy console [hvc0] enabled
+#     printk: legacy bootconsole [sbi0] disabled
+# scripts/config is used rather than sed because NONPORTABLE has to be set
+# before HVC_RISCV_SBI can be selected at all.
+wsl -d Ubuntu -- bash -c "cd /root/build/linux && \
+    ./scripts/config --enable NONPORTABLE --enable HVC_RISCV_SBI && \
+    make ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- olddefconfig < /dev/null"
+
 # `Image` specifically, not the default `all` target -- `all` also
 # tries to build device trees for every vendor board the kernel
 # supports (SiFive, Microchip, Canaan, Allwinner, ...), several of
@@ -68,7 +87,7 @@ wsl -d Ubuntu -- bash -c "cd /root/build/linux && \
     make ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- Image -j\$(nproc)"
 
 wsl -d Ubuntu -- bash -c "cp /root/build/linux/arch/riscv/boot/Image \
-    /root/build/linux/vmlinux /mnt/c/Users/royem/SWE/GitHub/DoomV/tools/linux/"
+    /root/build/linux/vmlinux $DOOMV/tools/linux/"
 ```
 
 Note: the rsync'd copy in `/root/build/linux` has a dangling `.git`
@@ -76,3 +95,27 @@ gitlink (it's a relative-path pointer into the *Windows-side*
 superproject's `.git/modules/`, which doesn't resolve inside WSL's
 independent filesystem) -- cosmetic only, doesn't affect the build,
 just means `git` commands don't work in that copy.
+
+
+## Where the kernel source lives
+
+`$DOOMV` above is this repo's checkout as seen from inside WSL (e.g.
+`/mnt/z/Code/Dev/DoomV`) -- set it once per shell rather than hardcoding
+one machine's path.
+
+Note that on Windows the `tools/linux/src` submodule may not be checkoutable
+at all: the tree contains `drivers/gpu/drm/nouveau/nvkm/subdev/i2c/aux.c`,
+its `.h`, and `include/soc/arc/aux.h`, and `AUX` is a reserved DOS device
+name, so git's `core.protectNTFS` (on by default on Windows) refuses them:
+
+```
+error: invalid path 'drivers/gpu/drm/nouveau/nvkm/subdev/i2c/aux.c'
+```
+
+Simplest route is therefore to skip the Windows-side submodule entirely and
+clone the pinned commit directly inside WSL, then copy only `Image` and
+`vmlinux` back out. That also drops the rsync above -- which existed only
+because the source lived on the Windows side -- and with it the slow 9p
+crossing for a 90k-file tree. Note `.gitmodules` marks the submodule
+shallow but pins no branch, so a plain `--depth 1` clone fetches today's
+master tip, not v6.12; fetch the pinned SHA explicitly.

@@ -20,7 +20,7 @@ installed WSL2/Ubuntu environment rather than adding a new one:
 
 ```
 wsl -d Ubuntu -- bash -c "mkdir -p /root/build && \
-    rsync -a /mnt/c/Users/royem/SWE/GitHub/DoomV/tools/rootfs/src/ /root/build/busybox/"
+    rsync -a $DOOMV/tools/rootfs/src/ /root/build/busybox/"
 
 wsl -d Ubuntu -- bash -c "cd /root/build/busybox && \
     make ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- defconfig"
@@ -57,7 +57,7 @@ wsl -d Ubuntu -- bash -c "cd /root/build/busybox/_install && \
     find . | cpio -o -H newc > /root/build/initramfs.cpio"
 
 wsl -d Ubuntu -- bash -c "cp /root/build/initramfs.cpio \
-    /mnt/c/Users/royem/SWE/GitHub/DoomV/tools/rootfs/"
+    $DOOMV/tools/rootfs/"
 ```
 
 No `/dev` entries are created in the archive -- the kernel's
