@@ -172,7 +172,22 @@ free doom doom2 finaldoom:
 $(OUT): $(ASM_SRCS) $(PLATFORM_SRCS) $(ENGINE_SRCS)
 	$(CC) $(CFLAGS) -DWAD_LENGTH=$(WAD_LENGTH) $(LDFLAGS) -o $@ $^
 
+# Portable file deletion. GNU Make's built-in $(RM) is hardcoded to `rm -f`,
+# which cmd does not have -- so `make clean` used to fail depending on which
+# shell you launched it from. Make picks sh.exe when one is on PATH (Git Bash,
+# MSYS) and silently falls back to cmd otherwise, so probe for the same sh it
+# would have selected and pick the matching deleter.
+ifeq ($(OS),Windows_NT)
+  ifeq ($(findstring ok,$(shell sh -c "echo ok" 2>&1)),ok)
+    RMF = rm -f
+  else
+    RMF = del /Q /F
+  endif
+else
+  RMF = rm -f
+endif
+
 clean:
-	rm -f doomv-free.elf doomv-doom.elf doomv-doom2.elf doomv-finaldoom.elf
+	-$(RMF) doomv-free.elf doomv-doom.elf doomv-doom2.elf doomv-finaldoom.elf
 
 .PHONY: all free doom doom2 finaldoom clean

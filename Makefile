@@ -21,5 +21,20 @@ OUT = riscv_doom.exe
 all:
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -o $(OUT) $(SRCS) $(LIBS)
 
+# Portable file deletion. GNU Make's built-in $(RM) is hardcoded to `rm -f`,
+# which cmd does not have -- so `make clean` used to fail depending on which
+# shell you launched it from. Make picks sh.exe when one is on PATH (Git Bash,
+# MSYS) and silently falls back to cmd otherwise, so probe for the same sh it
+# would have selected and pick the matching deleter.
+ifeq ($(OS),Windows_NT)
+  ifeq ($(findstring ok,$(shell sh -c "echo ok" 2>&1)),ok)
+    RMF = rm -f
+  else
+    RMF = del /Q /F
+  endif
+else
+  RMF = rm -f
+endif
+
 clean:
-	del $(OUT)
+	-$(RMF) $(OUT)
