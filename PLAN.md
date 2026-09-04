@@ -222,12 +222,24 @@ the CPU side just hasn't caught up yet.
   opcode as belonging to a disabled/unimplemented extension, that's an
   automatic implicit breakpoint — halt, dump the ring buffer to `crash.log`.
 - **Toolchain choice — resolved.** xPack GNU RISC-V Embedded GCC
-  (`riscv-none-elf-gcc` 15.2.0-1), installed at
-  `C:\Users\royem\SWE\toolchains\xpack-riscv-none-elf-gcc-15.2.0-1`
-  (outside any git repo — it's ~465MB, not something to ever commit). No
-  Windows arm64 build exists, only win32-x64, running fine under this
-  machine's x64 emulation once its `bin/` DLLs are resolvable (see the
-  `ucrt64/bin` PATH fix from the SDL2 setup — same category of issue).
+  (`riscv-none-elf-gcc` 15.2.0-1). Install per-machine with xpm rather than
+  by hand, so no one box's path gets baked in:
+
+  ```
+  npm install --global xpm
+  xpm install --global @xpack-dev-tools/riscv-none-elf-gcc@15.2.0-1.1
+  ```
+
+  (npm publishes upstream's `15.2.0-1` as `15.2.0-1.1`; the bare
+  `15.2.0-1` is not a valid npm tag and fails to resolve.) It lands in the
+  user's xPacks store — on Windows
+  `%APPDATA%\xPacks\@xpack-dev-tools\riscv-none-elf-gcc\<ver>\.content\bin`
+  — always outside any git repo, since it's ~465MB and must never be
+  committed. Put that `bin` on PATH to build. Only a win32-x64 build is
+  published, no native Windows arm64 one: it runs natively on x64 hosts,
+  and on arm64 hosts under x64 emulation, which additionally needs the
+  toolchain's `bin/` DLLs resolvable (same category of issue as the
+  `ucrt64/bin` PATH fix from the SDL2 setup).
   As predicted, there's no exact prebuilt `rv32ima` multilib (`-print-multi-lib`
   shows `rv32im`/`rv32ia_zaamo_zalrsc` separately, nothing combined without
   `c`) — turned out not to matter even for linking: `ld`'s multilib
@@ -356,11 +368,21 @@ the CPU side just hasn't caught up yet.
   one produces the emulator, the other the guest binary it loads). Lists
   all ~80 engine sources + the 3 platform files, `WAD=doom1|doom2|final`
   selects the target (default `doom1`) setting `WAD_LENGTH` accordingly,
-  `make all` builds all three. No `make` binary exists on this machine
-  yet though (checked `msys64` and the toolchain — not bundled with
-  either) — validated the Makefile's build recipe by running the
-  equivalent `riscv-none-elf-gcc` invocation directly instead. Full build
-  linked clean, see the libc bullet above.
+  `make all` builds all three. Needs a `make` on PATH, which neither the
+  xPack toolchain nor msys64 bundles — any GNU Make does (a MinGW
+  `make.exe` is the easy one on Windows). Full build links clean, see the
+  libc bullet above.
+  - The first machine to actually *run* this Makefile — as opposed to
+    hand-invoking the equivalent `riscv-none-elf-gcc` command, which is
+    how it was originally validated on a box with no `make` — turned up a
+    real bug in it: `-nostartfiles -specs=nosys.specs` was listed in
+    **both** `CFLAGS` and `LDFLAGS`, and because the rule compiles and
+    links in a single `$(CC)` invocation, both copies land on one command
+    line. GCC then reads `nosys.specs` twice and dies with "attempt to
+    rename spec 'link_gcc_c_sequence' to already defined spec
+    'nosys_link_gcc_c_sequence'". Fixed by reducing `LDFLAGS` to just
+    `-T riscv.lds`. General shape worth remembering: with a single-
+    invocation build rule, CFLAGS and LDFLAGS must not overlap.
 - **Input key mapping** — `DG_GetKey` expects Doom's own key constants
   (`KEY_RIGHTARROW` etc.) plus pressed/released events, not a raw SDL
   keysym. Current `handle_input()` just stores one raw key into
