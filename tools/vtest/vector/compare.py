@@ -39,6 +39,13 @@ LAYOUT = [
     (4, "vwaddu.vv"), (4, "vwaddu.wv"), (4, "vnsrl.wi"),
     (4, "vsext.vf4"), (4, "vzext.vf2"),
     (4, "vl1r.v"), (4, "vs1r.v"), (4, "vlm.v"),
+    (4, "vlse64.v (strided)"),
+    (4, "vluxei64.v (indexed)"),
+    (4, "vlseg4e8.v -> v8"), (4, "vlseg4e8.v -> v9"),
+    (4, "vlseg4e8.v -> v10"), (4, "vlseg4e8.v -> v11"),
+    (4, "vrgatherei16.vv (mixed EEW)"),
+    (4, "vle8ff.v (no fault)"), (2, "vl after vle8ff"),
+    (4, "vzext.vf8 m8 -> v8"), (4, "vzext.vf8 m8 -> v9"),
 ]
 
 

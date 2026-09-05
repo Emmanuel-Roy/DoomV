@@ -223,6 +223,58 @@ _start:
 	SIGV	v23
 
 	#---- done: terminate spike via HTIF, then park for DoomV's -break
+	#---- strided load: stride 16 picks every other doubleword
+	vsetvli	t0, x0, e64, m1, ta, ma
+	li	t1, 16
+	vlse64.v v24, (s1), t1
+	SIGV	v24
+
+	#---- indexed load: byte offsets supplied by an index vector
+	la	t2, indices
+	vle64.v	v26, (t2)
+	vluxei64.v v27, (s1), v26
+	SIGV	v27
+
+	#---- segment store/load: 4 fields interleaved, then read back.
+	#---- vsseg4 writes v1..v4 field-interleaved; vlseg4 de-interleaves
+	#---- into v8..v11, so a round trip should reproduce the inputs.
+	la	t2, scratch
+	vsetvli	t0, x0, e8, m1, ta, ma
+	vsseg4e8.v v1, (t2)
+	vlseg4e8.v v8, (t2)
+	SIGV	v8
+	SIGV	v9
+	SIGV	v10
+	SIGV	v11
+
+	#---- gather whose index vector is a different width than the data
+	#---- (EEW=16 indices against e64 elements -- mixed-EEW bookkeeping)
+	la	t2, idx16
+	vsetvli	t0, x0, e16, m1, ta, ma
+	vle16.v	v28, (t2)
+	vsetvli	t0, x0, e64, m1, ta, ma
+	vrgatherei16.vv v29, v1, v28
+	SIGV	v29
+
+	#---- fault-only-first with nothing faulting: must be identical to a
+	#---- plain unit-stride load, and must leave vl untouched. (DoomV
+	#---- implements FOF as a plain load -- see ext_v_ldst.cpp's header --
+	#---- so only the non-faulting case is comparable here.)
+	vsetvli	t0, x0, e8, m1, ta, ma
+	vle8ff.v v30, (s1)
+	SIGV	v30
+	csrr	t3, vl
+	SIGX	t3
+
+	#---- vzext.vf8 at LMUL=8, where the source EMUL works out to 1 and
+	#---- the encoding is legal (unlike the LMUL=1 case further up)
+	vsetvli	t0, x0, e8, m1, ta, ma
+	vle8.v	v16, (s1)
+	vsetvli	t0, x0, e64, m8, ta, ma
+	vzext.vf8 v8, v16
+	SIGV	v8
+	SIGV	v9
+
 # Label before the HTIF write, not after: writing tohost terminates spike
 # immediately, so anything past this point never executes there. spike is
 # stopped here to dump the signature; DoomV, which ignores tohost, runs on
@@ -244,6 +296,14 @@ testdata_a:
 	.dword	0xfedcba9876543210
 	.dword	0x00000000ffffffff
 	.dword	0x8000000000000001
+indices:
+	.dword	8, 0		# byte offsets for the indexed load
+idx16:
+	.half	1, 0, 0, 0, 0, 0, 0, 0	# element indices for vrgatherei16
+	.align	8
+scratch:
+	.fill	128, 1, 0	# destination for the segment round trip
+	.align	8
 testdata_b:
 	.dword	0x1111111122222222
 	.dword	0x3333333344444444
@@ -253,7 +313,7 @@ testdata_b:
 	.align 4
 	.global begin_signature
 begin_signature:
-	.fill	1024, 1, 0
+	.fill	2048, 1, 0
 	.global end_signature
 end_signature:
 

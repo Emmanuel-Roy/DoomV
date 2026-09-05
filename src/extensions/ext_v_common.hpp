@@ -153,7 +153,15 @@ inline bool op_v_vm(uint8_t funct7) { return funct7 & 1; }
 // routed them to V instead of F/D): nf[31:29] | mew[28] | mop[27:26] | vm[25].
 inline uint8_t ldst_nf(uint8_t funct7) { return funct7 >> 4; }
 inline bool ldst_mew(uint8_t funct7) { return (funct7 >> 3) & 1; }
-inline uint8_t ldst_mop(uint8_t funct7) { return (funct7 >> 2) & 0x3; }
+// mop is instruction bits[27:26], i.e. funct7 bits[2:1] -- funct7 starts at
+// instruction bit 25, so this shifts by 1, not 2. Shifting by 2 read
+// {mew, mop[1]} instead, which silently remapped two addressing modes:
+// strided (10) became indexed (01), so the stride *register number* was
+// used as an index vector, and indexed-unordered (01) became unit-stride
+// (00), ignoring the index vector entirely. Unit-stride and
+// indexed-ordered happened to survive the mangling, which is why this went
+// unnoticed. Caught by tools/vtest/vector's spike diff.
+inline uint8_t ldst_mop(uint8_t funct7) { return (funct7 >> 1) & 0x3; }
 inline bool ldst_vm(uint8_t funct7) { return funct7 & 1; }
 
 // OPIVI's 5-bit immediate lives at the vs1 field position (bits[19:15]),
