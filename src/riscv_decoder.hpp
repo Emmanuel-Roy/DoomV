@@ -72,7 +72,15 @@ private:
 	DecodedInstruction decode_zicsr(uint32_t raw_instr) const;
 	DecodedInstruction decode_fd(uint32_t raw_instr, Extension ext) const;
 	DecodedInstruction decode_v(uint32_t raw_instr) const;
-	DecodedInstruction decode_zb(uint32_t raw_instr, Extension ext) const;
+	DecodedInstruction decode_zba(uint32_t raw_instr) const;
+	DecodedInstruction decode_zbb(uint32_t raw_instr) const;
+	DecodedInstruction decode_zbs(uint32_t raw_instr) const;
+	DecodedInstruction decode_zicond(uint32_t raw_instr) const;
+	DecodedInstruction decode_zifencei(uint32_t raw_instr) const;
+	// Zcb lives in its own file but has no exec of its own: every encoding
+	// is an alias, decoded into the standard instruction that executes it.
+	DecodedInstruction decode_zcb_mem(uint16_t raw16) const;
+	DecodedInstruction decode_zcb_alu(uint16_t raw16) const;
 
 	// Compressed (RVC) instructions are entirely an encoding-space trick --
 	// every one of them is defined as an alias for some standard 32-bit

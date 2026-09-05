@@ -25,7 +25,11 @@ public:
 	void exec_32ZICSR(const DecodedInstruction &instr, Registers &regs, Memory &mem);
 	void exec_FD(const DecodedInstruction &instr, Registers &regs, Memory &mem);
 	void exec_V(const DecodedInstruction &instr, Registers &regs, Memory &mem);
-	void exec_ZB(const DecodedInstruction &instr, Registers &regs, Memory &mem);
+	void exec_ZBA(const DecodedInstruction &instr, Registers &regs, Memory &mem);
+	void exec_ZBB(const DecodedInstruction &instr, Registers &regs, Memory &mem);
+	void exec_ZBS(const DecodedInstruction &instr, Registers &regs, Memory &mem);
+	void exec_ZICOND(const DecodedInstruction &instr, Registers &regs, Memory &mem);
+	void exec_ZIFENCEI(const DecodedInstruction &instr, Registers &regs, Memory &mem);
 
 	// Sv39 address translation, shared by every load/store/AMO/FP-load/
 	// vector-load call site and by DoomSystem::step()'s instruction fetch.

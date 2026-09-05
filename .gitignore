@@ -39,3 +39,7 @@ tools/rootfs/initramfs.cpio
 # Hardcoded to this name relative to DoomV's cwd, so it lands at the repo
 # root whenever a test is run from here.
 signature.log
+
+# Lock directory the vector differential runner uses to serialise DoomV
+# invocations (they all write signature.log to the repo root).
+.signature.lock/

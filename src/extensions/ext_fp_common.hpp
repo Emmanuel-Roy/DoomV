@@ -193,6 +193,17 @@ T fminmax(T a, T b, bool is_max, Registers &regs)
 {
 	if (std::isnan(a) || std::isnan(b)) regs.or_fflags(0x10);
 	if (std::isnan(a) && std::isnan(b)) return canonical_nan<T>();
+
+	// Zeros of opposite sign compare equal, so std::fmin/fmax are free to
+	// return either operand -- C++ leaves it unspecified. RISC-V does not:
+	// fmin(+0,-0) is -0.0 and fmax(+0,-0) is +0.0, regardless of operand
+	// order. Decide it from the sign bits instead of the comparison.
+	if (a == (T)0 && b == (T)0) {
+		bool negative = is_max ? (std::signbit(a) && std::signbit(b))
+		                       : (std::signbit(a) || std::signbit(b));
+		return negative ? -(T)0 : (T)0;
+	}
+
 	return is_max ? std::fmax(a, b) : std::fmin(a, b);
 }
 

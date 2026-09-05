@@ -108,12 +108,34 @@ LAYOUT_RESTART = [
     (4, "v1: both halves, across the restart"),
 ]
 
+# Every entry is one doubleword: FP results are dumped as raw bits so NaN
+# payloads and signed zeros compare exactly.
+LAYOUT_FD = [(2, n) for n in [
+    "fld 1.5", "fld -2.25", "flw 1.5f", "flw -2.25f",
+    "fadd.d", "fsub.d", "fmul.d", "fdiv.d", "fsqrt.d",
+    "fadd.s", "fsub.s", "fmul.s", "fdiv.s", "fsqrt.s",
+    "fmin.d", "fmax.d", "fmin.d(+0,-0)", "fmax.d(+0,-0)", "fmin.d(NaN)",
+    "fmin.s", "fmax.s",
+    "fsgnj.d", "fsgnjn.d", "fsgnjx.d", "fsgnj.s",
+    "feq.d", "flt.d", "fle.d", "feq.d(NaN,NaN)", "flt.s",
+    "fclass.d(1.5)", "fclass.d(-0)", "fclass.d(inf)", "fclass.d(NaN)", "fclass.s",
+    "fcvt.w.d", "fcvt.wu.d", "fcvt.l.d", "fcvt.lu.d",
+    "fcvt.d.w", "fcvt.d.wu", "fcvt.d.l", "fcvt.s.w", "fcvt.w.s",
+    "fcvt.wu.d(neg -> saturate)", "fcvt.w.d(inf)", "fcvt.wu.d(NaN)", "fcvt.l.d(inf)",
+    "fcvt.s.d", "fcvt.d.s", "fcvt.s.d(NaN)",
+    "fmadd.d", "fmsub.d", "fnmadd.d", "fnmsub.d", "fmadd.s",
+    "fmv.x.d", "fmv.d.x", "fmv.x.w",
+    "fsd readback", "fsw readback",
+    "fflags",
+]]
+
 LAYOUTS = {
     "vtest_v": LAYOUT_V,
     "vtest_zb": LAYOUT_ZB,
     "vtest_mmu": LAYOUT_MMU,
     "vtest_trap": LAYOUT_TRAP,
     "vtest_restart": LAYOUT_RESTART,
+    "vtest_fd": LAYOUT_FD,
 }
 
 

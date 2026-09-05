@@ -34,6 +34,8 @@ case "$TEST" in
             ISA=rv64gcv_zvl128b_zicsr_zifencei ;;
   vtest_mmu) MARCH=rv64gcv
             ISA=rv64gcv_zvl128b_zicsr_zifencei ;;
+  vtest_fd) MARCH=rv64gc
+            ISA=rv64gc_zicsr_zifencei ;;
   vtest_zb) MARCH=rv64gc_zba_zbb_zbs_zicond_zcb
             ISA=rv64gc_zba_zbb_zbs_zicond_zcb_zicsr_zifencei ;;
   *) echo "unknown test: $TEST" >&2; exit 1 ;;

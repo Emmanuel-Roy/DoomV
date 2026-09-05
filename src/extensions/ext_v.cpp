@@ -275,6 +275,7 @@ void RiscvCore::exec_V(const DecodedInstruction &instr, Registers &regs, Memory 
 		if (funct6 == 0x0c || funct6 == 0x0e || funct6 == 0x0f) exec_v_perm(instr, regs); // rgather*/slideup/slidedown
 		else if (is_ivi && funct6 == 0x27 && vm) exec_v_perm(instr, regs);                // vmv<n>r.v
 		else if (instr.funct3 == 0b000 && (funct6 == 0x30 || funct6 == 0x31)) exec_v_reduce(instr, regs); // vwredsum(u).vs
+		else if (funct6 == 0x01) exec_zvbb(instr, regs); // vandn -- Zvbb, its own file
 		else exec_v_int(instr, regs);
 		break;
 	}

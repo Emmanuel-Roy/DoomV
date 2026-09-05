@@ -191,7 +191,11 @@ DecodedInstruction Decoder::decode(uint32_t raw_instr, Extension ext) const
 	case 0b0111011: // OP-32
 	case 0b0010011: // OP-IMM
 	case 0b0011011: // OP-IMM-32 -- all four share their space with the bitmanip families
-		if (ext == Extension::ZBA || ext == Extension::ZBB || ext == Extension::ZBS || ext == Extension::ZICOND) return decode_zb(raw_instr, ext);
+		if (ext == Extension::ZBA) return decode_zba(raw_instr);
+		if (ext == Extension::ZBB) return decode_zbb(raw_instr);
+		if (ext == Extension::ZBS) return decode_zbs(raw_instr);
+		if (ext == Extension::ZICOND) return decode_zicond(raw_instr);
+		if (ext == Extension::ZIFENCEI) return decode_zifencei(raw_instr);
 		return (ext == Extension::M) ? decode_m(raw_instr) : decode_i(raw_instr, ext);
 	default:
 		return decode_i(raw_instr, ext);
@@ -275,18 +279,24 @@ DispatchResult Decoder::decode_and_dispatch(uint64_t pc, uint32_t raw_word)
 	case Extension::ZICSR:
 		core.exec_32ZICSR(instr, regs, mem);
 		break;
-	case Extension::ZIFENCEI: // FENCE.I -- same no-op path as plain FENCE, see exec_32I
-		core.exec_32I(instr, regs, mem);
+	case Extension::ZIFENCEI:
+		core.exec_ZIFENCEI(instr, regs, mem);
 		break;
 	case Extension::F:
 	case Extension::D:
 		core.exec_FD(instr, regs, mem);
 		break;
 	case Extension::ZBA:
+		core.exec_ZBA(instr, regs, mem);
+		break;
 	case Extension::ZBB:
+		core.exec_ZBB(instr, regs, mem);
+		break;
 	case Extension::ZBS:
+		core.exec_ZBS(instr, regs, mem);
+		break;
 	case Extension::ZICOND:
-		core.exec_ZB(instr, regs, mem);
+		core.exec_ZICOND(instr, regs, mem);
 		break;
 	case Extension::V:
 		core.exec_V(instr, regs, mem);

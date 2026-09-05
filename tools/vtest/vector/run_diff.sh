@@ -15,7 +15,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/../../.." && pwd)"
 DISTRO="${DISTRO:-Ubuntu}"
 TESTS=("${@:-vtest_v vtest_zb}")
-[ $# -gt 0 ] && TESTS=("$@") || TESTS=(vtest_v vtest_zb vtest_mmu vtest_trap vtest_restart)
+[ $# -gt 0 ] && TESTS=("$@") || TESTS=(vtest_v vtest_zb vtest_fd vtest_mmu vtest_trap vtest_restart)
 
 # Windows path -> WSL mount point (Z:\Code\... -> /mnt/z/Code/...).
 win_to_wsl() {
@@ -36,6 +36,7 @@ march_for() {
 	case "$1" in
 	vtest_v)  echo "rv64imafdcv_zicsr_zifencei" ;;
 	vtest_zb) echo "rv64imafdc_zicsr_zifencei_zba_zbb_zbs_zicond" ;;
+	vtest_fd) echo "rv64imafdc_zicsr_zifencei" ;;
 	vtest_mmu) echo "rv64imafdcv_zicsr_zifencei" ;;
 	vtest_trap) echo "rv64imafdcv_zicsr_zifencei" ;;
 	vtest_restart) echo "rv64imafdcv_zicsr_zifencei" ;;
@@ -59,15 +60,28 @@ for t in "${TESTS[@]}"; do
 	BEG="$(nmsym 'D begin_signature')"
 	END="$(nmsym 'D end_signature')"
 
+	# DoomV hardcodes its -sig output to ./signature.log relative to its own
+	# cwd (see src/main.cpp), so two of these running at once silently
+	# overwrite each other's results -- which looks like a wrong answer, not
+	# like a collision. Serialise on a lock directory; mkdir is atomic even
+	# over a Windows filesystem, where flock is not dependable.
+	LOCK="$ROOT/.signature.lock"
+	for _ in $(seq 1 600); do
+		mkdir "$LOCK" 2>/dev/null && break
+		sleep 1
+	done
+
 	( cd "$ROOT" && rm -f signature.log crash.log &&
 	  timeout 180 ./riscv_doom.exe tools/doombuild/DOOM1.WAD \
 		"tools/vtest/vector/$t.elf" -march="$(march_for "$t")" \
 		-sig="$BEG:$END" -break="0x$HALT" >/dev/null 2>&1 )
 
+	if [ -f "$ROOT/signature.log" ]; then cp "$ROOT/signature.log" "$HERE/$t.doomv.sig"; fi
+	rmdir "$LOCK" 2>/dev/null
+
 	if [ ! -f "$ROOT/signature.log" ]; then
 		echo "DoomV produced no signature.log"; fail=1; continue
 	fi
-	cp "$ROOT/signature.log" "$HERE/$t.doomv.sig"
 
 	python "$HERE/compare.py" "$t" || fail=1
 	echo ""
