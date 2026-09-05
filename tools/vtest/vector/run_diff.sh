@@ -15,7 +15,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/../../.." && pwd)"
 DISTRO="${DISTRO:-Ubuntu}"
 TESTS=("${@:-vtest_v vtest_zb}")
-[ $# -gt 0 ] && TESTS=("$@") || TESTS=(vtest_v vtest_zb vtest_mmu)
+[ $# -gt 0 ] && TESTS=("$@") || TESTS=(vtest_v vtest_zb vtest_mmu vtest_trap)
 
 # Windows path -> WSL mount point (Z:\Code\... -> /mnt/z/Code/...).
 win_to_wsl() {
@@ -37,6 +37,7 @@ march_for() {
 	vtest_v)  echo "rv64imafdcv_zicsr_zifencei" ;;
 	vtest_zb) echo "rv64imafdc_zicsr_zifencei_zba_zbb_zbs_zicond" ;;
 	vtest_mmu) echo "rv64imafdcv_zicsr_zifencei" ;;
+	vtest_trap) echo "rv64imafdcv_zicsr_zifencei" ;;
 	esac
 }
 

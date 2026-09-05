@@ -84,7 +84,21 @@ LAYOUT_MMU = [
     (2, "bytes FOF actually loaded"),
 ]
 
-LAYOUTS = {"vtest_v": LAYOUT_V, "vtest_zb": LAYOUT_ZB, "vtest_mmu": LAYOUT_MMU}
+LAYOUT_TRAP = [
+    (2, "load page fault: scause"), (2, "load page fault: stval"),
+    (2, "store page fault: scause"), (2, "store page fault: stval"),
+    (2, "load fault mid-page: scause"), (2, "load fault mid-page: stval"),
+    (2, "ecall from S: scause"), (2, "ecall from S: stval"),
+    (2, "ebreak: scause"), (2, "ebreak: stval"),
+    (2, "still running afterwards"),
+]
+
+LAYOUTS = {
+    "vtest_v": LAYOUT_V,
+    "vtest_zb": LAYOUT_ZB,
+    "vtest_mmu": LAYOUT_MMU,
+    "vtest_trap": LAYOUT_TRAP,
+}
 
 
 def load(path):
@@ -101,8 +115,19 @@ def main():
 
     spike = load(os.path.join(HERE, test + ".spike.sig"))
     doomv = load(os.path.join(HERE, test + ".doomv.sig"))
+
+    # An empty side means the run never produced a signature at all -- most
+    # often spike sitting in a trap loop so its `until pc` never matched, in
+    # which case it emits nothing and exits 0. Comparing zero words against
+    # zero words otherwise reports a cheerful MATCH, which is the single most
+    # misleading thing this script could do.
+    if not spike or not doomv:
+        print("NO DATA: spike=%d words, doomv=%d words -- the run produced no"
+              " signature, so nothing was compared" % (len(spike), len(doomv)))
+        return 2
     if len(spike) != len(doomv):
-        print("length mismatch: spike=%d doomv=%d" % (len(spike), len(doomv)))
+        print("LENGTH MISMATCH: spike=%d doomv=%d -- comparing the common"
+              " prefix only" % (len(spike), len(doomv)))
 
     n = min(len(spike), len(doomv))
     bad = []
@@ -122,6 +147,10 @@ def main():
             bad.append(("(past end of layout table)", idx, n - idx, extra))
 
     if not bad:
+        if len(spike) != len(doomv):
+            print("%s: common prefix of %d words matches, but the two dumps are"
+                  " different lengths" % (test, n))
+            return 1
         print("MATCH: %s -- all %d words identical (%d tests)" % (test, n, len(layout)))
         return 0
 
