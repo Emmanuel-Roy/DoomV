@@ -90,6 +90,16 @@ void exec_v_int(const DecodedInstruction &instr, Registers &regs)
 			write_velem(regs, instr.rd, sew, i, (read_velem(regs, instr.rs2, sew, i) + op2(i)) & smask);
 		});
 		break;
+	case 0x01: // vandn (Zvbb): vd = vs2 & ~op2
+		// Zvbb is not gated separately from V here -- it occupies a funct6
+		// the base V spec leaves reserved, and a distro riscv64 glibc emits
+		// vandn.vv unconditionally alongside the base vector ops, so
+		// splitting it into its own toggle would buy nothing but a second
+		// way to configure a userspace into failing.
+		for_each_active(regs, vm, vl, [&](uint64_t i) {
+			write_velem(regs, instr.rd, sew, i, (read_velem(regs, instr.rs2, sew, i) & ~op2(i)) & smask);
+		});
+		break;
 	case 0x02: // vsub
 		for_each_active(regs, vm, vl, [&](uint64_t i) {
 			write_velem(regs, instr.rd, sew, i, (read_velem(regs, instr.rs2, sew, i) - op2(i)) & smask);

@@ -29,6 +29,7 @@ LAYOUT_V = [
     (4, "vadd.vv"), (4, "vadd.vx"), (4, "vadd.vi"),
     (4, "vrsub.vx"), (4, "vrsub.vi"), (4, "vmul.vx"),
     (4, "vand.vv"), (4, "vand.vi"), (4, "vor.vv"), (4, "vnot.v"),
+    (4, "vandn.vv (Zvbb)"), (4, "vandn.vx (Zvbb)"),
     (4, "vsll.vi"), (4, "vsll.vx"), (4, "vsrl.vi"), (4, "vsrl.vx"),
     (4, "vmv.v.i"), (4, "vmv.v.x"), (4, "vmv1r.v"),
     (2, "vmv.x.s"), (4, "vmv.s.x"),

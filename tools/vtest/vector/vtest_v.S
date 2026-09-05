@@ -123,6 +123,14 @@ _start:
 	SIGV	v5
 	vnot.v	v5, v1
 	SIGV	v5
+	# vandn is Zvbb, not base V: it sits in a funct6 the base spec leaves
+	# reserved. Included here because a distro glibc emits it alongside the
+	# base ops, so it is part of the surface a real userspace needs.
+	vandn.vv v5, v1, v2
+	SIGV	v5
+	li	t1, 0x0f0f
+	vandn.vx v5, v1, t1
+	SIGV	v5
 
 	#---- shifts
 	vsll.vi	v5, v1, 3

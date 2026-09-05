@@ -26,8 +26,8 @@ SPIKE="${SPIKE:-/root/build/spike-build/spike}"
 # for the vector test because DoomV is fixed there (Registers::VLEN_BITS),
 # and nothing is comparable unless the two agree.
 case "$TEST" in
-  vtest_v)  MARCH=rv64gcv
-            ISA=rv64gcv_zvl128b_zicsr_zifencei ;;
+  vtest_v)  MARCH=rv64gcv_zvbb
+            ISA=rv64gcv_zvbb_zvl128b_zicsr_zifencei ;;
   vtest_zb) MARCH=rv64gc_zba_zbb_zbs_zicond_zcb
             ISA=rv64gc_zba_zbb_zbs_zicond_zcb_zicsr_zifencei ;;
   *) echo "unknown test: $TEST" >&2; exit 1 ;;
