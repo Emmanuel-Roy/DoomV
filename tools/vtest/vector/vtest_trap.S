@@ -106,6 +106,15 @@ trap_handler:
 	csrr	t0, stval
 	sd	t0, 0(s0)
 	addi	s0, s0, 8
+	# vstart too: for a faulting vector access it must name the element
+	# that faulted, so the instruction can be restarted after the mapping
+	# is fixed. Zero for every non-vector trap. Cleared afterwards so a
+	# stale vstart does not make the *next* vector instruction skip
+	# elements -- a real supervisor would restart the instruction instead.
+	csrr	t0, vstart
+	sd	t0, 0(s0)
+	addi	s0, s0, 8
+	csrw	vstart, x0
 	csrr	t0, sepc
 	addi	t0, t0, 4
 	csrw	sepc, t0
@@ -146,6 +155,14 @@ smode_entry:
 
 	#---- breakpoint
 	ebreak					# -> scause 3, stval = the ebreak's pc
+
+	#---- a plain (non-FOF) vector load crossing out of the mapped page.
+	#---- Unlike vle8ff.v this must genuinely trap -- and vstart must name
+	#---- the element it stopped on, not 0, or the instruction could not be
+	#---- restarted. 8 elements fit below the boundary, so element 8 faults.
+	li	t1, 0x801ffff8
+	vsetvli	t3, x0, e8, m1, ta, ma
+	vle8.v	v1, (t1)		# -> scause 13, stval 0x80200000, vstart 8
 
 	#---- confirm we are still in S-mode and running: a normal access to
 	#---- mapped memory must still work after all that

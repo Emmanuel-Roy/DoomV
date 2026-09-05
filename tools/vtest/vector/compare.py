@@ -84,12 +84,20 @@ LAYOUT_MMU = [
     (2, "bytes FOF actually loaded"),
 ]
 
+# Each trap records three doublewords: scause, stval, vstart.
 LAYOUT_TRAP = [
     (2, "load page fault: scause"), (2, "load page fault: stval"),
+    (2, "load page fault: vstart"),
     (2, "store page fault: scause"), (2, "store page fault: stval"),
+    (2, "store page fault: vstart"),
     (2, "load fault mid-page: scause"), (2, "load fault mid-page: stval"),
+    (2, "load fault mid-page: vstart"),
     (2, "ecall from S: scause"), (2, "ecall from S: stval"),
+    (2, "ecall from S: vstart"),
     (2, "ebreak: scause"), (2, "ebreak: stval"),
+    (2, "ebreak: vstart"),
+    (2, "faulting vle8.v: scause"), (2, "faulting vle8.v: stval"),
+    (2, "faulting vle8.v: vstart (must be 8)"),
     (2, "still running afterwards"),
 ]
 

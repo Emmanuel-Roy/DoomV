@@ -13,12 +13,11 @@
 // test; the faulting path is exercised in practice by glibc's strlen,
 // which is the reason the encoding exists.
 //
-// Precise mid-instruction fault behavior (per spec, vstart should land
-// exactly on the faulting element for a possible restart) isn't
-// implemented either -- a fault sets a flag checked before each remaining
-// element's access so nothing after the fault touches memory, but vl/
-// vstart aren't trimmed. V is opt-in and not required for anything this
-// project boots yet, so this is deferred rather than solved preemptively.
+// A fault mid-instruction leaves vstart on the faulting element, so the
+// instruction is restartable: a supervisor can map the missing page and
+// re-execute it, and the element loop resumes from vstart rather than
+// redoing the accesses that already succeeded. A flag also stops any
+// remaining element touching memory after the fault.
 #include "riscv_decoder.hpp"
 #include "riscv_core.hpp"
 #include "registers.hpp"
@@ -144,6 +143,7 @@ bool exec_v_ldst(const DecodedInstruction &instr, Registers &regs, Memory &mem, 
 	// the lambda below rather than actually breaking the loop, since
 	// for_each_active always runs it to completion.
 	bool faulted = false;
+	uint64_t fault_elem = 0;
 	for_each_active(regs, vm, vl, [&](uint64_t i) {
 		if (faulted || fof_trimmed) return;
 		uint64_t seg_addr;
@@ -173,6 +173,7 @@ bool exec_v_ldst(const DecodedInstruction &instr, Registers &regs, Memory &mem, 
 				}
 			} else if (!core.translate_or_trap(regs, mem, field_addr, access, paddr)) {
 				faulted = true;
+				fault_elem = i;
 				return;
 			}
 			if (is_load) write_velem(regs, reg_base, data_eew, i, ld_eew(mem, paddr, data_eew));
@@ -184,6 +185,13 @@ bool exec_v_ldst(const DecodedInstruction &instr, Registers &regs, Memory &mem, 
 	// the following vsetvli-free code sees exactly the elements that were
 	// actually loaded.
 	if (fof_trimmed) regs.set_vl(fof_vl);
+
+	// A genuine fault has to leave vstart on the element that faulted, so a
+	// supervisor can fix the mapping and re-execute the same instruction to
+	// pick up where it stopped. This has to happen *after* the loop:
+	// for_each_active resets vstart to 0 on its way out (correct for normal
+	// completion) and would otherwise wipe it.
+	if (faulted) regs.set_vstart(fault_elem);
 	return !faulted;
 }
 
