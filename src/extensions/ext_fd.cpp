@@ -3,6 +3,7 @@
 // soft-float library.
 #include "riscv_decoder.hpp"
 #include "riscv_core.hpp"
+#include "ext_xstate.hpp"
 #include "registers.hpp"
 #include "memory.hpp"
 #include "extensions.hpp"
@@ -177,6 +178,11 @@ DecodedInstruction Decoder::decode_fd(uint32_t raw_instr, Extension ext) const
 void RiscvCore::exec_FD(const DecodedInstruction &instr, Registers &regs, Memory &mem)
 {
 	uint64_t pc = regs.get_pc();
+
+	// The decoder already established mstatus.FS is not Off, so the unit is
+	// on and this instruction is about to touch FP state. Mark it Dirty so a
+	// supervisor knows there is something to save on a context switch.
+	vcommon::mark_fp_dirty(regs);
 
 	if (instr.opcode == 0b0000111) { // LOAD-FP: FLW/FLD -- rs1 is an integer base register
 		uint64_t addr = regs.read_x(instr.rs1) + (uint64_t)instr.imm;

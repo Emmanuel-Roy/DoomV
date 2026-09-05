@@ -1,5 +1,6 @@
 #include "riscv_decoder.hpp"
 #include "extensions/ext_v_common.hpp"
+#include "extensions/ext_xstate.hpp"
 #include "riscv_core.hpp"
 #include "registers.hpp"
 #include "memory.hpp"
@@ -254,6 +255,9 @@ DispatchResult Decoder::decode_and_dispatch(uint64_t pc, uint32_t raw_word)
 	// (address, encoding) and would otherwise freeze whatever the vector
 	// unit's enable happened to be the first time this address ran.
 	if (instr.ext == Extension::V && !vcommon::vector_unit_enabled(regs)) {
+		return {true, instr};
+	}
+	if ((instr.ext == Extension::F || instr.ext == Extension::D) && !vcommon::fp_unit_enabled(regs)) {
 		return {true, instr};
 	}
 
