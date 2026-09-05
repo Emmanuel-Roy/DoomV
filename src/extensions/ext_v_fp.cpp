@@ -204,12 +204,12 @@ void exec_v_fp(const DecodedInstruction &instr, Registers &regs)
 	case 0x0a: for_each_active(regs, vm, vl, [&](uint64_t i) { write_felem(regs, instr.rd, sew, i, gsgnj(read_felem(regs, instr.rs2, sew, i), op2(i), 0b010, sew)); }); break;
 	case 0x04: for_each_active(regs, vm, vl, [&](uint64_t i) { write_felem(regs, instr.rd, sew, i, gminmax(read_felem(regs, instr.rs2, sew, i), op2(i), false, sew, regs)); }); break;
 	case 0x06: for_each_active(regs, vm, vl, [&](uint64_t i) { write_felem(regs, instr.rd, sew, i, gminmax(read_felem(regs, instr.rs2, sew, i), op2(i), true, sew, regs)); }); break;
-	case 0x18: for_each_active(regs, vm, vl, [&](uint64_t i) { set_mask_bit(regs, i, gcompare(read_felem(regs, instr.rs2, sew, i), op2(i), 0b010, sew, regs)); }); break; // vmfeq
-	case 0x19: for_each_active(regs, vm, vl, [&](uint64_t i) { set_mask_bit(regs, i, gcompare(read_felem(regs, instr.rs2, sew, i), op2(i), 0b000, sew, regs)); }); break; // vmfle
-	case 0x1b: for_each_active(regs, vm, vl, [&](uint64_t i) { set_mask_bit(regs, i, gcompare(read_felem(regs, instr.rs2, sew, i), op2(i), 0b001, sew, regs)); }); break; // vmflt
-	case 0x1c: for_each_active(regs, vm, vl, [&](uint64_t i) { set_mask_bit(regs, i, !gcompare(read_felem(regs, instr.rs2, sew, i), op2(i), 0b010, sew, regs)); }); break; // vmfne = !eq (NaN still compares "not equal" -> true, matching spec: unordered counts as "not equal")
-	case 0x1d: for_each_active(regs, vm, vl, [&](uint64_t i) { set_mask_bit(regs, i, gcompare(op2(i), read_felem(regs, instr.rs2, sew, i), 0b001, sew, regs)); }); break; // vmfgt.vf = vs2 < scalar reversed
-	case 0x1f: for_each_active(regs, vm, vl, [&](uint64_t i) { set_mask_bit(regs, i, gcompare(op2(i), read_felem(regs, instr.rs2, sew, i), 0b000, sew, regs)); }); break; // vmfge.vf
+	case 0x18: for_each_active(regs, vm, vl, [&](uint64_t i) { set_mask_bit(regs, instr.rd, i, gcompare(read_felem(regs, instr.rs2, sew, i), op2(i), 0b010, sew, regs)); }); break; // vmfeq
+	case 0x19: for_each_active(regs, vm, vl, [&](uint64_t i) { set_mask_bit(regs, instr.rd, i, gcompare(read_felem(regs, instr.rs2, sew, i), op2(i), 0b000, sew, regs)); }); break; // vmfle
+	case 0x1b: for_each_active(regs, vm, vl, [&](uint64_t i) { set_mask_bit(regs, instr.rd, i, gcompare(read_felem(regs, instr.rs2, sew, i), op2(i), 0b001, sew, regs)); }); break; // vmflt
+	case 0x1c: for_each_active(regs, vm, vl, [&](uint64_t i) { set_mask_bit(regs, instr.rd, i, !gcompare(read_felem(regs, instr.rs2, sew, i), op2(i), 0b010, sew, regs)); }); break; // vmfne = !eq (NaN still compares "not equal" -> true, matching spec: unordered counts as "not equal")
+	case 0x1d: for_each_active(regs, vm, vl, [&](uint64_t i) { set_mask_bit(regs, instr.rd, i, gcompare(op2(i), read_felem(regs, instr.rs2, sew, i), 0b001, sew, regs)); }); break; // vmfgt.vf = vs2 < scalar reversed
+	case 0x1f: for_each_active(regs, vm, vl, [&](uint64_t i) { set_mask_bit(regs, instr.rd, i, gcompare(op2(i), read_felem(regs, instr.rs2, sew, i), 0b000, sew, regs)); }); break; // vmfge.vf
 
 	case 0x28: case 0x29: case 0x2a: case 0x2b: case 0x2c: case 0x2d: case 0x2e: case 0x2f: { // FMA family
 		bool macc_family = (funct6 >> 2) & 1;

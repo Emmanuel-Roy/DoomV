@@ -49,7 +49,7 @@ void exec_v_mask(const DecodedInstruction &instr, Registers &regs)
 			case 0x1e: r = !(a || b); break;      // vmnor
 			default:   r = !(a != b); break;      // vmxnor (0x1f)
 			}
-			set_mask_bit(regs, i, r);
+			set_mask_bit(regs, instr.rd, i, r);
 		});
 		return;
 	}
@@ -116,7 +116,7 @@ void exec_v_mask(const DecodedInstruction &instr, Registers &regs)
 				if (sub == 0x01) { out = (!found && !bit); if (!found && bit) found = true; }        // vmsbf
 				else if (sub == 0x02) { out = (!found && bit); if (out) found = true; }               // vmsof
 				else { out = !found; if (!found && bit) found = true; }                                // vmsif
-				set_mask_bit(regs, i, out);
+				set_mask_bit(regs, instr.rd, i, out);
 			});
 			return;
 		}

@@ -118,12 +118,21 @@ inline bool mask_bit(const Registers &regs, uint64_t idx)
 	return (regs.read_v(0)[idx / 8] >> (idx % 8)) & 1;
 }
 
-inline void set_mask_bit(Registers &regs, uint64_t idx, bool bit)
+// Writes bit `idx` of the mask register `vd`. The destination is a real
+// operand, NOT always v0: every mask-producing instruction (the integer
+// and FP compares, vmadc/vmsbc, the vm*.mm logic ops, vmsbf/vmsof/vmsif)
+// names its own vd, and v0 is merely the register that *consumers* of a
+// mask read implicitly. This used to hardcode v0, so a compare into any
+// other register left its real destination untouched and silently
+// clobbered the active mask instead -- `vmsne.vv v9, v1, v2` produced an
+// all-zero v9, which then made vmor.mm and vfirst.m wrong downstream.
+// Caught by the spike differential test in tools/vtest/vector/.
+inline void set_mask_bit(Registers &regs, int vd, uint64_t idx, bool bit)
 {
-	uint8_t *v0 = regs.write_v(0);
+	uint8_t *v = regs.write_v(vd);
 	uint8_t m = (uint8_t)(1u << (idx % 8));
-	if (bit) v0[idx / 8] |= m;
-	else v0[idx / 8] &= (uint8_t)~m;
+	if (bit) v[idx / 8] |= m;
+	else v[idx / 8] &= (uint8_t)~m;
 }
 
 // Whether element `idx` is active under this instruction's masking: vm=1

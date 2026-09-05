@@ -153,7 +153,7 @@ void exec_v_int(const DecodedInstruction &instr, Registers &regs)
 			uint64_t a = read_velem(regs, instr.rs2, sew, i), b = op2(i);
 			uint64_t carry_in = vm ? 0 : (mask_bit(regs, i) ? 1 : 0);
 			unsigned __int128 sum = (unsigned __int128)a + b + carry_in;
-			set_mask_bit(regs, i, (bool)((sum >> sew) & 1));
+			set_mask_bit(regs, instr.rd, i, (bool)((sum >> sew) & 1));
 		});
 		break;
 	case 0x12: // vsbc.v{v,x}m -- vm fixed 0, borrow-in from v0 (no .vi form)
@@ -168,7 +168,7 @@ void exec_v_int(const DecodedInstruction &instr, Registers &regs)
 			uint64_t a = read_velem(regs, instr.rs2, sew, i), b = op2(i);
 			uint64_t borrow_in = vm ? 0 : (mask_bit(regs, i) ? 1 : 0);
 			bool borrow_out = (a < b) || (a == b && borrow_in != 0);
-			set_mask_bit(regs, i, borrow_out);
+			set_mask_bit(regs, instr.rd, i, borrow_out);
 		});
 		break;
 
@@ -185,42 +185,42 @@ void exec_v_int(const DecodedInstruction &instr, Registers &regs)
 
 	case 0x18: // vmseq
 		for_each_active(regs, vm, vl, [&](uint64_t i) {
-			set_mask_bit(regs, i, read_velem(regs, instr.rs2, sew, i) == op2(i));
+			set_mask_bit(regs, instr.rd, i, read_velem(regs, instr.rs2, sew, i) == op2(i));
 		});
 		break;
 	case 0x19: // vmsne
 		for_each_active(regs, vm, vl, [&](uint64_t i) {
-			set_mask_bit(regs, i, read_velem(regs, instr.rs2, sew, i) != op2(i));
+			set_mask_bit(regs, instr.rd, i, read_velem(regs, instr.rs2, sew, i) != op2(i));
 		});
 		break;
 	case 0x1a: // vmsltu
 		for_each_active(regs, vm, vl, [&](uint64_t i) {
-			set_mask_bit(regs, i, read_velem(regs, instr.rs2, sew, i) < op2(i));
+			set_mask_bit(regs, instr.rd, i, read_velem(regs, instr.rs2, sew, i) < op2(i));
 		});
 		break;
 	case 0x1b: // vmslt
 		for_each_active(regs, vm, vl, [&](uint64_t i) {
-			set_mask_bit(regs, i, sext_elem(read_velem(regs, instr.rs2, sew, i), sew) < op2s(i));
+			set_mask_bit(regs, instr.rd, i, sext_elem(read_velem(regs, instr.rs2, sew, i), sew) < op2s(i));
 		});
 		break;
 	case 0x1c: // vmsleu
 		for_each_active(regs, vm, vl, [&](uint64_t i) {
-			set_mask_bit(regs, i, read_velem(regs, instr.rs2, sew, i) <= op2(i));
+			set_mask_bit(regs, instr.rd, i, read_velem(regs, instr.rs2, sew, i) <= op2(i));
 		});
 		break;
 	case 0x1d: // vmsle
 		for_each_active(regs, vm, vl, [&](uint64_t i) {
-			set_mask_bit(regs, i, sext_elem(read_velem(regs, instr.rs2, sew, i), sew) <= op2s(i));
+			set_mask_bit(regs, instr.rd, i, sext_elem(read_velem(regs, instr.rs2, sew, i), sew) <= op2s(i));
 		});
 		break;
 	case 0x1e: // vmsgtu (vx/vi only)
 		for_each_active(regs, vm, vl, [&](uint64_t i) {
-			set_mask_bit(regs, i, read_velem(regs, instr.rs2, sew, i) > op2(i));
+			set_mask_bit(regs, instr.rd, i, read_velem(regs, instr.rs2, sew, i) > op2(i));
 		});
 		break;
 	case 0x1f: // vmsgt (vx/vi only)
 		for_each_active(regs, vm, vl, [&](uint64_t i) {
-			set_mask_bit(regs, i, sext_elem(read_velem(regs, instr.rs2, sew, i), sew) > op2s(i));
+			set_mask_bit(regs, instr.rd, i, sext_elem(read_velem(regs, instr.rs2, sew, i), sew) > op2s(i));
 		});
 		break;
 
