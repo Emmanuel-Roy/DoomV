@@ -1,24 +1,25 @@
 #!/usr/bin/env python3
-"""Compare spike.sig against doomv.sig word by word and report the ranges
-that differ, annotated with which test in vtest_v.S produced them.
+"""Diff a DoomV signature dump against spike's, word by word, and report each
+mismatch annotated with the instruction that produced it.
 
-Both files are one 32-bit hex word per line; DoomV writes CRLF on Windows,
-so line endings are normalised before comparing.
+Usage:  compare.py [test_basename]
+  vtest_v   (default) -- the V extension
+  vtest_zb            -- the scalar bitmanip families
+
+Reads <test>.spike.sig and <test>.doomv.sig. Both are one 32-bit hex word
+per line; DoomV writes CRLF on Windows, so line endings are normalised.
+
+The layout tables below mirror the order of the SIGV/SIGX macros in the
+corresponding .S file: SIGX writes 2 words (one doubleword), SIGV writes 4
+(one 128-bit vector register). Keeping them in sync is what turns "word 108
+differs" into "vmsne.vv is wrong".
 """
 import os
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
-
-def load(path):
-    with open(path) as f:
-        return [line.strip().lower() for line in f if line.strip()]
-
-
-# Signature layout, in order. Each entry is (words, label): SIGX writes 2
-# words (one doubleword), SIGV writes 4 (one 128-bit vector register).
-LAYOUT = [
+LAYOUT_V = [
     (2, "vsetivli t0,2,e64,m1"),
     (2, "vsetivli t0,31,e8,m1 (clamp to VLMAX)"),
     (2, "vsetvli t0,100,e8,m1 (clamp)"),
@@ -48,33 +49,73 @@ LAYOUT = [
     (4, "vzext.vf8 m8 -> v8"), (4, "vzext.vf8 m8 -> v9"),
 ]
 
+LAYOUT_ZB = [
+    (2, "sh1add"), (2, "sh2add"), (2, "sh3add"),
+    (2, "add.uw"), (2, "sh1add.uw"), (2, "sh2add.uw"), (2, "sh3add.uw"),
+    (2, "slli.uw 7"), (2, "slli.uw 33"),
+    (2, "andn"), (2, "orn"), (2, "xnor"),
+    (2, "clz"), (2, "clz(0)"), (2, "clz(msb set)"),
+    (2, "ctz"), (2, "ctz(0)"), (2, "ctz(lsb set)"),
+    (2, "cpop"), (2, "cpop(0)"),
+    (2, "clzw"), (2, "clzw(0)"), (2, "ctzw"), (2, "ctzw(0)"), (2, "cpopw"),
+    (2, "min"), (2, "minu"), (2, "max"), (2, "maxu"),
+    (2, "sext.b"), (2, "sext.b(neg)"), (2, "sext.h"), (2, "sext.h(neg)"),
+    (2, "zext.h"),
+    (2, "rol"), (2, "ror"), (2, "rolw"), (2, "rorw"),
+    (2, "rori 1"), (2, "rori 63"), (2, "roriw 1"),
+    (2, "orc.b"), (2, "orc.b(ffffffff)"), (2, "rev8"),
+    (2, "bclr"), (2, "bclri"), (2, "bext"), (2, "bexti"),
+    (2, "binv"), (2, "binvi"), (2, "bset"), (2, "bseti 63"),
+    (2, "bset (shamt 65 -> 1)"),
+    (2, "czero.eqz (rs2!=0)"), (2, "czero.eqz (rs2==0)"),
+    (2, "czero.nez (rs2!=0)"), (2, "czero.nez (rs2==0)"),
+    (2, "c.zext.b"), (2, "c.sext.b"), (2, "c.zext.h"), (2, "c.sext.h"),
+    (2, "c.zext.w"), (2, "c.not"), (2, "c.mul"),
+    (2, "c.lbu"), (2, "c.lhu"), (2, "c.lh"), (2, "c.sb/c.sh readback"),
+]
+
+LAYOUTS = {"vtest_v": LAYOUT_V, "vtest_zb": LAYOUT_ZB}
+
+
+def load(path):
+    with open(path) as f:
+        return [line.strip().lower() for line in f if line.strip()]
+
 
 def main():
-    spike = load(os.path.join(HERE, "spike.sig"))
-    doomv = load(os.path.join(HERE, "doomv.sig"))
+    test = sys.argv[1] if len(sys.argv) > 1 else "vtest_v"
+    if test not in LAYOUTS:
+        print("unknown test %r (known: %s)" % (test, ", ".join(sorted(LAYOUTS))))
+        return 2
+    layout = LAYOUTS[test]
+
+    spike = load(os.path.join(HERE, test + ".spike.sig"))
+    doomv = load(os.path.join(HERE, test + ".doomv.sig"))
     if len(spike) != len(doomv):
         print("length mismatch: spike=%d doomv=%d" % (len(spike), len(doomv)))
 
     n = min(len(spike), len(doomv))
     bad = []
     idx = 0
-    for words, label in LAYOUT:
-        chunk = range(idx, min(idx + words, n))
-        diffs = [i for i in chunk if spike[i] != doomv[i]]
+    for words, label in layout:
+        diffs = [i for i in range(idx, min(idx + words, n)) if spike[i] != doomv[i]]
         if diffs:
             bad.append((label, idx, words, diffs))
         idx += words
 
+    # Anything past the layout table is the zero tail of the signature
+    # region; it should still match, and a difference there means the test
+    # wrote more than the table accounts for.
     if idx < n:
         extra = [i for i in range(idx, n) if spike[i] != doomv[i]]
         if extra:
             bad.append(("(past end of layout table)", idx, n - idx, extra))
 
     if not bad:
-        print("MATCH: all %d words identical" % n)
+        print("MATCH: %s -- all %d words identical (%d tests)" % (test, n, len(layout)))
         return 0
 
-    print("MISMATCH in %d of %d tests:\n" % (len(bad), len(LAYOUT)))
+    print("MISMATCH in %d of %d tests:\n" % (len(bad), len(layout)))
     for label, start, words, diffs in bad:
         print("  %s  (words %d..%d)" % (label, start, start + words - 1))
         for i in range(start, min(start + words, n)):
