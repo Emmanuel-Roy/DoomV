@@ -75,7 +75,16 @@ LAYOUT_ZB = [
     (2, "c.lbu"), (2, "c.lhu"), (2, "c.lh"), (2, "c.sb/c.sh readback"),
 ]
 
-LAYOUTS = {"vtest_v": LAYOUT_V, "vtest_zb": LAYOUT_ZB}
+LAYOUT_MMU = [
+    (2, "Sv39 store/load through a translated VA"),
+    (2, "Sv39 second address in the same page"),
+    (2, "vl before vle8ff (VLMAX for e8/m1)"),
+    (2, "vl after vle8ff crossing into an unmapped page"),
+    (2, "vl after vle8ff wholly inside the page"),
+    (2, "bytes FOF actually loaded"),
+]
+
+LAYOUTS = {"vtest_v": LAYOUT_V, "vtest_zb": LAYOUT_ZB, "vtest_mmu": LAYOUT_MMU}
 
 
 def load(path):
