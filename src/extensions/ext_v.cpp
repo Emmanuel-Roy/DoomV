@@ -248,6 +248,11 @@ void RiscvCore::exec_V(const DecodedInstruction &instr, Registers &regs, Memory 
 {
 	uint64_t pc = regs.get_pc();
 
+	// Reaching here means the decoder already checked mstatus.VS is not
+	// Off, so the unit is on and this instruction is about to touch vector
+	// state. Mark it Dirty so a supervisor knows there is something to save.
+	mark_vector_dirty(regs);
+
 	if (instr.opcode == 0b0000111 || instr.opcode == 0b0100111) {
 		// A page fault mid-instruction already redirected pc into the trap
 		// handler -- must not then stomp it with the normal advance below.

@@ -1,4 +1,5 @@
 #include "riscv_decoder.hpp"
+#include "extensions/ext_v_common.hpp"
 #include "riscv_core.hpp"
 #include "registers.hpp"
 #include "memory.hpp"
@@ -245,6 +246,14 @@ DispatchResult Decoder::decode_and_dispatch(uint64_t pc, uint32_t raw_word)
 	}
 
 	if (!enabled) {
+		return {true, instr};
+	}
+
+	// mstatus.VS is runtime state, not a build-time toggle, so this check
+	// has to sit *after* the decode cache -- `enabled` above is cached per
+	// (address, encoding) and would otherwise freeze whatever the vector
+	// unit's enable happened to be the first time this address ran.
+	if (instr.ext == Extension::V && !vcommon::vector_unit_enabled(regs)) {
 		return {true, instr};
 	}
 

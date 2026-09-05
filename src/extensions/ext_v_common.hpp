@@ -149,6 +149,30 @@ inline bool elem_active(const Registers &regs, bool vm, uint64_t idx)
 inline uint8_t op_v_funct6(uint8_t funct7) { return funct7 >> 1; }
 inline bool op_v_vm(uint8_t funct7) { return funct7 & 1; }
 
+// mstatus.VS (bits 10:9) is the vector unit's enable: Off(0) / Initial(1) /
+// Clean(2) / Dirty(3). While it reads Off, every vector instruction and
+// vector CSR access is an illegal instruction -- software has to turn the
+// unit on before using it, exactly like mstatus.FS for floating point.
+//
+// The Dirty half matters as much as the trap: Linux decides whether a task
+// has live vector state to save on a context switch by looking at whether
+// VS reads Dirty. A hart that never sets it lets the kernel skip saving
+// registers that are in fact live, so vector state silently leaks between
+// tasks.
+constexpr uint16_t CSR_MSTATUS_V = 0x300;
+constexpr uint64_t MSTATUS_VS_MASK = 3ull << 9;
+constexpr uint64_t MSTATUS_VS_DIRTY = 3ull << 9;
+
+inline bool vector_unit_enabled(Registers &regs)
+{
+	return (regs.read_csr(CSR_MSTATUS_V) & MSTATUS_VS_MASK) != 0;
+}
+
+inline void mark_vector_dirty(Registers &regs)
+{
+	uint64_t ms = regs.read_csr(CSR_MSTATUS_V);
+	regs.write_csr(CSR_MSTATUS_V, ms | MSTATUS_VS_DIRTY);
+}
 // Vector loads/stores (opcode 0000111/0100111, once classify() has already
 // routed them to V instead of F/D): nf[31:29] | mew[28] | mop[27:26] | vm[25].
 inline uint8_t ldst_nf(uint8_t funct7) { return funct7 >> 4; }
