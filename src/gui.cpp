@@ -499,6 +499,19 @@ void Gui::render(const Snapshot &snap)
 		trace_y += TRACE_ROW_H;
 	}
 
+	// Paused banner, drawn last so nothing overdraws it. Without this the
+	// dashboard looks identical whether the machine is running or frozen --
+	// the trace panel simply stops changing, which is indistinguishable from
+	// a guest stuck in a tight loop.
+	if (snap.halted) {
+		const char *msg = "PAUSED -- F9 TO RESUME (DELIVERS THE TRAP)";
+		const float BANNER_SCALE = 1.0f;
+		int bw = text_w(msg, BANNER_SCALE);
+		int bx = (int)((DESIGN_W - bw) * scale_x) / 2;
+		int by = (int)(2 * scale_y);
+		draw_shadow_text(bx, by, msg, pal_red, BANNER_SCALE);
+	}
+
 	SDL_UpdateTexture(texture, nullptr, screen_buf.data(), canvas_w * 4);
 	SDL_RenderCopy(renderer, texture, nullptr, nullptr);
 	SDL_RenderPresent(renderer);

@@ -1,4 +1,5 @@
 #pragma once
+#include <atomic>
 #include "memory.hpp"
 #include "registers.hpp"
 #include "riscv_core.hpp"
@@ -30,6 +31,17 @@ public:
 
 	void run();
 	void step();
+
+	// Pause-then-trap. An illegal instruction freezes the machine so its
+	// state can be read off the dashboard; pressing the resume key then
+	// delivers the trap the guest would really have taken. Set from the
+	// input thread, consumed by the CPU thread -- atomic because those are
+	// the only two threads and this is the only thing they share besides
+	// the snapshot and the key queue.
+	std::atomic<bool> resume_requested{false};
+	bool pending_illegal = false;
+	uint64_t pending_illegal_tval = 0;
+	void resume_from_halt();
 
 	// Test/debug hook: halt (and dump full register state via the
 	// debugger's crash-log path) as soon as PC reaches `addr`, instead of

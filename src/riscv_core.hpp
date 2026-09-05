@@ -54,6 +54,14 @@ public:
 	// separate call exec_32ZICSR only makes on an actual write.
 	uint64_t read_csr_effective(Registers &regs, Memory &mem, uint16_t csr);
 
+	// Deliver an illegal-instruction trap to the guest. Used by the
+	// debugger's pause-then-trap flow: an illegal instruction first freezes
+	// the machine for inspection, and only becomes a real trap once the user
+	// resumes -- so a guest with a handler (Linux delivering SIGILL) can
+	// carry on, while a bare-metal guest with no handler still gets caught
+	// at the exact instruction instead of vanishing into a trap loop.
+	void raise_illegal_instruction(Registers &regs, uint64_t tval);
+
 private:
 	// LR/SC reservation state. Single-hart, no interrupts, so this only
 	// ever needs to survive the immediate LR->SC pair a retry loop does --

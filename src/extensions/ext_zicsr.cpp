@@ -225,6 +225,7 @@ constexpr uint64_t CAUSE_ECALL_FROM_U = 8;
 constexpr uint64_t CAUSE_ECALL_FROM_S = 9;
 constexpr uint64_t CAUSE_ECALL_FROM_M = 11;
 constexpr uint64_t CAUSE_BREAKPOINT   = 3;
+constexpr uint64_t CAUSE_ILLEGAL_INSN = 2;
 
 // sstatus is architecturally just the bits of mstatus a lower-privileged
 // mode is allowed to see/touch -- SUM/MXR are read-write pass-through,
@@ -345,6 +346,14 @@ bool RiscvCore::translate_or_trap(Registers &regs, Memory &mem, uint64_t vaddr, 
 	if (mmu_translate(regs, mem, vaddr, type, paddr, cause, tval)) return true;
 	enter_trap(regs, cause, tval);
 	return false;
+}
+
+void RiscvCore::raise_illegal_instruction(Registers &regs, uint64_t tval)
+{
+	// pc still sits on the offending instruction (a disabled/unknown
+	// encoding is never executed, so nothing advanced it), which is exactly
+	// what the trap should record as the return address.
+	enter_trap(regs, CAUSE_ILLEGAL_INSN, tval);
 }
 
 void RiscvCore::enter_trap(Registers &regs, uint64_t cause, uint64_t tval, bool is_interrupt)

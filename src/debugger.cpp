@@ -45,12 +45,31 @@ bool Debugger::should_halt(uint64_t pc, bool instr_was_illegal)
 		return true;
 	}
 
+	// A breakpoint the user has just resumed from is ignored while the pc is
+	// still sitting on it, and re-arms as soon as execution moves on -- so
+	// the same breakpoint fires again next time it is genuinely reached.
+	//
+	// Disarming has to key off the pc changing rather than off first use:
+	// DoomSystem::step() calls this twice for the same instruction (once
+	// before the fetch, once after the decode), so a one-shot skip would be
+	// spent by the first call and the second would re-freeze immediately,
+	// leaving the breakpoint impossible to get past.
+	if (skip_bp_armed && pc != skip_bp_pc) skip_bp_armed = false;
+	if (skip_bp_armed) return false;
+
 	if (std::find(breakpoints.begin(), breakpoints.end(), pc) != breakpoints.end()) {
 		halted = true;
 		return true;
 	}
 
 	return false;
+}
+
+void Debugger::resume(uint64_t pc)
+{
+	skip_bp_pc = pc;
+	skip_bp_armed = true;
+	halted = false;
 }
 
 void Debugger::dump_log(const Registers &regs, Memory &mem, const char *path)

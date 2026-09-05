@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <cstring>
 #include <fstream>
+#include <chrono>
 #include <thread>
 #include <vector>
 
@@ -197,6 +198,13 @@ void DoomSystem::step()
 	regs.record_history(pc, recorded_instr, result.decoded);
 
 	if (debugger.should_halt(pc, result.illegal)) {
+		if (result.illegal) {
+			// Remember what to raise on resume. recorded_instr is the
+			// encoding as actually fetched (masked to 16 bits for a
+			// compressed one), which is what the spec wants in [ms]tval.
+			pending_illegal = true;
+			pending_illegal_tval = recorded_instr;
+		}
 		debugger.dump_log(regs, memory, "crash.log");
 		if (has_sig_range) debugger.dump_signature(memory, sig_begin, sig_end, sig_path.c_str());
 	}
@@ -233,15 +241,41 @@ void DoomSystem::publish_snapshot()
 	shared_snapshot = std::move(snap);
 }
 
+void DoomSystem::resume_from_halt()
+{
+	uint64_t pc = regs.get_pc();
+	if (pending_illegal) {
+		pending_illegal = false;
+		core.raise_illegal_instruction(regs, pending_illegal_tval);
+		// pc is now the trap handler, so there is no breakpoint to skip.
+		debugger.halted = false;
+		return;
+	}
+	debugger.resume(pc);
+}
+
 void DoomSystem::cpu_loop()
 {
 	while (true) {
+		if (debugger.halted) {
+			if (resume_requested.exchange(false)) {
+				resume_from_halt();
+			} else {
+				// Keep publishing so the dashboard stays live while paused,
+				// but do not spin a 200k-iteration burst doing nothing.
+				publish_snapshot();
+				std::this_thread::sleep_for(std::chrono::milliseconds(10));
+				continue;
+			}
+		}
+
 		// Bigger burst = more actual emulated work per snapshot-publish
 		// overhead, since that overhead doesn't scale with burst size --
 		// this raises total instructions/sec even though it lowers how
 		// often the dashboard updates.
 		for (int i = 0; i < 200000; i++) {
-			if (!debugger.halted) step();
+			if (debugger.halted) break;
+			step();
 		}
 		publish_snapshot();
 	}
@@ -260,6 +294,12 @@ void DoomSystem::run()
 
 	while (true) {
 		for (const RawKeyEvent &ev : gui.poll_input()) {
+			// Intercepted before either mode forwards anything to the guest,
+			// so the resume key is never seen as Doom input or console input.
+			if (ev.pressed && ev.sdl_keysym == SDLK_F9) {
+				resume_requested = true;
+				continue;
+			}
 			if (linux_mode) {
 				// One byte per keypress, not per press+release -- unlike
 				// Doom's own key_queue (which needs up/down edges for

@@ -23,6 +23,13 @@ public:
 
 	bool halted;
 
+	// Clears `halted` and arms a one-shot skip for `pc`. Without the skip a
+	// breakpoint could never be resumed past: pc still sits on it, so the
+	// very next should_halt() would match again and re-freeze immediately.
+	void resume(uint64_t pc);
+
 private:
 	std::vector<uint64_t> breakpoints;
+	uint64_t skip_bp_pc = 0;
+	bool skip_bp_armed = false;
 };
