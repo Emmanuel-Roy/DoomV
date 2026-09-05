@@ -101,11 +101,19 @@ LAYOUT_TRAP = [
     (2, "still running afterwards"),
 ]
 
+LAYOUT_RESTART = [
+    (2, "vstart seen by the handler (must be 8)"),
+    (2, "fault count (must be exactly 1)"),
+    (2, "vstart after completion (must be 0)"),
+    (4, "v1: both halves, across the restart"),
+]
+
 LAYOUTS = {
     "vtest_v": LAYOUT_V,
     "vtest_zb": LAYOUT_ZB,
     "vtest_mmu": LAYOUT_MMU,
     "vtest_trap": LAYOUT_TRAP,
+    "vtest_restart": LAYOUT_RESTART,
 }
 
 
