@@ -3,14 +3,15 @@
 // identically since this emulator is single-threaded so element ordering
 // never observably matters), all with segment (nf) support.
 //
-// Fault-only-first is still just treated like a normal unit-stride load --
-// implementing its actual point (let a load past the first element
-// terminate early and shrink vl instead of trapping) would need knowing a
-// fault is *about to* happen without taking it, which the current
-// translate-and-trap-immediately plumbing doesn't distinguish. Since a
-// spurious page fault where FOF would have quietly shrunk vl is strictly
-// more correct than this emulator's old "no MMU exists" behavior, this is
-// a known gap, not a regression.
+// Fault-only-first is implemented: a fault on any element after the first
+// trims vl to that index and completes the instruction rather than
+// trapping. This needs to know a fault is *about to* happen without taking
+// it, which translate_or_trap cannot express -- mmu_translate reports the
+// fault instead of entering it, and that is the distinction the FOF path
+// uses. Only the non-faulting case is covered by tools/vtest/vector, since
+// making an access fault on purpose needs Sv39 paging set up inside the
+// test; the faulting path is exercised in practice by glibc's strlen,
+// which is the reason the encoding exists.
 //
 // Precise mid-instruction fault behavior (per spec, vstart should land
 // exactly on the faulting element for a possible restart) isn't
@@ -126,14 +127,25 @@ bool exec_v_ldst(const DecodedInstruction &instr, Registers &regs, Memory &mem, 
 	int emul_den = vt.lmul_den * sew;
 	int span = (emul_num > emul_den) ? (emul_num / emul_den) : 1; // physical registers per segment field
 
-	// See the file header: a fault mid-instruction just stops any further
-	// memory access for the remaining elements rather than precisely
+	// Fault-only-first (vle<eew>ff.v): a unit-stride load with lumop=0x10.
+	// Element 0 faults like any other access, but a fault on any later
+	// element must NOT trap -- the instruction instead completes with vl
+	// trimmed to that element index, leaving everything already loaded in
+	// place. That is the whole point of the encoding: it lets strlen-style
+	// code read a vector's worth of bytes without knowing whether the tail
+	// crosses into an unmapped page.
+	bool is_fof = is_load && mop == 0b00 && lumop == 0x10;
+	bool fof_trimmed = false;
+	uint64_t fof_vl = vl;
+
+	// A genuine fault (element 0, or any non-FOF access) still stops any
+	// further memory access for the remaining elements rather than precisely
 	// trimming vl/vstart. `faulted` short-circuits every remaining call of
 	// the lambda below rather than actually breaking the loop, since
 	// for_each_active always runs it to completion.
 	bool faulted = false;
 	for_each_active(regs, vm, vl, [&](uint64_t i) {
-		if (faulted) return;
+		if (faulted || fof_trimmed) return;
 		uint64_t seg_addr;
 		if (mop == 0b10) { // strided: rs2 is a signed byte stride
 			int64_t stride = (int64_t)regs.read_x(instr.rs2);
@@ -149,11 +161,29 @@ bool exec_v_ldst(const DecodedInstruction &instr, Registers &regs, Memory &mem, 
 			uint64_t field_addr = seg_addr + (uint64_t)f * (uint64_t)(data_eew / 8);
 			int reg_base = instr.rd + f * span;
 			uint64_t paddr;
-			if (!core.translate_or_trap(regs, mem, field_addr, access, paddr)) { faulted = true; return; }
+			if (is_fof && i > 0) {
+				// Probe without trapping: mmu_translate reports the fault
+				// instead of taking it, which is exactly the distinction FOF
+				// needs and the reason this cannot just call translate_or_trap.
+				uint64_t cause, tval;
+				if (!mmu_translate(regs, mem, field_addr, access, paddr, cause, tval)) {
+					fof_vl = i;
+					fof_trimmed = true;
+					return;
+				}
+			} else if (!core.translate_or_trap(regs, mem, field_addr, access, paddr)) {
+				faulted = true;
+				return;
+			}
 			if (is_load) write_velem(regs, reg_base, data_eew, i, ld_eew(mem, paddr, data_eew));
 			else st_eew(mem, paddr, data_eew, read_velem(regs, reg_base, data_eew, i));
 		}
 	});
+
+	// vstart is left at 0 (the instruction completed); only vl shrinks, so
+	// the following vsetvli-free code sees exactly the elements that were
+	// actually loaded.
+	if (fof_trimmed) regs.set_vl(fof_vl);
 	return !faulted;
 }
 
