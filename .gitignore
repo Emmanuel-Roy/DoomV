@@ -34,3 +34,8 @@ tools/linux/vmlinux
 # BusyBox initramfs build output -- also extensionless-adjacent
 # (.cpio isn't covered by *.bin/*.elf above).
 tools/rootfs/initramfs.cpio
+
+# Signature dump written by -sig= (arch-test / vector differential runs).
+# Hardcoded to this name relative to DoomV's cwd, so it lands at the repo
+# root whenever a test is run from here.
+signature.log
