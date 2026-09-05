@@ -178,13 +178,13 @@ DecodedInstruction Decoder::decode(uint32_t raw_instr, Extension ext) const
 		return decode_zicsr(raw_instr);
 	case 0b0000111: // LOAD-FP / vector load -- ext (already split by classify()) picks the side
 	case 0b0100111: // STORE-FP / vector store
-		return (ext == Extension::V) ? decode_v(raw_instr) : decode_fd(raw_instr, ext);
+		return (ext == Extension::V) ? decode_v(raw_instr) : ((ext == Extension::D) ? decode_d(raw_instr) : decode_f(raw_instr));
 	case 0b1000011: // FMADD
 	case 0b1000111: // FMSUB
 	case 0b1001011: // FNMSUB
 	case 0b1001111: // FNMADD
 	case 0b1010011: // OP-FP
-		return decode_fd(raw_instr, ext);
+		return ((ext == Extension::D) ? decode_d(raw_instr) : decode_f(raw_instr));
 	case 0b1010111: // OP-V
 		return decode_v(raw_instr);
 	case 0b0110011: // OP
@@ -283,8 +283,10 @@ DispatchResult Decoder::decode_and_dispatch(uint64_t pc, uint32_t raw_word)
 		core.exec_ZIFENCEI(instr, regs, mem);
 		break;
 	case Extension::F:
+		core.exec_F(instr, regs, mem);
+		break;
 	case Extension::D:
-		core.exec_FD(instr, regs, mem);
+		core.exec_D(instr, regs, mem);
 		break;
 	case Extension::ZBA:
 		core.exec_ZBA(instr, regs, mem);

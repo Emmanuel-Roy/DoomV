@@ -70,7 +70,8 @@ private:
 	DecodedInstruction decode_m(uint32_t raw_instr) const;
 	DecodedInstruction decode_a(uint32_t raw_instr) const;
 	DecodedInstruction decode_zicsr(uint32_t raw_instr) const;
-	DecodedInstruction decode_fd(uint32_t raw_instr, Extension ext) const;
+	DecodedInstruction decode_f(uint32_t raw_instr) const;
+	DecodedInstruction decode_d(uint32_t raw_instr) const;
 	DecodedInstruction decode_v(uint32_t raw_instr) const;
 	DecodedInstruction decode_zba(uint32_t raw_instr) const;
 	DecodedInstruction decode_zbb(uint32_t raw_instr) const;

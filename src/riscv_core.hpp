@@ -23,7 +23,8 @@ public:
 	void exec_32M(const DecodedInstruction &instr, Registers &regs, Memory &mem);
 	void exec_32A(const DecodedInstruction &instr, Registers &regs, Memory &mem);
 	void exec_32ZICSR(const DecodedInstruction &instr, Registers &regs, Memory &mem);
-	void exec_FD(const DecodedInstruction &instr, Registers &regs, Memory &mem);
+	void exec_F(const DecodedInstruction &instr, Registers &regs, Memory &mem);
+	void exec_D(const DecodedInstruction &instr, Registers &regs, Memory &mem);
 	void exec_V(const DecodedInstruction &instr, Registers &regs, Memory &mem);
 	void exec_ZBA(const DecodedInstruction &instr, Registers &regs, Memory &mem);
 	void exec_ZBB(const DecodedInstruction &instr, Registers &regs, Memory &mem);
