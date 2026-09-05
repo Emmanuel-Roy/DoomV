@@ -21,6 +21,14 @@ struct ExtensionConfig {
 	bool F = true;
 	bool D = true;
 	bool V = false; // off by default like the rest -- opt in with -march=...v
+	// Zba/Zbb/Zbs default ON, unlike V. Bare-metal Doom never emits them,
+	// but every modern riscv64 Linux userspace assumes them (the RVA23
+	// profile mandates all three), so defaulting them off would just mean
+	// every distro binary halts on its first sh*add.
+	bool ZBA = true;
+	bool ZBB = true;
+	bool ZBS = true;
+	bool ZICOND = true; // czero.eqz/czero.nez -- RVA23 again, same reason as Zb*
 
 	// Base ISA width, not an optional extension. Registers/Memory always
 	// store values in 64-bit containers regardless of this flag: RV32

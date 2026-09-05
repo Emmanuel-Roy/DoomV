@@ -5,6 +5,8 @@ void parse_march(const std::string &march)
 	Extensions.I = true; // base integer ISA is implied by any march string
 	Extensions.M = Extensions.A = Extensions.C = Extensions.F = Extensions.D
 	             = Extensions.ZICSR = Extensions.ZIFENCEI = Extensions.V = false;
+	Extensions.ZBA = Extensions.ZBB = Extensions.ZBS = false;
+	Extensions.ZICOND = false;
 
 	size_t pos = 0;
 	if (march.rfind("rv64", 0) == 0) { Extensions.XLEN64 = true; pos = 4; }
@@ -29,6 +31,12 @@ void parse_march(const std::string &march)
 
 	if (march.find("zicsr") != std::string::npos) Extensions.ZICSR = true;
 	if (march.find("zifencei") != std::string::npos) Extensions.ZIFENCEI = true;
+	if (march.find("zba") != std::string::npos) Extensions.ZBA = true;
+	if (march.find("zbb") != std::string::npos) Extensions.ZBB = true;
+	if (march.find("zbs") != std::string::npos) Extensions.ZBS = true;
+	if (march.find("zicond") != std::string::npos) Extensions.ZICOND = true;
+	// "b" is the umbrella name for Zba+Zbb+Zbs (the ratified B extension).
+	for (char c : base) if (c == 'b') { Extensions.ZBA = Extensions.ZBB = Extensions.ZBS = true; }
 
 	// D without F is a spec violation (D always implies F) -- rather than
 	// silently misbehave on the FCVT.S.D/FCVT.D.S instructions that need

@@ -12,6 +12,10 @@ enum class Extension {
 	F,
 	D,
 	V,
+	ZBA,
+	ZBB,
+	ZBS,
+	ZICOND,
 	ILLEGAL,
 };
 
@@ -68,6 +72,7 @@ private:
 	DecodedInstruction decode_zicsr(uint32_t raw_instr) const;
 	DecodedInstruction decode_fd(uint32_t raw_instr, Extension ext) const;
 	DecodedInstruction decode_v(uint32_t raw_instr) const;
+	DecodedInstruction decode_zb(uint32_t raw_instr, Extension ext) const;
 
 	// Compressed (RVC) instructions are entirely an encoding-space trick --
 	// every one of them is defined as an alias for some standard 32-bit

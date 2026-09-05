@@ -12,7 +12,7 @@ SRCS = src/main.cpp src/doom_system.cpp src/memory.cpp src/registers.cpp \
        src/debugger.cpp src/gui.cpp \
        src/controls.cpp src/extensions.cpp \
        src/extensions/ext_i.cpp src/extensions/ext_m.cpp src/extensions/ext_a.cpp \
-       src/extensions/ext_c.cpp src/extensions/ext_zicsr.cpp src/extensions/ext_fd.cpp \
+       src/extensions/ext_c.cpp src/extensions/ext_zb.cpp src/extensions/ext_zicsr.cpp src/extensions/ext_fd.cpp \
        src/extensions/ext_v.cpp src/extensions/ext_v_config.cpp src/extensions/ext_v_ldst.cpp \
        src/extensions/ext_v_int.cpp src/extensions/ext_v_muldiv.cpp src/extensions/ext_v_mask.cpp \
        src/extensions/ext_v_perm.cpp src/extensions/ext_v_reduce.cpp src/extensions/ext_v_fp.cpp
