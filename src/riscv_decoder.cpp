@@ -183,10 +183,27 @@ Extension Decoder::classify(uint32_t raw_instr) const
 	case 0b1001011: // FNMSUB
 	case 0b1001111: // FNMADD -- funct2 (bits 26:25) splits single/double, same as OP-FP's funct7 bit0
 		return (((raw_instr >> 25) & 0x3) == 0b01) ? Extension::D : Extension::F;
-	case 0b1010011: // OP-FP: almost every op's funct7 has single at an even value, double at +1 --
+	case 0b1010011: { // OP-FP: almost every op's funct7 has single at an even value, double at +1 --
 		// except FCVT.S.D/FCVT.D.S (0x20/0x21), which the spec lists under D since both widths are involved.
+		//
+		// Zfa shares five funct7 values with F/D and is separated by a
+		// secondary field in each case, so it has to be checked first --
+		// otherwise fli lands on FMV.W.X, fminm on FMIN, and so on.
+		uint8_t f3 = (raw_instr >> 12) & 0x07;
+		uint8_t rs2 = (raw_instr >> 20) & 0x1F;
+		if (Extensions.ZFA) {
+			switch (funct7) {
+			case 0x78: case 0x79: if (rs2 == 1) return Extension::ZFA; break;         // fli
+			case 0x14: case 0x15: if (f3 == 2 || f3 == 3) return Extension::ZFA; break; // fminm/fmaxm
+			case 0x20: case 0x21: if (rs2 == 4 || rs2 == 5) return Extension::ZFA; break; // fround/froundnx
+			case 0x61: if (rs2 == 8) return Extension::ZFA; break;                    // fcvtmod.w.d
+			case 0x50: case 0x51: if (f3 == 4 || f3 == 5) return Extension::ZFA; break; // fleq/fltq
+			default: break;
+			}
+		}
 		if (funct7 == 0b0100000 || funct7 == 0b0100001) return Extension::D;
 		return (funct7 & 0x1) ? Extension::D : Extension::F;
+	}
 	case 0b1010111: // OP-V: vector arithmetic and vset{i}vl{i} -- its own opcode, no sharing/collision
 		return Extension::V;
 	default:
@@ -223,6 +240,7 @@ DecodedInstruction Decoder::decode(uint32_t raw_instr, Extension ext) const
 	case 0b1001011: // FNMSUB
 	case 0b1001111: // FNMADD
 	case 0b1010011: // OP-FP
+		if (ext == Extension::ZFA) return decode_zfa(raw_instr);
 		return ((ext == Extension::D) ? decode_d(raw_instr) : decode_f(raw_instr));
 	case 0b1010111: // OP-V
 		return decode_v(raw_instr);
@@ -294,7 +312,8 @@ DispatchResult Decoder::decode_and_dispatch(uint64_t pc, uint32_t raw_word)
 		       || (instr.ext == Extension::ZICBOM && Extensions.ZICBOM)
 		       || (instr.ext == Extension::ZICBOP && Extensions.ZICBOP)
 		       || (instr.ext == Extension::ZICBOZ && Extensions.ZICBOZ)
-		       || (instr.ext == Extension::ZAWRS && Extensions.ZAWRS);
+		       || (instr.ext == Extension::ZAWRS && Extensions.ZAWRS)
+		       || (instr.ext == Extension::ZFA && Extensions.ZFA);
 
 		entry = {true, pc, tag, instr, enabled};
 	}
@@ -310,7 +329,8 @@ DispatchResult Decoder::decode_and_dispatch(uint64_t pc, uint32_t raw_word)
 	if (instr.ext == Extension::V && !vcommon::vector_unit_enabled(regs)) {
 		return {true, instr};
 	}
-	if ((instr.ext == Extension::F || instr.ext == Extension::D) && !vcommon::fp_unit_enabled(regs)) {
+	if ((instr.ext == Extension::F || instr.ext == Extension::D || instr.ext == Extension::ZFA)
+	    && !vcommon::fp_unit_enabled(regs)) {
 		return {true, instr};
 	}
 
@@ -372,6 +392,9 @@ DispatchResult Decoder::decode_and_dispatch(uint64_t pc, uint32_t raw_word)
 		break;
 	case Extension::ZAWRS:
 		core.exec_ZAWRS(instr, regs, mem);
+		break;
+	case Extension::ZFA:
+		core.exec_ZFA(instr, regs, mem);
 		break;
 	case Extension::V:
 		core.exec_V(instr, regs, mem);

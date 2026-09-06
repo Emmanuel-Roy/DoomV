@@ -19,6 +19,7 @@ SRCS = src/main.cpp src/doom_system.cpp src/memory.cpp src/registers.cpp \
        src/extensions/ext_zicbom.cpp src/extensions/ext_zicbop.cpp \
        src/extensions/ext_zicboz.cpp src/extensions/ext_zawrs.cpp \
        src/extensions/ext_zicntr.cpp \
+       src/extensions/ext_zfa.cpp \
        src/extensions/ext_zifencei.cpp src/extensions/ext_zvbb.cpp src/extensions/ext_zicsr.cpp src/extensions/ext_f.cpp src/extensions/ext_d.cpp \
        src/extensions/ext_v.cpp src/extensions/ext_v_config.cpp src/extensions/ext_v_ldst.cpp \
        src/extensions/ext_v_int.cpp src/extensions/ext_v_muldiv.cpp src/extensions/ext_v_mask.cpp \

@@ -9,7 +9,7 @@ void parse_march(const std::string &march)
 	Extensions.ZICOND = false;
 	Extensions.ZIHINTPAUSE = Extensions.ZIHINTNTL = Extensions.ZIMOP = Extensions.ZCMOP = false;
 	Extensions.ZICBOM = Extensions.ZICBOP = false;
-	Extensions.ZICBOZ = Extensions.ZAWRS = false;
+	Extensions.ZICBOZ = Extensions.ZAWRS = Extensions.ZFA = false;
 
 	size_t pos = 0;
 	if (march.rfind("rv64", 0) == 0) { Extensions.XLEN64 = true; pos = 4; }
@@ -46,6 +46,7 @@ void parse_march(const std::string &march)
 	if (march.find("zicbop") != std::string::npos) Extensions.ZICBOP = true;
 	if (march.find("zicboz") != std::string::npos) Extensions.ZICBOZ = true;
 	if (march.find("zawrs") != std::string::npos) Extensions.ZAWRS = true;
+	if (march.find("zfa") != std::string::npos) Extensions.ZFA = true;
 	// "b" is the umbrella name for Zba+Zbb+Zbs (the ratified B extension).
 	for (char c : base) if (c == 'b') { Extensions.ZBA = Extensions.ZBB = Extensions.ZBS = true; }
 
@@ -56,6 +57,8 @@ void parse_march(const std::string &march)
 	// the same reserved-but-defined idea in 16 bits, and no toolchain emits
 	// one space without the other.
 	if (Extensions.ZCMOP) Extensions.ZIMOP = true;
+
+	if (Extensions.ZFA) Extensions.D = true; // fli.d/fminm.d/fcvtmod.w.d need double
 
 	if (Extensions.D) Extensions.F = true;
 

@@ -49,6 +49,7 @@ opt-in since it's not needed to boot Doom itself.
 | Zawrs (`wrs.nto`/`wrs.sto`) | ✅ (retires immediately) |
 | Zicntr (`cycle`/`time`/`instret`) | ✅ |
 | Zihpm (`hpmcounter3-31`) | ✅ (read as zero) |
+| Zfa (additional FP) | ✅ |
 
 The bitmanip families and `Zicond` are on by default despite Doom never
 emitting them: every modern riscv64 Linux userspace assumes them, so
@@ -83,6 +84,18 @@ and `instret` all read the same counter — an interpreter that retires one
 instruction per step has `cycle == instret` by construction. `hpmcounter3`
 through `hpmcounter31` read as zero, which the spec permits and which is
 the honest answer for a machine that counts no events.
+
+Zfa is mostly not new arithmetic — it is arithmetic that differs from an
+existing instruction only in a corner, which is what makes it worth testing
+carefully. `fminm`/`fmaxm` return a canonical NaN when *either* operand is
+NaN, where `FMIN`/`FMAX` return the other operand; `fleq`/`fltq` return the
+same value as `FLE`/`FLT` for every input and differ only in which NaNs
+raise invalid; and `fcvtmod.w.d` wraps modulo 2³² where every other
+float-to-int conversion saturates. Adding it surfaced a latent bug in the
+base F and D extensions, where `FMIN`/`FMAX`/`FEQ` raised invalid for a
+quiet NaN when the spec reserves that for a signalling one — a documented
+simplification that was harmless for results and wrong for flags, and that
+the accrued-flags-only test could not see.
 
 CSR accesses are privilege-checked: writing a read-only CSR, or touching
 one above the current privilege level, raises an illegal instruction, and

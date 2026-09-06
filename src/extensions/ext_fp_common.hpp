@@ -166,16 +166,42 @@ T fp_fma(T a, T b, T c, uint8_t rm, Registers &regs)
 	return r;
 }
 
-// FEQ/FLT/FLE: a NaN operand compares false and sets NV. Spec actually
-// distinguishes signaling from quiet NaN (only signaling NaN forces NV
-// for FEQ; both do for FLT/FLE) -- simplified here to "any NaN sets NV",
-// which can set the flag slightly more often than strict compliance but
-// never changes the returned comparison result.
+// A NaN is signalling when the MSB of its significand is clear. Which NaNs
+// raise invalid is not a detail: it is the only thing separating FEQ from
+// FLT/FLE, and Zfa's fleq/fltq from those again.
+inline bool is_snan_f32(float f)
+{
+	uint32_t b = bits_from_f32(f);
+	return ((b & 0x7F800000u) == 0x7F800000u) && (b & 0x007FFFFFu) && !(b & 0x00400000u);
+}
+
+inline bool is_snan_f64(double d)
+{
+	uint64_t b = bits_from_f64(d);
+	return ((b & 0x7FF0000000000000ull) == 0x7FF0000000000000ull)
+	    && (b & 0x000FFFFFFFFFFFFFull) && !(b & 0x0008000000000000ull);
+}
+
+template <typename T> bool is_snan(T v);
+template <> inline bool is_snan<float>(float v)   { return is_snan_f32(v); }
+template <> inline bool is_snan<double>(double v) { return is_snan_f64(v); }
+
+// FEQ/FLT/FLE: a NaN operand compares false, but which NaNs set NV differs
+// between them -- FEQ is a quiet comparison and raises only for a signalling
+// NaN, while FLT/FLE are signalling comparisons and raise for any NaN.
+//
+// This used to be simplified to "any NaN sets NV" on the grounds that it
+// never changes the returned value. True, and still misleading: the flag
+// *is* the observable difference between FEQ and FLT, and between both and
+// Zfa's fleq/fltq. A differential test dumping fflags per operation catches
+// it at once; the one dumping only accrued flags at the end did not, because
+// other instructions in the same test set NV legitimately and masked it.
 template <typename T>
 uint64_t fcompare(T a, T b, uint8_t funct3, Registers &regs)
 {
 	if (std::isnan(a) || std::isnan(b)) {
-		regs.or_fflags(0x10);
+		bool quiet_form = (funct3 == 0b010); // FEQ
+		if (!quiet_form || is_snan(a) || is_snan(b)) regs.or_fflags(0x10);
 		return 0;
 	}
 	switch (funct3) {
@@ -186,12 +212,14 @@ uint64_t fcompare(T a, T b, uint8_t funct3, Registers &regs)
 }
 
 // FMIN/FMAX: canonical NaN if both inputs are NaN, the non-NaN operand if
-// only one is -- std::fmin/fmax already implement exactly that. Same NaN-
-// signaling simplification as fcompare above.
+// only one is -- std::fmin/fmax already implement exactly that.
+//
+// Only a signalling NaN raises invalid here. A quiet NaN operand is the
+// ordinary, non-exceptional case these instructions are built around.
 template <typename T>
 T fminmax(T a, T b, bool is_max, Registers &regs)
 {
-	if (std::isnan(a) || std::isnan(b)) regs.or_fflags(0x10);
+	if (is_snan(a) || is_snan(b)) regs.or_fflags(0x10);
 	if (std::isnan(a) && std::isnan(b)) return canonical_nan<T>();
 
 	// Zeros of opposite sign compare equal, so std::fmin/fmax are free to

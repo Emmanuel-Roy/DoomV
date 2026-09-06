@@ -54,6 +54,10 @@ struct ExtensionConfig {
 	// and which is the only implementation that terminates on one hart.
 	bool ZICBOZ = true;
 	bool ZAWRS = true;
+	// Zfa is real FP arithmetic, not a hint: fli materialises constants,
+	// fminm/fmaxm differ from FMIN/FMAX on NaN, and fleq/fltq differ from
+	// FLE/FLT only in which NaNs raise invalid.
+	bool ZFA = true;
 
 	// Base ISA width, not an optional extension. Registers/Memory always
 	// store values in 64-bit containers regardless of this flag: RV32

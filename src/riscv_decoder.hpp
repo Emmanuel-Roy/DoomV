@@ -24,6 +24,7 @@ enum class Extension {
 	ZICBOP,
 	ZICBOZ,
 	ZAWRS,
+	ZFA,
 	ILLEGAL,
 };
 
@@ -95,6 +96,7 @@ private:
 	DecodedInstruction decode_zicbom(uint32_t raw_instr) const;
 	DecodedInstruction decode_zicbop(uint32_t raw_instr) const;
 	DecodedInstruction decode_zicboz(uint32_t raw_instr) const;
+	DecodedInstruction decode_zfa(uint32_t raw_instr) const;
 	// Zawrs has no decode_* of its own: wrs.nto/wrs.sto share SYSTEM
 	// funct3=000 with ECALL/EBREAK/xRET/WFI and are separated by their
 	// immediate, inside ext_zicsr.cpp's decode and exec switches.
