@@ -622,6 +622,42 @@ LAYOUT_HGATP = [(2, n) for n in [
     "guest paging off: no fault (0)",
 ]]
 
+# Guest trap delegation. medeleg sends a trap from M to HS; hedeleg sends
+# it one step further, to the guest's own handler -- which is what lets a
+# guest kernel service its own traps without the hypervisor mediating.
+#
+# The ebreak pair is the delegation case proper: the same trap from the same
+# instruction with only the hedeleg bit differing, so the destination is the
+# only variable.
+#
+# The ecall stages show the opposite, and were originally written expecting
+# delegation to work. It does not: hedeleg bit 10 is read-only zero, because
+# an ecall from VS-mode is how a guest calls its hypervisor and delegating
+# it back would leave the guest unable to call out at all. The same applies
+# to the guest-page-fault causes and to virtual instructions. Setting the
+# bit and observing that nothing changes is the check.
+#
+# The untouched-register entries are the containment half: a delegated guest
+# trap must not disturb the hypervisor's own sepc/scause.
+LAYOUT_HDELEG = [(2, n) for n in [
+    "hedeleg=0: hypervisor trap count (1)",
+    "hedeleg=0: hypervisor cause (10 = ecall from VS)",
+    "hedeleg=0: guest's vsepc untouched",
+    "hedeleg=0: guest handler never ran (0)",
+    "hedeleg bit 10 SET: guest handler still does not run (0)",
+    "hedeleg bit 10 SET: guest cause unchanged (0)",
+    "hedeleg bit 10 SET: hypervisor gets it anyway (1)",
+    "hedeleg bit 10 SET: hypervisor's sepc",
+    "hedeleg bit 10 SET: hypervisor's scause (10 -- bit is read-only zero)",
+    "ebreak delegated: guest handled it (1)",
+    "ebreak delegated: guest cause (3)",
+    "ebreak delegated: hypervisor saw nothing (0)",
+    "ebreak delegated: guest's vsepc points at its own ebreak",
+    "ebreak undelegated: hypervisor got it (1)",
+    "ebreak undelegated: cause (3)",
+    "ebreak undelegated: guest handler never ran (0)",
+]]
+
 LAYOUTS = {
     "vtest_v": LAYOUT_V,
     "vtest_zb": LAYOUT_ZB,
@@ -640,6 +676,7 @@ LAYOUTS = {
     "vtest_h": LAYOUT_H,
     "vtest_hlv": LAYOUT_HLV,
     "vtest_hgatp": LAYOUT_HGATP,
+    "vtest_hdeleg": LAYOUT_HDELEG,
 }
 
 

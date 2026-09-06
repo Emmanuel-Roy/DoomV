@@ -443,6 +443,43 @@ void RiscvCore::enter_trap(Registers &regs, uint64_t cause, uint64_t tval, bool 
 	// hypervisor's privilege level still running the guest's code.
 	bool was_virt = Extensions.H && regs.get_virt();
 
+	// A trap from a guest can be delegated one step further. medeleg sends
+	// it from M down to HS; hedeleg sends it from HS down to the guest's
+	// own handler, so the guest kernel services its own page faults and
+	// system calls without the hypervisor being involved at all. That is
+	// what makes virtualisation cheap -- a hypervisor that had to mediate
+	// every guest syscall would be unusable.
+	//
+	// Both levels have to agree: a cause the hypervisor has not delegated
+	// stays with the hypervisor even if the guest would like it.
+	uint64_t hdeleg = is_interrupt ? regs.read_csr(0x603)  // hideleg
+	                               : regs.read_csr(0x602); // hedeleg
+	bool to_vs = to_s && was_virt && (hdeleg & (1ull << cause_bit));
+
+	if (to_vs) {
+		// The guest's own trap registers, not the hypervisor's. These are
+		// the vs* shadows -- which is also what the guest would reach by
+		// their S-mode names, so from inside the guest this is
+		// indistinguishable from taking a trap on real hardware.
+		regs.write_csr(0x241, pc);    // vsepc
+		regs.write_csr(0x242, cause); // vscause
+		regs.write_csr(0x243, tval);  // vstval
+
+		// Interrupt-enable stacking happens in vsstatus, the guest's own
+		// sstatus. Using the real sstatus here would corrupt the
+		// hypervisor's interrupt state on every guest trap.
+		uint64_t vsstatus = regs.read_csr(0x200);
+		vsstatus = (vsstatus & MSTATUS_SIE) ? (vsstatus | MSTATUS_SPIE) : (vsstatus & ~MSTATUS_SPIE);
+		vsstatus &= ~MSTATUS_SIE;
+		vsstatus = (from == PrivMode::S) ? (vsstatus | MSTATUS_SPP) : (vsstatus & ~MSTATUS_SPP);
+		regs.write_csr(0x200, vsstatus);
+
+		// The hart stays virtual: this trap never left the guest.
+		regs.set_priv(PrivMode::S);
+		regs.set_pc(regs.read_csr(0x205) & ~0x3ull); // vstvec
+		return;
+	}
+
 	if (to_s) {
 		regs.write_csr(CSR_SEPC, pc);
 		regs.write_csr(CSR_SCAUSE, cause);
@@ -455,6 +492,15 @@ void RiscvCore::enter_trap(Registers &regs, uint64_t cause, uint64_t tval, bool 
 		regs.write_csr(CSR_MSTATUS, mstatus);
 
 		if (Extensions.H) {
+			// htval is written by the MMU itself when a second-stage
+			// walk fails -- it is the only code that knows the guest
+			// physical address, and stval must keep the guest virtual
+			// one. Here it is only cleared for the causes that have no
+			// second-stage address to report, so a stale value from an
+			// earlier fault cannot be mistaken for a fresh one.
+			if (cause != 20 && cause != 21 && cause != 23)
+				regs.write_csr(0x643, 0);
+
 			// A trap from a guest into HS-mode leaves virtual mode.
 			// SPVP records the guest's own privilege, so the
 			// hypervisor can tell it interrupted VS rather than VU.
@@ -706,6 +752,36 @@ void RiscvCore::exec_32ZICSR(const DecodedInstruction &instr, Registers &regs, M
 	// since VS redirection has already rewritten the number by this point
 	// -- the guest's write arrives here as 0x205, not 0x105.
 	if (csr == CSR_STVEC || csr == CSR_MTVEC || csr == 0x205) updated &= ~0x3ull;
+
+	// hedeleg has read-only-zero bits, and they are not an arbitrary
+	// restriction -- each one names a trap the hypervisor must keep.
+	//
+	//   10  ECALL from VS-mode. This *is* how a guest calls its
+	//       hypervisor. Delegating it back to the guest would leave the
+	//       guest unable to call out at all.
+	//   20  instruction guest-page fault
+	//   21  load guest-page fault
+	//   23  store/AMO guest-page fault
+	//       All three mean the second stage refused, which is the
+	//       hypervisor's own mapping failing -- the guest cannot fix what
+	//       it cannot see.
+	//   22  virtual instruction. Raised precisely because the guest
+	//       attempted something only the hypervisor may do; handing it to
+	//       the guest would defeat the purpose.
+	if (Extensions.H && csr == 0x602) {
+		constexpr uint64_t HEDELEG_RO_ZERO =
+			(1ull << 10) | (1ull << 20) | (1ull << 21) | (1ull << 22) | (1ull << 23);
+		updated &= ~HEDELEG_RO_ZERO;
+	}
+
+	// hideleg can only delegate the three VS-level interrupts. The
+	// hypervisor's own supervisor interrupts are not the guest's to take,
+	// and there is no meaning to delegating an M-level one downward twice.
+	if (Extensions.H && csr == 0x603) {
+		constexpr uint64_t HIDELEG_WMASK =
+			(1ull << 2) | (1ull << 6) | (1ull << 10); // VSSIP, VSTIP, VSEIP
+		updated &= HIDELEG_WMASK;
+	}
 
 	if (csr == 0x100) write_sstatus(regs, updated);
 	else if (Extensions.H && csr == hyp::CSR_HSTATUS_ADDR) hyp::write_hstatus(regs, updated);

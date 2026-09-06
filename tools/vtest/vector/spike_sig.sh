@@ -36,6 +36,8 @@ case "$TEST" in
             ISA=rv64gcv_zvl128b_zicsr_zifencei ;;
   vtest_trap) MARCH=rv64gcv
             ISA=rv64gcv_zvl128b_zicsr_zifencei ;;
+  vtest_hdeleg) MARCH=rv64gch
+            ISA=rv64gch_zicsr_zifencei ;;
   vtest_hgatp) MARCH=rv64gch
             ISA=rv64gch_zicsr_zifencei ;;
   vtest_hlv) MARCH=rv64gch
