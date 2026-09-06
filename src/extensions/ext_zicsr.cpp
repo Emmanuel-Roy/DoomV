@@ -1,0 +1,2396 @@
+// Zicsr extension: ECALL/EBREAK/MRET control-transfer plus CSR read/modify/
+// write. Also owns the M-mode trap-entry sequence (enter_trap), since ECALL/
+// EBREAK are the only things in this project that ever trigger one.
+#include "event_gen.hpp"
+#include "ext_h.hpp"
+#include "ext_sscofpmf.hpp"
+#include <cstdio>
+#include <cstdlib>
+#include "ext_ssstateen.hpp"
+#include "ext_zicfilp.hpp"
+#include "ext_zicfiss.hpp"
+#include "ext_zicntr.hpp"
+#include "riscv_decoder.hpp"
+#include "riscv_core.hpp"
+#include "registers.hpp"
+#include "memory.hpp"
+#include "extensions.hpp"
+#include "timer.hpp"
+#include "pmp.hpp"
+#include "mmu.hpp"
+#include <cstring>
+#include "ext_xstate.hpp"
+#include "imsic.hpp"
+
+DecodedInstruction Decoder::decode_zicsr(uint32_t raw_instr) const
+{
+	DecodedInstruction instr{};
+	instr.ext = Extension::ZICSR;
+	instr.length = 4;
+	instr.mnemonic = "???";
+
+	uint8_t opcode = raw_instr & 0x7F;
+	uint8_t rd     = (raw_instr >> 7) & 0x1F;
+	uint8_t funct3 = (raw_instr >> 12) & 0x07;
+	uint8_t rs1    = (raw_instr >> 15) & 0x1F;
+	uint8_t rs2    = (raw_instr >> 20) & 0x1F;
+	uint8_t funct7 = (raw_instr >> 25) & 0x7F;
+
+	instr.opcode = opcode;
+	instr.rd = rd;
+	instr.rs1 = rs1;
+	instr.rs2 = rs2;
+	instr.funct3 = funct3;
+	instr.funct7 = funct7;
+
+	// imm[11:0] here is a CSR address (0-4095), not a signed immediate --
+	// reusing a sign-extended imm_i would corrupt any address with bit 11
+	// set (e.g. mhartid = 0xF14).
+	uint32_t csr_or_funct12 = (raw_instr >> 20) & 0xFFF;
+	instr.imm = (int64_t)csr_or_funct12;
+	if (funct3 == 0b000) {
+		if (raw_instr == 0x00000073) instr.mnemonic = "ECALL";
+		else if (raw_instr == 0x00100073) instr.mnemonic = "EBREAK";
+		else if (raw_instr == 0x30200073) instr.mnemonic = "MRET";
+		else if (raw_instr == 0x10200073) instr.mnemonic = "SRET";
+		else if (raw_instr == 0x10500073) instr.mnemonic = "WFI";
+		else if (raw_instr == 0x00D00073) { instr.mnemonic = "WRS.NTO"; instr.ext = Extension::ZAWRS; }
+		else if (raw_instr == 0x01D00073) { instr.mnemonic = "WRS.STO"; instr.ext = Extension::ZAWRS; }
+		else if (funct7 == 0b0001001 && rd == 0) instr.mnemonic = "SFENCE.VMA";
+		else if (funct7 == 0b0001011 && rd == 0) { instr.mnemonic = "SINVAL.VMA"; instr.ext = Extension::SVINVAL; }
+		else if (funct7 == 0b0001100 && rd == 0 && rs1 == 0 && rs2 == 0) { instr.mnemonic = "SFENCE.W.INVAL"; instr.ext = Extension::SVINVAL; }
+		else if (funct7 == 0b0001100 && rd == 0 && rs1 == 0 && rs2 == 1) { instr.mnemonic = "SFENCE.INVAL.IR"; instr.ext = Extension::SVINVAL; }
+		// else: genuinely unrecognized SYSTEM encoding -- mnemonic stays
+		// "???", exec_32ZICSR's default case no-ops it the same as before.
+	} else {
+		switch (funct3) {
+		case 0b001: instr.mnemonic = "CSRRW";  break;
+		case 0b010: instr.mnemonic = "CSRRS";  break;
+		case 0b011: instr.mnemonic = "CSRRC";  break;
+		case 0b101: instr.mnemonic = "CSRRWI"; break;
+		case 0b110: instr.mnemonic = "CSRRSI"; break;
+		case 0b111: instr.mnemonic = "CSRRCI"; break;
+		}
+	}
+
+	return instr;
+}
+
+namespace {
+// M-mode CSR addresses actually given meaning by exec_32ZICSR/enter_trap.
+// Anything else (mscratch, mhartid, ...) is still fully readable/writable
+// -- Registers::csr[] backs all 4096 addresses generically -- it just has
+// no side effects, which is correct for those. misa (below) and satp
+// (see write_satp) are the two exceptions in this block: both need real
+// side effects, not just a name.
+constexpr uint16_t CSR_MISA    = 0x301;
+constexpr uint16_t CSR_MSTATUS = 0x300;
+constexpr uint16_t CSR_MEDELEG = 0x302;
+constexpr uint16_t CSR_MIDELEG = 0x303;
+constexpr uint16_t CSR_MTVEC   = 0x305;
+constexpr uint16_t CSR_MEPC    = 0x341;
+constexpr uint16_t CSR_MCAUSE  = 0x342;
+constexpr uint16_t CSR_MTVAL   = 0x343;
+
+// S-mode CSRs. sstatus (0x100) isn't listed here -- it's a masked view of
+// mstatus, not separate storage (see read_sstatus/write_sstatus below).
+// sedeleg/sideleg (delegating below S, to U) aren't listed -- nothing
+// traps into U-mode-handled territory yet, so there's no delegation
+// target below S to speak of.
+constexpr uint16_t CSR_STVEC   = 0x105;
+constexpr uint16_t CSR_SEPC    = 0x141;
+constexpr uint16_t CSR_SCAUSE  = 0x142;
+constexpr uint16_t CSR_STVAL   = 0x143;
+constexpr uint16_t CSR_SATP    = 0x180; // must match mmu.cpp's own CSR_SATP
+
+// Interrupt-related CSRs (Stage 2). mie/mip/sie/sip keep the base-spec bit
+// positions unchanged -- AIA doesn't move them. miselect/siselect need no
+// special handling below (they're just the plain selector value mireg/
+// sireg read back out of Registers::csr[] each access), only mireg/sireg/
+// mtopei/stopei do. mtopi/stopi are computed too (see compute_topi): they
+// started out as generic-array zeros on the reasoning that nothing needed
+// them, which turned out to be exactly wrong. A device tree advertising
+// smaia/ssaia makes Linux dispatch interrupts solely from a csr_read of
+// TOPI, so returning zero meant interrupts were never dispatched *or
+// acknowledged* -- a silent livelock rather than a missing feature.
+constexpr uint16_t CSR_SIE      = 0x104;
+constexpr uint16_t CSR_SIP      = 0x144;
+constexpr uint16_t CSR_MIE      = 0x304;
+constexpr uint16_t CSR_MIP      = 0x344;
+constexpr uint16_t CSR_MENVCFG  = 0x30A;
+constexpr uint16_t CSR_STIMECMP = 0x14D; // Sstc, RV64 only (no stimecmph split)
+constexpr uint16_t CSR_VSTIMECMP = 0x24D; // the guest's, reached as stimecmp when V=1
+constexpr uint16_t CSR_HTIMEDELTA = 0x605;
+constexpr uint16_t CSR_TIME     = 0xC01; // unprivileged, read-only mtime alias -- see the read-dispatch comment below
+constexpr uint16_t CSR_MISELECT = 0x350;
+constexpr uint16_t CSR_MIREG    = 0x351;
+constexpr uint16_t CSR_SISELECT = 0x150;
+constexpr uint16_t CSR_SIREG    = 0x151;
+constexpr uint16_t CSR_MTOPEI   = 0x35C;
+constexpr uint16_t CSR_STOPEI   = 0x15C;
+constexpr uint16_t CSR_MTOPI    = 0xFB0; // Smaia top-interrupt, read-only
+constexpr uint16_t CSR_STOPI    = 0xDB0; // Ssaia top-interrupt, read-only
+
+constexpr uint64_t MIP_SSIP = 1ull << 1;
+constexpr uint64_t MIP_MSIP = 1ull << 3;
+constexpr uint64_t MIP_STIP = 1ull << 5;
+constexpr uint64_t MIP_MTIP = 1ull << 7;
+constexpr uint64_t MIP_SEIP = 1ull << 9;
+constexpr uint64_t MIP_MEIP = 1ull << 11;
+// What mip actually stores, raw, in Registers::csr[] -- a software-
+// settable shadow for MSIP/SSIP (plain, always writable per spec),
+// SEIP (spec explicitly allows a mode to inject a virtual S-level
+// external interrupt this way, OR'd with the IMSIC's own signal below),
+// and STIP (kept for a hypothetical SBI-style M-mode-managed timer,
+// OR'd with the Sstc-derived condition). MTIP/MEIP have no shadow at
+// all -- purely timer-derived and purely IMSIC-M-derived respectively,
+// matching real hardware where M-mode's own sources are never
+// software-injectable.
+// Sscofpmf's LCOFI joins the software-settable shadow bits rather than
+// being computed from the mhpmevent OF bits.
+//
+// That was worth getting wrong once to learn: the two are related but not
+// the same signal. Hardware raises LCOFI at the *moment* a counter
+// overflows, and it then stays pending until software clears it -- exactly
+// like a device interrupt. Deriving it from OF instead would make it
+// impossible for a handler to clear the interrupt without also clearing the
+// overflow record it was about to read.
+constexpr uint64_t MIP_LCOFIP = 1ull << 13;
+constexpr uint64_t MIP_SHADOW_MASK = MIP_SSIP | MIP_MSIP | MIP_SEIP | MIP_STIP | MIP_LCOFIP;
+
+// VS-level interrupts. These live in mip/mie alongside the M and S ones,
+// and they are the mechanism by which a hypervisor makes a guest believe
+// it has taken an interrupt: the hypervisor sets a bit in hvip, the bit
+// appears in hip, hideleg routes it to VS-mode, and the guest sees an
+// ordinary S-level interrupt.
+//
+// The cause the guest sees is one less than the bit number -- VSSIP (2)
+// arrives as cause 1, VSTIP (6) as 5, VSEIP (10) as 9 -- because from
+// inside the guest these *are* its supervisor software, timer and
+// external interrupts. That renumbering is what makes a guest kernel run
+// unmodified.
+constexpr uint64_t MIP_VSSIP = 1ull << 2;
+constexpr uint64_t MIP_VSTIP = 1ull << 6;
+constexpr uint64_t MIP_VSEIP = 1ull << 10;
+constexpr uint64_t MIP_SGEIP = 1ull << 12;
+constexpr uint64_t HIP_MASK  = MIP_VSSIP | MIP_VSTIP | MIP_VSEIP | MIP_SGEIP;
+
+// Only VSSIP is software-writable through hvip; VSTIP and VSEIP are
+// read-only there because they are also driven by hardware -- the guest's
+// timer and the guest external-interrupt file -- and hvip contributes to
+// them by OR rather than by assignment.
+constexpr uint64_t HVIP_WMASK = MIP_VSSIP | MIP_VSTIP | MIP_VSEIP;
+
+constexpr uint16_t CSR_HIE  = 0x604;
+constexpr uint16_t CSR_HIP  = 0x644;
+constexpr uint16_t CSR_HVIP = 0x645;
+constexpr uint16_t CSR_HGEIP = 0xE12;
+constexpr uint16_t CSR_HGEIE = 0x607;
+// GEILEN 63: guest external interrupts 1..63. Bit 0 is never one.
+constexpr uint64_t HGEI_MASK = ~1ull;
+constexpr uint16_t CSR_HSTATUS_N = 0x600;
+constexpr uint16_t CSR_VSSTATUS_N = 0x200;
+
+constexpr uint64_t MENVCFG_STCE = 1ull << 63;
+
+// mstatus's virtualisation fields. Both sit above bit 32, so they exist
+// only on RV64 -- MPV records whether an M-mode trap came from a virtual
+// mode, and GVA whether the faulting address was a guest virtual one.
+constexpr uint64_t MSTATUS_GVA = 1ull << 38;
+constexpr uint64_t MSTATUS_MPV = 1ull << 39;
+
+// Whether a trap's tval holds a guest *virtual* address, which is what
+// hstatus.GVA and mstatus.GVA report. True for the faults whose tval is an
+// address in the guest's own address space; false for ECALL, breakpoint
+// and illegal instruction, whose tval is not an address at all.
+//
+// Both trap paths use this so they cannot drift apart: a guest fault that
+// is delegated reports GVA in hstatus, and the same fault left undelegated
+// reports it in mstatus, and a hypervisor reading either has to see the
+// same answer.
+inline bool tval_is_guest_va(uint64_t cause_bit, bool is_interrupt)
+{
+	if (is_interrupt) return false;
+	switch (cause_bit) {
+	case 0: case 1:            // instruction misaligned / access fault
+	case 4: case 5:            // load misaligned / access fault
+	case 6: case 7:            // store/AMO misaligned / access fault
+	case 12: case 13: case 15: // page faults
+	case 20: case 21: case 23: // guest-page faults
+		return true;
+	default:
+		return false;
+	}
+}
+
+constexpr uint64_t CAUSE_S_EXTERNAL = 9;
+constexpr uint64_t CAUSE_S_TIMER    = 5;
+constexpr uint64_t CAUSE_S_SOFTWARE = 1;
+constexpr uint64_t CAUSE_M_EXTERNAL = 11;
+constexpr uint64_t CAUSE_M_TIMER    = 7;
+constexpr uint64_t CAUSE_M_SOFTWARE = 3;
+
+// Sstc: STIP only reflects mtime>=stimecmp once menvcfg.STCE is set --
+// spec-required gating, not an extra (see the Sstc 1.0 spec, "when STCE
+// in menvcfg is zero... STIP... reverts to its defined behavior as if
+// this extension is not implemented").
+bool stip_from_sstc(Registers &regs, Memory &mem)
+{
+	if (!(regs.read_csr(CSR_MENVCFG) & MENVCFG_STCE)) return false;
+	return mem.get_timer().get_mtime() >= regs.read_csr(CSR_STIMECMP);
+}
+
+// The guest's half of Sstc. vstimecmp is compared against the guest's own
+// clock -- time + htimedelta -- not the host's, because that is the
+// timeline the guest schedules against; comparing against raw mtime fires
+// the guest's timer at the wrong moment by exactly the offset the
+// hypervisor installed to hide its own uptime.
+//
+// henvcfg.STCE gates this the way menvcfg.STCE gates the host's, and it is
+// itself gated by menvcfg.STCE, so M-mode switching Sstc off switches it
+// off for the guest too.
+bool vstip_from_sstc(Registers &regs, Memory &mem)
+{
+	if (!(regs.read_csr(CSR_MENVCFG) & MENVCFG_STCE)) return false;
+	if (!(regs.read_csr(0x60A) & MENVCFG_STCE)) return false;  // henvcfg.STCE
+	uint64_t guest_time = mem.get_timer().get_mtime() + regs.read_csr(CSR_HTIMEDELTA);
+	return guest_time >= regs.read_csr(CSR_VSTIMECMP);
+}
+
+uint64_t compute_mip(Registers &regs, Memory &mem)
+{
+	uint64_t raw = regs.read_csr(CSR_MIP) & MIP_SHADOW_MASK;
+	uint64_t mip = raw & (MIP_MSIP | MIP_SSIP);
+
+	if (mem.get_timer().mtip_pending()) mip |= MIP_MTIP;
+	if ((raw & MIP_STIP) || stip_from_sstc(regs, mem)) mip |= MIP_STIP;
+	if (mem.get_imsic_m().aggregate_pending()) mip |= MIP_MEIP;
+	if ((raw & MIP_SEIP) || mem.get_imsic_s().aggregate_pending()) mip |= MIP_SEIP;
+
+	if (Extensions.H) {
+		// hvip is the hypervisor's injection register: whatever it sets
+		// here is pending for the guest. VSTIP and VSEIP additionally
+		// take hardware sources, so they are an OR rather than a copy --
+		// a hypervisor clearing hvip.VSEIP must not clear an interrupt
+		// the guest's external interrupt file is genuinely asserting.
+		uint64_t hvip = regs.read_csr(CSR_HVIP) & HVIP_WMASK;
+		mip |= hvip;
+
+		// The guest's timer is a hardware source for VSTIP, so it ORs with
+		// whatever the hypervisor injected rather than replacing it.
+		if (vstip_from_sstc(regs, mem)) mip |= MIP_VSTIP;
+
+		// SGEIP is not injectable at all: it is the OR of the guest
+		// external interrupts the hypervisor has enabled, and says "one
+		// of your guests wants attention".
+		if (regs.read_csr(CSR_HGEIP) & regs.read_csr(CSR_HGEIE)) mip |= MIP_SGEIP;
+
+		// hstatus.VGEIN selects which guest external interrupt belongs to
+		// the guest currently scheduled; that one, if pending, is the
+		// guest's own VSEIP.
+		uint64_t vgein = (regs.read_csr(CSR_HSTATUS_N) >> 12) & 0x3F;
+		if (vgein != 0 && (regs.read_csr(CSR_HGEIP) & (1ull << vgein)))
+			mip |= MIP_VSEIP;
+	}
+	return mip;
+}
+
+// Smaia/Ssaia mtopi/stopi: the highest-priority interrupt that is both
+// pending and enabled for the given privilege level, encoded as
+// {IID[27:16], IPRIO[7:0]}, or 0 when there is none.
+//
+// This is not optional decoration once the DT advertises smaia/ssaia:
+// Linux's irq-riscv-intc then installs riscv_intc_aia_irq, whose entire
+// body is `while ((topi = csr_read(CSR_TOPI))) generic_handle_domain_irq(
+// intc_domain, topi >> TOPI_IID_SHIFT);`. With stopi reading 0 the loop
+// never runs, so the interrupt is never dispatched *or* acknowledged --
+// STIP stays asserted (only the timer handler re-arms stimecmp), the hart
+// immediately re-traps, and the kernel livelocks silently: still
+// executing, never progressing, no illegal instruction to catch it.
+//
+// IPRIO is reported as 1 (the default when no priority has been
+// programmed); Linux only consumes the IID field, but the spec defines
+// a nonzero default priority and 0 would be indistinguishable from
+// "no interrupt".
+uint64_t compute_topi(Registers &regs, Memory &mem, bool s_level)
+{
+	uint64_t mideleg = regs.read_csr(CSR_MIDELEG);
+	uint64_t candidates = compute_mip(regs, mem) & regs.read_csr(CSR_MIE);
+	candidates &= s_level ? mideleg : ~mideleg;
+
+	// AIA default major-interrupt priority order, high to low, within a
+	// level: external, then software, then timer.
+	static const int s_order[] = { (int)CAUSE_S_EXTERNAL, (int)CAUSE_S_SOFTWARE, (int)CAUSE_S_TIMER };
+	static const int m_order[] = { (int)CAUSE_M_EXTERNAL, (int)CAUSE_M_SOFTWARE, (int)CAUSE_M_TIMER };
+	const int *order = s_level ? s_order : m_order;
+
+	for (int i = 0; i < 3; i++) {
+		if (candidates & (1ull << order[i])) return ((uint64_t)order[i] << 16) | 1u;
+	}
+	return 0;
+}
+// sie and sip show the supervisor's own interrupts. The VS-level bits are
+// *not* among them -- those belong to hie and hip, which is the whole point
+// of having a separate pair. They became visible here the moment mideleg's
+// VS bits were made read-only 1, since these are defined as mie & mideleg,
+// and a hypervisor reading sie would have seen its guests' enables mixed in
+// with its own.
+uint64_t read_sie(Registers &regs)
+{
+	return regs.read_csr(CSR_MIE) & regs.read_csr(CSR_MIDELEG) & ~HIP_MASK;
+}
+
+void write_sie(Registers &regs, uint64_t value)
+{
+	uint64_t mideleg = regs.read_csr(CSR_MIDELEG);
+	uint64_t mie = regs.read_csr(CSR_MIE);
+	regs.write_csr(CSR_MIE, (mie & ~mideleg) | (value & mideleg));
+}
+
+uint64_t read_sip(Registers &regs, Memory &mem)
+{
+	return compute_mip(regs, mem) & regs.read_csr(CSR_MIDELEG) & ~HIP_MASK;
+}
+
+void write_sip(Registers &regs, uint64_t value)
+{
+	uint64_t mideleg = regs.read_csr(CSR_MIDELEG) & MIP_SHADOW_MASK;
+	uint64_t raw = regs.read_csr(CSR_MIP);
+	regs.write_csr(CSR_MIP, ((raw & ~mideleg) | (value & mideleg)) & MIP_SHADOW_MASK);
+}
+
+constexpr uint64_t MSTATUS_SIE  = 1ull << 1;
+constexpr uint64_t MSTATUS_MIE  = 1ull << 3;
+constexpr uint64_t MSTATUS_SPIE = 1ull << 5;
+constexpr uint64_t MSTATUS_MPIE = 1ull << 7;
+constexpr uint64_t MSTATUS_SPP  = 1ull << 8;    // 1 bit: previous mode was S(1) or U(0)
+constexpr uint64_t MSTATUS_MPP  = 3ull << 11;   // 2 bits: previous mode, PrivMode-encoded
+
+// What an mstatus write may change. Every field this hart has is named, and
+// anything else reads zero -- the same shape as Sail's legalize_mstatus,
+// which DoomV is held to.
+//
+// mstatus writes used to go straight to storage, so every bit stuck:
+// XS (16:15), which summarises non-standard extension state this hart does
+// not have and so is read-only zero; MBE, SBE and UBE, which are read-only
+// zero on a little-endian hart; a reserved MPP of 2; and SD, which is
+// derived from FS, VS and XS and never written. Lock-stepping against Sail
+// found XS at the first mstatus write of 140 riscv-tests.
+uint64_t legalize_mstatus(uint64_t value)
+{
+	uint64_t keep = MSTATUS_SIE | MSTATUS_MIE | MSTATUS_SPIE | MSTATUS_MPIE | MSTATUS_SPP
+	              | (1ull << 17)    // MPRV
+	              | (1ull << 18)    // SUM
+	              | (1ull << 19)    // MXR
+	              | (1ull << 20)    // TVM
+	              | (1ull << 21)    // TW
+	              | (1ull << 22);   // TSR
+	if (Extensions.F || Extensions.D) keep |= 3ull << 13;   // FS
+	if (Extensions.V) keep |= 3ull << 9;                    // VS
+	if (Extensions.H) keep |= (1ull << 38) | (1ull << 39);  // GVA, MPV
+	if (Extensions.ZICFILP) keep |= (1ull << 23) | (1ull << 41);   // SPELP, MPELP
+	uint64_t mpp = (value >> 11) & 3;
+	if (mpp == 2) mpp = 0;   // not a privilege level: the lowest one, U
+	return (value & keep) | (mpp << 11);
+}
+
+constexpr uint64_t CAUSE_ECALL_FROM_U = 8;
+constexpr uint64_t CAUSE_ECALL_FROM_S = 9;
+constexpr uint64_t CAUSE_ECALL_FROM_M = 11;
+constexpr uint64_t CAUSE_BREAKPOINT   = 3;
+constexpr uint64_t CAUSE_ILLEGAL_INSN = 2;
+// mstatus.MPRV: an M-mode load or store is performed as though at
+// mstatus.MPP, using that mode's translation and permissions.
+constexpr uint64_t MSTATUS_MPRV = 1ull << 17;
+// mstatus.TVM: with this set, S-mode may neither execute SFENCE.VMA nor
+// touch satp -- both become illegal instructions, so a hypervisor sees
+// every attempt a guest supervisor makes to manage its own translation.
+constexpr uint64_t MSTATUS_TVM = 1ull << 20;
+
+// sstatus is architecturally just the bits of mstatus a lower-privileged
+// mode is allowed to see/touch -- SUM/MXR are read-write pass-through,
+// SIE/SPIE/SPP alias the same-named mstatus bits directly.
+// sstatus is a *view* of mstatus, and the view is wider than the
+// interrupt-and-privilege bits it started as. It also carries:
+//
+//   FS  (14:13) and VS (10:9) -- the floating-point and vector state.
+//       A supervisor decides whether to save those register files on a
+//       context switch by reading them *here*; it has no access to
+//       mstatus. Masking them out told every supervisor that no
+//       extension state was ever live.
+//   UXL (33:32) -- the XLEN U-mode runs at, read-only 2 (64-bit) here.
+//   SD  (63)    -- the summary of FS/VS, supplied by vcommon::with_sd.
+//
+// Found by tracing: an arch-test trap handler reads sstatus and extracts
+// bits 16:0 to rebuild a PTE. Sail read 0x...6600 (FS=3, VS=3), DoomV
+// read 0, and the handler stored a PTE with its physical page number
+// zeroed -- a difference that looked like a page-table bug and was a CSR
+// masking bug three steps upstream.
+constexpr uint64_t SSTATUS_FS  = 3ull << 13;
+constexpr uint64_t SSTATUS_VS  = 3ull << 9;
+constexpr uint64_t SSTATUS_UXL = 3ull << 32;
+constexpr uint64_t SSTATUS_SD  = 1ull << 63;
+constexpr uint64_t SSTATUS_SPELP = 1ull << 23;
+constexpr uint64_t SSTATUS_MASK = SSTATUS_SPELP | MSTATUS_SIE | MSTATUS_SPIE | MSTATUS_SPP
+                                | (1ull << 18) | (1ull << 19)   // SUM, MXR
+                                | SSTATUS_FS | SSTATUS_VS | SSTATUS_UXL | SSTATUS_SD;
+
+// UXL and SD are read-only through this view: UXL because this hart has no
+// 32-bit U-mode to switch to, SD because it is derived. A write must not
+// reach either.
+constexpr uint64_t SSTATUS_WMASK = SSTATUS_MASK & ~(SSTATUS_UXL | SSTATUS_SD);
+
+// misa isn't plain csr[] storage -- it's computed fresh from Extensions on
+// every read. A write changes Extensions itself, through write_misa above.
+// This exists specifically because OpenSBI's sbi_init() calls
+// misa_extension('S') to decide whether a hart is even eligible to become
+// the coldboot hart for a next_mode==PRV_S jump -- with misa reading 0
+// (its state before this existed), that check always fails, no hart ever
+// wins the coldboot lottery, and hart 0 spins forever in
+// init_warmboot's wait_for_coldboot(). S/U are set unconditionally (unlike
+// I/M/A/C/F/D/V below): privilege modes have had no -march= toggle since
+// Stage 1 (see registers.hpp's PrivMode), DoomV always supports them.
+// misa is writable, as in Sail's configuration: clearing a letter turns that
+// extension off, and setting it again turns it back on, within what -march
+// made the hart support. The rules are Sail's legalize_misa:
+//
+//   * The whole write is ignored if it clears C while the next instruction
+//     would start at an address only C makes legal.
+//   * D needs F, and V needs F and D. A letter whose prerequisite is being
+//     cleared is cleared with it.
+//   * B is Zba, Zbb and Zbs together, and turns all three.
+//
+// S and U stay set: DoomV has no way to run without its supervisor or user
+// mode, and Sail's own model notes writable S and U are not supported.
+static void write_misa(uint64_t value, uint64_t next_pc)
+{
+	const auto has = [&](char c) { return ((value >> (c - 'A')) & 1) != 0; };
+	const ExtensionConfig &s = SupportedExtensions;
+	if (s.C && !has('C') && (next_pc & 2)) return;
+
+	const ExtensionConfig before = Extensions;
+	const bool f = s.F && has('F');
+	const bool d = s.D && has('D') && has('F');
+	Extensions.A = s.A && has('A');
+	Extensions.C = s.C && has('C');
+	Extensions.M = s.M && has('M');
+	Extensions.F = f;
+	Extensions.D = d;
+	Extensions.V = s.V && has('V') && has('F') && has('D');
+	Extensions.H = s.H && has('H');
+	if (s.ZBA && s.ZBB && s.ZBS) Extensions.ZBA = Extensions.ZBB = Extensions.ZBS = has('B');
+	// The extensions that exist only on top of F, and on top of C.
+	Extensions.ZFA = s.ZFA && f;
+	Extensions.ZFH = s.ZFH && f;
+	Extensions.ZFHMIN = s.ZFHMIN && f;
+	Extensions.ZCMOP = s.ZCMOP && Extensions.C;
+	// The epoch tells the decode cache its decodes may be wrong, and they are
+	// only wrong if the set changed. A csrr of misa comes through here with the
+	// value misa already holds -- OpenSBI does that on its trap path, so on
+	// every timer interrupt -- and bumping regardless threw away every decode
+	// each time: 6.1M of a BusyBox boot's 8.1M decode misses in 300M steps.
+	// (memcmp rather than a defaulted ==, which GCC 8 cannot compile;
+	// ExtensionConfig is bools only, so it has no padding to compare.)
+	//
+	// The TLB flush below stays unconditional. The decode cache is invisible
+	// to the guest; the TLB is not, to a guest that edits a PTE without
+	// sfence.vma, so whether a read of misa flushes it is a question of
+	// matching Sail rather than of speed.
+	if (std::memcmp(&before, &Extensions, sizeof before) != 0)
+		ExtensionsEpoch++;
+	bump_event_gen();
+	mmu_tlb_flush();
+}
+
+// The address an xepc names as an instruction start: bit 0 is never one,
+// and bit 1 is not either while C is off. Sail's align_pc, applied when the
+// register is read and when an xRET returns through it.
+static uint64_t align_pc(uint64_t v)
+{
+	return Extensions.C ? (v & ~1ull) : (v & ~3ull);
+}
+
+uint64_t compute_misa()
+{
+	uint64_t v = 0;
+	auto bit = [&v](char c) { v |= 1ull << (c - 'A'); };
+	if (Extensions.I) bit('I');
+	if (Extensions.M) bit('M');
+	if (Extensions.A) bit('A');
+	if (Extensions.C) bit('C');
+	if (Extensions.F) bit('F');
+	if (Extensions.D) bit('D');
+	if (Extensions.V) bit('V');
+	if (Extensions.H) bit('H');
+	// B is Zba, Zbb and Zbs together -- the ratified B extension is defined
+	// as exactly that set, and misa reports it when all three are present.
+	if (Extensions.ZBA && Extensions.ZBB && Extensions.ZBS) bit('B');
+	bit('S');
+	bit('U');
+	v |= (Extensions.XLEN64 ? 2ull : 1ull) << (Extensions.XLEN64 ? 62 : 30);
+	return v;
+}
+
+// satp.MODE is WARL (Write Any, Read Legal): real hardware that doesn't
+// implement a given paging mode clamps an unsupported MODE write so a
+// readback never reports support that isn't really there. mmu.cpp only
+// implements MODE 0 (bare), 8 (Sv39), 9 (Sv48) and 10 (Sv57) -- everything
+// else must not read back, since a write that sticks is how software
+// discovers what a hart supports.
+//
+// Linux's own set_satp_mode() (arch/riscv/mm/init.c) relies on exactly
+// this WARL behavior to autodetect paging depth: it writes a candidate
+// satp (Sv57 first) and immediately reads it back via csr_swap -- if the
+// value didn't stick, it falls back to Sv48 then Sv39. Without this
+// rejection, DoomV always reported "yes, Sv57 stuck" (nothing was
+// clamping it), so the kernel proceeded to actually run under Sv57 --
+// which mmu_translate doesn't implement (it treats any non-Sv39,
+// non-bare mode as raw identity passthrough), producing a garbage
+// instruction fetch once the kernel started using its own high-half
+// Sv57-style virtual addresses as if they were physical. Confirmed by
+// bisecting crash.log: it halted on an illegal instruction at
+// pc=0xffffffff80001146 (canonical high-half kernel VA) with
+// satp.MODE=0xa (Sv57) already active.
+void write_satp_warl(Registers &regs, uint16_t csr, uint64_t value)
+{
+	// The root of translation just moved, so every cached translation
+	// describes a page table that is no longer the one in force.
+	mmu_tlb_flush();
+	// 0 (Bare), 8 (Sv39), 9 (Sv48) and 10 (Sv57) are all implemented now,
+	// so all four stick. Sv48 and Sv57 were rejected here for as long as
+	// the walk only knew three levels -- rejecting them was the right
+	// answer while that was true, because it is what made Linux's probe
+	// fall back to a mode that worked. It is the wrong answer now: the
+	// walk is written against the level count, the deeper modes translate,
+	// and refusing them would report less than the hart can do.
+	uint64_t mode = value >> 60;
+	if (mode != 0 && mode != 8 && mode != 9 && mode != 10)
+		return; // reject the whole write, not just the MODE field -- matches real WARL clamping
+	regs.write_csr(csr, value);
+}
+
+void write_satp(Registers &regs, uint64_t value)
+{
+	write_satp_warl(regs, CSR_SATP, value);
+}
+
+// hgatp's MODE is WARL on the same terms as satp's, with its own set of
+// legal values: 0 (Bare), 8 (Sv39x4), 9 (Sv48x4), 10 (Sv57x4). Everything
+// else is reserved, and a reserved value must not read back -- software
+// probes the field by writing a candidate and seeing what survives, so
+// storing 2 tells the prober this hart implements a second-stage mode it
+// has never heard of.
+//
+// PPN[1:0] additionally read as zero: the root of a G-stage table is
+// 16KiB-aligned, not 4KiB, because the top level is four pages wide.
+void write_hgatp_warl(Registers &regs, uint64_t value)
+{
+	// The root of translation just moved, so every cached translation
+	// describes a page table that is no longer the one in force.
+	mmu_tlb_flush();
+	uint64_t mode = value >> 60;
+	if (mode != 0 && mode != 8 && mode != 9 && mode != 10) return;
+	regs.write_csr(hyp::CSR_HGATP_ADDR, value & ~0x3ull);
+}
+
+uint64_t read_sstatus(Registers &regs)
+{
+	// SD is part of sstatus's view too, and is derived rather than stored
+	// -- see vcommon::with_sd.
+	// UXL is read-only 2: this hart's U-mode is always 64-bit.
+	return (vcommon::with_sd(regs.read_csr(CSR_MSTATUS)) & SSTATUS_MASK)
+	     | (2ull << 32);
+}
+
+void write_sstatus(Registers &regs, uint64_t value)
+{
+	uint64_t mstatus = regs.read_csr(CSR_MSTATUS);
+	mstatus = (mstatus & ~SSTATUS_WMASK) | (value & SSTATUS_WMASK);
+	regs.write_csr(CSR_MSTATUS, mstatus);
+}
+}
+
+// What a CSR read actually returns -- shared by exec_32ZICSR's real read
+// side and anything else that just wants to *peek* a live value (the
+// dashboard's CSRs panel, via DoomSystem::publish_snapshot). Several CSRs
+// are computed, not plain csr[] storage: sstatus is a masked view of
+// mstatus; mip/sip fold in the timer + IMSIC aggregate; misa is computed
+// fresh from Extensions (Stage 3, see compute_misa's own comment); time
+// is a read-only mtime alias (Stage 4); mireg/sireg/mtopei/stopei read
+// through to the IMSIC files owned by Memory; fflags/frm/fcsr and V's
+// vstart/vxsat/vxrm/vl/vtype/vlenb live in Registers' own dedicated
+// fields, not csr[], for the same OR-accumulate/read-only-in-practice
+// reasons noted at each accessor's declaration (registers.hpp). Side-
+// effect free either way -- topei_value() is a plain peek; claim() is a
+// separate call the real write side makes only on an actual write.
+// Who is allowed to touch a CSR. Three rules, all from the privileged spec's
+// CSR-address encoding, plus the counter chain Zicntr/Zihpm add:
+//
+//   * csr[11:10] == 11 marks a read-only CSR -- writing one is illegal.
+//   * csr[9:8] is the lowest privilege that may access it at all.
+//   * the unprivileged counters are further gated by mcounteren/scounteren.
+//
+// None of this was enforced before: every mode could read and write every
+// CSR. That is invisible while only M-mode firmware runs, and becomes very
+// visible the moment a guest kernel deliberately probes a CSR expecting a
+// trap -- which is exactly how OpenSBI detects hart features.
+//
+// Deliberately *not* added here: trapping on CSR numbers this machine gives
+// no meaning to. Registers::csr[] backs all 4096 addresses generically, and
+// OpenSBI's feature detection reads a spread of them to see which exist.
+// Making unknown CSRs illegal across the whole address space is still a
+// much larger behaviour change than making privilege boundaries real --
+// OpenSBI probes a spread of machine and supervisor CSRs to see which trap,
+// and getting that list wrong breaks the boot rather than a test. But one
+// quarter of the space can be closed exactly, and is below.
+
+// The user-level quarter of the CSR space -- csr[9:8] == 0b00 -- is small
+// enough to enumerate, and RVA23 assigns all of nine addresses in it plus
+// the counters. Everything else there is unassigned, and an access to an
+// unassigned CSR is an illegal instruction at every privilege including M.
+//
+// This matters because the addresses that are *not* assigned include the
+// ones that used to be: 0x000-0x005 were ustatus/uie/utvec/uscratch/uepc/
+// ucause, the N extension's user-level trap registers, and N was removed
+// from the ISA. Software probing for it -- or for anything else in this
+// range -- has to see a trap, and DoomV answered from the generic csr[]
+// backing store, reporting registers this hart does not have.
+//
+// The machine, supervisor and hypervisor quarters are deliberately left
+// alone. This is the quarter where nothing in the boot path goes looking.
+bool is_unimplemented_user_csr(uint16_t csr)
+{
+	if (((csr >> 8) & 0x3) != 0) return false;   // not user-level
+
+	// The counters, and the vector CSRs that live among them.
+	if (csr >= 0xC00 && csr <= 0xC1F) return false;  // cycle/time/instret/hpm
+	if (csr >= 0xC20 && csr <= 0xC22) return false;  // vl/vtype/vlenb
+
+	switch (csr) {
+	case 0x001: case 0x002: case 0x003:              // fflags/frm/fcsr
+	case 0x008: case 0x009: case 0x00A: case 0x00F:  // vstart/vxsat/vxrm/vcsr
+	case 0x011:                                      // ssp      (Zicfiss)
+	case 0x015:                                      // seed     (Zkr)
+		return false;
+	default:
+		return true;
+	}
+}
+
+// The RV32-only "h" companions, which hold bits 63:32 of a register that is
+// a single piece on RV64. Grouped by where they live rather than listed
+// flat, since the counters alone account for sixty of them.
+bool is_rv32_high_half(uint16_t csr)
+{
+	// cycleh..hpmcounter31h, and their machine-mode originals.
+	if (csr >= 0xC80 && csr <= 0xC9F) return true;
+	if (csr >= 0xB80 && csr <= 0xB9F) return true;
+	// mhpmevent3h..31h
+	if (csr >= 0x723 && csr <= 0x73F) return true;
+	// The state-enable high halves, machine, supervisor and hypervisor.
+	if (csr >= 0x31C && csr <= 0x31F) return true;
+	if (csr >= 0x11C && csr <= 0x11F) return true;
+	if (csr >= 0x61C && csr <= 0x61F) return true;
+	switch (csr) {
+	case 0x310: // mstatush
+	case 0x31A: // menvcfgh
+	case 0x757: // mseccfgh
+	case 0x15D: // stimecmph
+	case 0x25D: // vstimecmph
+	case 0x615: // htimedeltah
+	case 0x61A: // henvcfgh
+	case 0x655: // hviph
+	case 0x656: // hviprio1h
+	case 0x657: // hviprio2h
+	case 0x318: // mvienh
+	case 0x319: // mviph
+		return true;
+	default:
+		return false;
+	}
+}
+
+
+// Zkr's `seed`. Not a plain CSR: reading it consumes entropy from the
+// source, so the architecture makes a *read-only* access to it illegal --
+// csrrs/csrrc with rs1=x0, and the immediate forms with uimm=0, are exactly
+// the encodings that would read without writing, and all of them trap. Only
+// a read-modify-write form may touch it, which is what guarantees the
+// caller acknowledged consuming what it read.
+//
+// mseccfg gates who may reach it at all: SSEED for S-mode, USEED for
+// U-mode, and M-mode always. A guest is a special case -- see
+// seed_denial_is_virtual.
+constexpr uint16_t CSR_SEED     = 0x015;
+constexpr uint16_t CSR_MSECCFG  = 0x747;
+constexpr uint64_t MSECCFG_USEED = 1ull << 8;
+constexpr uint64_t MSECCFG_SSEED = 1ull << 9;
+
+bool seed_access_permitted(Registers &regs, bool writing)
+{
+	// A pure read is illegal at every privilege, M-mode included.
+	if (!writing) return false;
+
+	PrivMode priv = regs.get_priv();
+	if (priv == PrivMode::M) return true;
+
+	// Any virtual mode is refused here and handled as a virtual
+	// instruction below, so the hypervisor can supply entropy of its own
+	// choosing rather than letting a guest drain the machine's source.
+	if (Extensions.H && regs.get_virt()) return false;
+
+	uint64_t seccfg = regs.read_csr(CSR_MSECCFG);
+	if (priv == PrivMode::S) return (seccfg & MSECCFG_SSEED) != 0;
+	return (seccfg & MSECCFG_USEED) != 0;
+}
+
+// A guest refused `seed` gets a virtual instruction only when the machine
+// would otherwise have allowed it -- mseccfg.SSEED set. With SSEED clear
+// the refusal is the machine's and stays illegal, and a read-only form is
+// illegal in a guest exactly as it is anywhere else: no hypervisor can
+// emulate an encoding that is wrong on its face.
+bool seed_denial_is_virtual(Registers &regs, bool writing)
+{
+	if (!Extensions.ZKR || !Extensions.H || !regs.get_virt()) return false;
+	if (!writing) return false;
+	return (regs.read_csr(CSR_MSECCFG) & MSECCFG_SSEED) != 0;
+}
+
+// What a read returns. Bits 31:30 are OPST: ES16 (0b10) means "sixteen bits
+// of entropy in 15:0", which is the only status this source ever reports --
+// there is no seeding delay to model and no failure to report. The bits
+// themselves come from a counter-driven mixer rather than a real noise
+// source, which is honest for an emulator: entropy that survives a save
+// state is not entropy, and nothing here pretends otherwise.
+uint64_t read_seed(Memory &mem)
+{
+	uint64_t t = mem.get_timer().get_mtime();
+	uint64_t x = t * 6364136223846793005ull + 1442695040888963407ull;
+	x ^= x >> 33;
+	x *= 0xff51afd7ed558ccdull;
+	x ^= x >> 33;
+	return (0b10ull << 30) | (x & 0xFFFF);
+}
+
+bool RiscvCore::csr_access_permitted(Registers &regs, uint16_t csr, bool writing)
+{
+	if (writing && ((csr >> 10) & 0x3) == 0x3) return false;
+
+	// The high halves. Every 64-bit CSR that RV32 has to split in two has
+	// an "h" companion holding bits 63:32, and on RV64 those companions do
+	// not exist -- the register is one piece. They are illegal at every
+	// privilege, M-mode included, and DoomV answered them from the generic
+	// csr[] backing store instead, so software probing for RV32 layout
+	// found registers that cannot be there.
+	if (Extensions.XLEN64 && is_rv32_high_half(csr)) return false;
+
+	// Unassigned user-level addresses, for the same reason and with the
+	// same answer: no such register, illegal at every privilege.
+	if (is_unimplemented_user_csr(csr)) return false;
+
+	// Smrnmi's CSRs -- mnscratch, mnepc, mncause, mnstatus. DoomV has no
+	// resumable NMI, so they are not there, and an access traps as it does
+	// in Sail's RVA23S64 configuration. They used to fall through to generic
+	// CSR storage, which let riscv-tests' reset vector write mnstatus where
+	// the reference traps; lock-stepping against Sail found it at the 37th
+	// instruction of every test.
+	if (csr >= 0x740 && csr <= 0x744) return false;
+	// Sdtrig's trigger CSRs (tdata1-3, tinfo, tcontrol, mcontext) and the
+	// debug-mode CSRs (dcsr, dpc, dscratch0-1): DoomV has no triggers and no
+	// debug mode, so these are absent, as in the reference. tselect alone
+	// stays -- see its read in read_csr_effective.
+	if (csr >= 0x7A1 && csr <= 0x7B3) return false;
+	// mcycle is 0xB00 and minstret 0xB02. 0xB01 would be time's, and time has
+	// no machine counter CSR: absent, as in the reference.
+	if (csr == 0xB01) return false;
+	// fflags, frm and fcsr exist while F is enabled, and the vector CSRs while
+	// V is; with the extension turned off in misa, they are gone with it.
+	if (csr >= 0x001 && csr <= 0x003 && !Extensions.F) return false;
+	if (((csr >= 0x008 && csr <= 0x00F) || (csr >= 0xC20 && csr <= 0xC22)) && !Extensions.V) return false;
+
+	// csr[9:8] normally encodes the lowest privilege that may access the
+	// register -- 0 for U, 1 for S, 3 for M. The value 2 is not a
+	// privilege level at all: it is the hypervisor and VS-CSR encoding,
+	// and those registers are reachable from HS-mode and M.
+	//
+	// Reading it as a literal privilege number denies every VS CSR to
+	// every mode, since no PrivMode equals 2. That is invisible until
+	// something actually redirects an S-mode CSR name into the 0x2xx
+	// range, at which point a guest's ordinary csrw stvec starts trapping.
+	uint8_t min_priv = (csr >> 8) & 0x3;
+	if (min_priv == 2) min_priv = (uint8_t)PrivMode::S;
+	if ((uint8_t)regs.get_priv() < min_priv) return false;
+
+	if (counters::is_counter_csr(csr) && !counters::counter_permitted(regs, csr))
+		return false;
+
+	// Sstc from a guest. Reaching vstimecmp needs henvcfg.STCE -- the
+	// hypervisor's say over whether its guest gets a timer of its own --
+	// and hcounteren.TM, because a guest that cannot read `time` has no
+	// business programming a compare against it. Both refusals are the
+	// hypervisor's, so exec_32ZICSR turns them into cause 22.
+	if (Extensions.H && regs.get_virt() && csr == 0x24D) {
+		constexpr uint64_t STCE = 1ull << 63;
+		if (!(regs.read_csr(CSR_MENVCFG) & STCE)) return false;
+		if (!(regs.read_csr(0x60A) & STCE)) return false;
+		if (!(regs.read_csr(0x606) & (1ull << 1))) return false;  // hcounteren.TM
+	}
+
+	// mstatus.TVM closes satp to S-mode, reads included. Together with the
+	// SFENCE.VMA trap it gives a hypervisor a complete view of a guest
+	// supervisor's attempts to manage translation: it cannot install a root
+	// table, and it cannot read back the one it is running under.
+	// hgatp is closed by the same bit and for the same reason: it is the
+	// hypervisor's own second-stage root, and M-mode withholding
+	// translation control has to withhold all of it.
+	if ((csr == CSR_SATP || (Extensions.H && csr == hyp::CSR_HGATP_ADDR))
+	    && regs.get_priv() == PrivMode::S
+	    && (regs.read_csr(CSR_MSTATUS) & MSTATUS_TVM))
+		return false;
+
+	// The stateen registers gate each other down the privilege hierarchy:
+	// mstateen's SE0 bit controls whether sstateen and hstateen are
+	// reachable at all from below M, and hstateen's controls whether a
+	// guest may reach sstateen. Denying at the top denies all the way
+	// down, which is what lets a hypervisor withhold state it does not
+	// understand well enough to context-switch.
+	if (Extensions.SSSTATEEN && stateen::is_stateen_csr(csr)
+	    && !stateen::stateen_access_permitted(regs, csr))
+		return false;
+
+	// mstateen0.ENVCFG does not gate a register named "stateen" -- it gates
+	// the *envcfg* registers themselves. That is what the field is for: a
+	// bit in mstateen0 controls access to the state a newer extension adds,
+	// and senvcfg/henvcfg are that state. Enforcing it only on the
+	// state-enable registers left the thing being enabled unguarded.
+	if (Extensions.ZKR && csr == CSR_SEED && !seed_access_permitted(regs, writing))
+		return false;
+
+	// ssp exists only while shadow stacks are enabled for the current mode.
+	// A mode that cannot execute the instructions has no business holding
+	// the pointer they use, and software probes exactly this to discover
+	// whether the extension is available to it.
+	if (Extensions.ZICFISS && csr == cfiss::CSR_SSP && !cfiss::enabled(regs))
+		return false;
+
+	// srmcfg is Ssqosid's resource-control register. It is HS-level state a
+	// guest has no business reaching -- the whole point is that the
+	// hypervisor assigns quality-of-service identities to its guests, not
+	// the other way round -- so a virtual mode never gets it, and below M
+	// it needs mstateen0's own bit for the extension.
+	if (csr == 0x181) {
+		if (Extensions.H && regs.get_virt()) return false;
+		if (Extensions.SSSTATEEN && regs.get_priv() != PrivMode::M
+		    && !(regs.read_csr(stateen::CSR_MSTATEEN0) & (1ull << 55)))
+			return false;
+	}
+
+	if (Extensions.SSSTATEEN && (csr == 0x10A || (Extensions.H && csr == 0x60A))
+	    && regs.get_priv() != PrivMode::M) {
+		constexpr uint64_t ENVCFG = 1ull << 62;
+		if (!(regs.read_csr(stateen::CSR_MSTATEEN0) & ENVCFG)) return false;
+		// And a guest additionally needs its hypervisor's permission.
+		if (Extensions.H && regs.get_virt()
+		    && !(regs.read_csr(stateen::CSR_HSTATEEN0) & ENVCFG))
+			return false;
+	}
+
+	return true;
+}
+
+
+// henvcfg's bits are not independent of menvcfg's. Three of them name an
+// extension M-mode can withhold, and withholding at the top has to
+// withhold all the way down: if menvcfg.STCE is clear, henvcfg.STCE is
+// read-only zero, and the same for PBMTE and ADUE. Without that, a
+// hypervisor could hand a guest an extension the machine had switched
+// off, and -- worse for anything probing -- henvcfg would read back a
+// capability that does not work.
+//
+// The masking has to apply on *read* as well as on write. A bit set while
+// menvcfg permitted it must disappear the moment menvcfg is cleared,
+// rather than staying visible until something writes henvcfg again.
+//
+// CBIE, CBZE, CBCFE, LPE, SSE and FIOM are deliberately absent: those are
+// per-mode controls, not delegated capabilities, and a guest's setting is
+// its own. One of the hypervisor tests checks exactly that, asserting that
+// VS-mode's LPE is independent of menvcfg.LPE.
+uint64_t henvcfg_mask(Registers &regs)
+{
+	constexpr uint64_t DELEGATED = (1ull << 63)   // STCE
+	                             | (1ull << 62)   // PBMTE
+	                             | (1ull << 61);  // ADUE
+	return ~DELEGATED | regs.read_csr(CSR_MENVCFG);
+}
+
+// CBIE (bits 5:4) selects what cbo.inval does: 0 traps, 1 flushes, 3
+// invalidates. 2 is reserved, and WARL means a reserved value must not
+// read back -- software probes the field by writing a value and seeing
+// what survives, so retaining 2 claims a behaviour this hart does not
+// have. The ordinary WARL response is to keep the field it had.
+uint64_t cbie_warl(uint64_t updated, uint64_t old)
+{
+	constexpr uint64_t CBIE = 3ull << 4;
+	if (((updated >> 4) & 0x3) == 2) return (updated & ~CBIE) | (old & CBIE);
+	return updated;
+}
+
+
+// hip and hie are HS-mode's windows onto the VS-level bits of mip and mie.
+// They are views, not storage: hip.VSSIP *is* mip.VSSIP, and writing it
+// writes hvip, which is what makes the read and write directions agree.
+// Holding them as separate registers is the mistake that makes an
+// injected interrupt visible in hvip and nowhere else.
+uint64_t read_hip(Registers &regs, Memory &mem)
+{
+	return compute_mip(regs, mem) & HIP_MASK;
+}
+
+void write_hip(Registers &regs, uint64_t value)
+{
+	// VSSIP alone is writable here, and the write lands in hvip. VSTIP,
+	// VSEIP and SGEIP are read-only through hip: they are asserted by
+	// hardware, and a hypervisor that wants to inject them does so
+	// through hvip instead.
+	uint64_t hvip = regs.read_csr(CSR_HVIP);
+	regs.write_csr(CSR_HVIP, (hvip & ~MIP_VSSIP) | (value & MIP_VSSIP));
+}
+
+uint64_t read_hie(Registers &regs)
+{
+	return regs.read_csr(CSR_MIE) & HIP_MASK;
+}
+
+void write_hie(Registers &regs, uint64_t value)
+{
+	uint64_t mie = regs.read_csr(CSR_MIE);
+	regs.write_csr(CSR_MIE, (mie & ~HIP_MASK) | (value & HIP_MASK));
+}
+
+void write_hvip(Registers &regs, uint64_t value)
+{
+	regs.write_csr(CSR_HVIP, value & HVIP_WMASK);
+}
+
+
+// mideleg's VS-level bits are read-only 1 when the hypervisor extension is
+// implemented. VS interrupts have nowhere else to go: they exist to be
+// handled by HS-mode or delegated onward to the guest, and M-mode taking
+// them directly would mean the machine servicing an interrupt raised for a
+// guest it knows nothing about. Making them writable lets software clear a
+// bit and then wait forever for an interrupt that is no longer routed
+// anywhere.
+//
+// Bit 12 (SGEIP) is in the set too. The spec makes it read-only one when
+// GEILEN is nonzero, and GEILEN is 63 here, matching the configuration of the
+// Sail model DoomV is held to. It used to be zero, with SGEIP writable, which
+// is also a legal hart -- but not the one the reference is.
+uint64_t mideleg_fixed_ones()
+{
+	if (!Extensions.H) return 0;
+	// SGEIP too, now that the hart has guest external interrupt lines: the
+	// spec makes bit 12 read-only one whenever GEILEN is nonzero.
+	return MIP_VSSIP | MIP_VSTIP | MIP_VSEIP | MIP_SGEIP;
+}
+
+
+// vsie and vsip are the guest's view of the VS-level interrupt bits, and
+// the view is *shifted*: what the hypervisor calls VSSIP at bit 2 the
+// guest calls SSIP at bit 1, and likewise VSTIP/STIP at 6/5 and
+// VSEIP/SEIP at 10/9. It is the same renumbering enter_trap applies to
+// the cause, and for the same reason -- inside the guest these are its
+// own supervisor interrupts, sitting where a supervisor expects to find
+// them. A guest reaching for sie/sip is redirected here, so getting the
+// shift wrong means a guest enabling its timer interrupt actually enables
+// nothing.
+constexpr uint64_t VS_BITS_HS    = MIP_VSSIP | MIP_VSTIP | MIP_VSEIP;   // 2, 6, 10
+constexpr uint64_t VS_BITS_GUEST = VS_BITS_HS >> 1;                     // 1, 5, 9
+
+// hideleg decides which VS-level interrupts the guest is allowed to see at
+// all. A bit the hypervisor has not delegated is not merely undeliverable
+// to the guest -- it must not appear in the guest's vsip either, or a guest
+// kernel polls a pending bit for an interrupt that will never arrive.
+uint64_t vs_visible(Registers &regs)
+{
+	return VS_BITS_HS & regs.read_csr(0x603);   // hideleg
+}
+
+uint64_t read_vsie(Registers &regs)
+{
+	return (regs.read_csr(CSR_MIE) & vs_visible(regs)) >> 1;
+}
+
+void write_vsie(Registers &regs, uint64_t value)
+{
+	// Only the bits hideleg delegates are the guest's to enable. A guest
+	// writing sie.SEIE for an interrupt the hypervisor kept must not turn
+	// on hie.VSEIE behind its back -- that would let the guest arm an
+	// interrupt routed to HS-mode.
+	uint64_t writable = vs_visible(regs);
+	uint64_t mie = regs.read_csr(CSR_MIE);
+	regs.write_csr(CSR_MIE, (mie & ~writable)
+	                      | (((value << 1) & writable)));
+}
+
+uint64_t read_vsip(Registers &regs, Memory &mem)
+{
+	return (compute_mip(regs, mem) & vs_visible(regs)) >> 1;
+}
+
+void write_vsip(Registers &regs, uint64_t value)
+{
+	// Only SSIP is writable by the guest, and it lands in hvip.VSSIP --
+	// the same storage hip.VSSIP writes, so a guest clearing its own
+	// pending software interrupt clears the one the hypervisor injected.
+	uint64_t hvip = regs.read_csr(CSR_HVIP);
+	regs.write_csr(CSR_HVIP, (hvip & ~MIP_VSSIP)
+	                       | ((value & (VS_BITS_GUEST & 0x2)) << 1));
+}
+
+
+// vsstatus is the guest's sstatus and has to behave like one, not like
+// plain storage. Two of its fields are not stored at all:
+//
+//   SD  is derived -- set exactly when FS or VS reads Dirty. A guest
+//       kernel tests SD to decide whether it must save floating-point or
+//       vector state on a context switch, so a stored-and-stale SD either
+//       loses a guest's registers or costs it a save on every switch.
+//   UXL is read-only 2: this hart's VU-mode is always 64-bit, and a
+//       writable UXL would promise a width VU cannot actually run at.
+uint64_t read_vsstatus(Registers &regs)
+{
+	return (vcommon::with_sd(regs.read_csr(CSR_VSSTATUS_N)) & SSTATUS_MASK)
+	     | (2ull << 32);
+}
+
+void write_vsstatus(Registers &regs, uint64_t value)
+{
+	uint64_t old = regs.read_csr(CSR_VSSTATUS_N);
+	regs.write_csr(CSR_VSSTATUS_N, (old & ~SSTATUS_WMASK) | (value & SSTATUS_WMASK));
+}
+
+uint64_t RiscvCore::read_csr_effective(Registers &regs, Memory &mem, uint16_t csr)
+{
+	// PMP entries past the implemented count read as zero rather than as
+	// whatever was last written to an unimplemented register.
+	// UXL (33:32) and SXL (35:34) are read-only 2: this hart's U and S modes
+	// only run at 64 bits. sstatus's view already said so for UXL, but
+	// mstatus read them from storage, where nothing ever set them -- so they
+	// read as 0 ("no such mode") until reset, which Sail does not. Found by
+	// lock-stepping against Sail at the first trap of every riscv-test.
+	if (csr == CSR_MSTATUS) return vcommon::with_sd(regs.read_csr(CSR_MSTATUS)) | (2ull << 32) | (2ull << 34);
+	if (pmp::is_pmpcfg(csr)) return pmp::read_cfg(regs, csr);
+	if (pmp::is_pmpaddr(csr)) return pmp::read_addr(regs, csr);
+	if (csr == 0x100) return read_sstatus(regs);
+	if (csr == CSR_MISA) return compute_misa();
+	if (csr == CSR_MEPC || csr == CSR_SEPC || csr == 0x241) return align_pc(regs.read_csr(csr));
+	if (Extensions.H && csr == hyp::CSR_HSTATUS_ADDR) return hyp::read_hstatus(regs);
+	if (Extensions.H && csr == 0x60A) return regs.read_csr(0x60A) & henvcfg_mask(regs);
+	// senvcfg's SSE is the guest supervisor's control over shadow stacks
+	// for its user code, and the hypervisor's henvcfg.SSE sits above it:
+	// with that clear, the guest cannot enable what its hypervisor has
+	// withheld, so the bit reads zero however it was written. Same
+	// withholding shape as henvcfg's own delegated bits.
+	if (Extensions.ZICFISS && Extensions.H && regs.get_virt() && csr == 0x10A
+	    && !(regs.read_csr(0x60A) & (1ull << 3)))
+		return regs.read_csr(0x10A) & ~(1ull << 3);
+	if (csr == CSR_MIDELEG) return regs.read_csr(CSR_MIDELEG) | mideleg_fixed_ones();
+	// tselect reads back the inverse of what was written. That is the
+	// debug spec's way of saying there are no triggers: software writes a
+	// trigger index and, when it does not read back, stops looking. It is
+	// what Sail does, and the only trigger CSR Sail has.
+	if (csr == 0x7A0) return ~regs.read_csr(0x7A0);
+	// GEILEN is 63, as in the reference's configuration: hgeie holds an
+	// enable for each guest external interrupt, bits 1 to 63 (bit 0 is not
+	// an interrupt number), and hgeip reports which are pending. No device
+	// here raises one, so hgeip reads zero.
+	if (Extensions.H && csr == CSR_HGEIE) return regs.read_csr(CSR_HGEIE) & HGEI_MASK;
+	if (Extensions.H && csr == CSR_HGEIP) return 0;
+	if (Extensions.ZKR && csr == CSR_SEED) return read_seed(mem);
+	if (Extensions.H && csr == CSR_VSSTATUS_N) return read_vsstatus(regs);
+	if (Extensions.H && csr == 0x204) return read_vsie(regs);
+	if (Extensions.H && csr == 0x244) return read_vsip(regs, mem);
+	if (Extensions.H && csr == CSR_HIP) return read_hip(regs, mem);
+	if (Extensions.H && csr == CSR_HIE) return read_hie(regs);
+	if (Extensions.H && csr == CSR_HVIP) return regs.read_csr(CSR_HVIP) & HVIP_WMASK;
+	if (csr == CSR_SIE) return read_sie(regs);
+	if (csr == CSR_SIP) return read_sip(regs, mem);
+	if (csr == CSR_MIP) return compute_mip(regs, mem);
+	if (csr == CSR_MIREG) return mem.get_imsic_m().read_indirect(regs.read_csr(CSR_MISELECT));
+	if (csr == CSR_SIREG) return mem.get_imsic_s().read_indirect(regs.read_csr(CSR_SISELECT));
+	if (csr == CSR_MTOPEI) return mem.get_imsic_m().topei_value();
+	if (csr == CSR_STOPEI) return mem.get_imsic_s().topei_value();
+	if (csr == CSR_MTOPI) return compute_topi(regs, mem, /*s_level=*/false);
+	if (csr == CSR_STOPI) return compute_topi(regs, mem, /*s_level=*/true);
+	// cycle/time/instret/hpmcounter* (Zicntr, Zihpm): mcycle, mtime,
+	// minstret and mhpmcounter3..31 read unprivileged -- see ext_zicntr.cpp.
+	// htimedelta is what lets a guest have its own timeline. A guest
+	// reading `time` gets the host's mtime plus this offset, so a
+	// hypervisor can migrate a guest, or start one long after boot,
+	// without the guest observing a jump. Only `time` is shifted --
+	// cycle and instret are counts of work actually done, and the guest
+	// really did run for that many.
+	if (Extensions.H && regs.get_virt() && csr == CSR_TIME)
+		return counters::read_counter(regs, mem, csr) + regs.read_csr(0x605);
+	if (counters::is_counter_csr(csr)) return counters::read_counter(regs, mem, csr);
+	// scountovf has no storage of its own -- it is assembled from the OF
+	// bits of every mhpmevent, so the two cannot drift apart.
+	if (Extensions.SSCOFPMF && csr == sscofpmf::CSR_SCOUNTOVF) return sscofpmf::read_scountovf(regs);
+	if (Extensions.SSSTATEEN && stateen::is_stateen_csr(csr)) return stateen::read_stateen(regs, csr);
+	if (csr == 0x001) return regs.get_fflags();
+	if (csr == 0x002) return regs.get_frm();
+	if (csr == 0x003) return ((uint64_t)regs.get_frm() << 5) | regs.get_fflags();
+	if (csr == 0x008) return regs.get_vstart();
+	if (csr == 0x009) return regs.get_vxsat();
+	if (csr == 0x00A) return regs.get_vxrm();
+	if (csr == 0x00F) return ((uint64_t)regs.get_vxrm() << 1) | regs.get_vxsat();
+	if (csr == 0xC20) return regs.get_vl();
+	if (csr == 0xC21) return regs.get_vtype();
+	if (csr == 0xC22) return Registers::VLEN_BYTES;
+	return regs.read_csr(csr);
+}
+
+// Byte-granular access that respects page boundaries. Only the straddling
+// case actually needs this -- an aligned access never crosses a page -- but
+// splitting unconditionally keeps one code path instead of two, and the
+// cost is a per-byte translation on an operation that already walked the
+// page table once.
+//
+// The translation is redone per byte rather than cached per page because
+// the page a byte falls in is the only thing that decides its physical
+// address, and recomputing it is cheap next to getting it wrong.
+// Loads and stores that stay inside one page, from a cached page of RAM or of
+// a framebuffer.
+//
+// The same arrangement as DoomSystem's fetch cache. A page is remembered once
+// an access to it has gone through translate_or_trap and succeeded, and only
+// if every access of that kind inside the page would get the same answer: it
+// is RAM or one framebuffer from end to end (Memory::direct_page), there is no
+// second translation stage and no MPRV, and one PMP entry decides the whole
+// page. The entry holds where the page
+// is, never its contents. Any CSR write or change of privilege or V
+// (regs.state_gen, which covers satp, mstatus's SUM, MXR and MPRV, the PMP
+// CSRs and the pointer-masking controls), any TLB flush and any change to the
+// extensions makes it stale.
+//
+// Stores keep the side effects a store has beyond storing: a page holding the
+// tohost register is never cached, and a store to a framebuffer bumps the
+// host-side counters its uncached path would (Memory::framebuffer_stored).
+//
+// The framebuffers are here because drawing is most of what a guest does to
+// them, and the uncached path is long: a full translation and PMP check, then
+// write32 testing every device window before falling through, for DOOM's, to
+// four write8s. Every pixel of every DOOM frame and every glyph fbcon or X
+// draws took it.
+//
+// A cached access records itself exactly as the full path would -- the access
+// log that lock-step compares against the reference, and for a store the bytes
+// it wrote (Memory's StoreCapture does that when the slow path goes through
+// it). The caches used to switch themselves off whenever those logs were set,
+// which kept lock-step correct but meant the Sail sweep only ever exercised
+// the slow paths: the one part of the machine the instruction-by-instruction
+// check did not reach. Reporting instead of bypassing puts them under it.
+static uint64_t data_cache_key(const Registers &regs)
+{
+	return regs.state_gen + mmu_tlb_generation() + ExtensionsEpoch;
+}
+
+static void remember_data_page(Registers &regs, Memory &mem, RiscvCore::DataPage &e,
+                               uint64_t vpage, uint64_t key, uint64_t paddr, int access)
+{
+	const uint64_t ppage = paddr & ~0xFFFull;
+	Memory::Backing backing;
+	uint8_t *host = mem.direct_page(ppage, backing);
+	if (!host) return;
+	if (Extensions.H && regs.get_virt()) return;
+	if (regs.read_csr(CSR_MSTATUS) & MSTATUS_MPRV) return;
+	if (Extensions.SMPMP && !pmp::page_permits(regs, ppage, access, (uint8_t)regs.get_priv())) return;
+	if (access == pmp::ACC_STORE && mem.tohost_addr
+	    && ((mem.tohost_addr >> 12) == (ppage >> 12) || ((mem.tohost_addr + 7) >> 12) == (ppage >> 12)))
+		return;
+	e.vpage = vpage;
+	e.key = key;
+	e.ppage = ppage;
+	e.host = host;
+	e.backing = backing;
+}
+
+bool RiscvCore::load_virtual(Registers &regs, Memory &mem, uint64_t vaddr,
+                             unsigned size, uint64_t &out)
+{
+	// The wide path first: one translation, one memory read, which is what
+	// every aligned access takes.
+	if (((vaddr + size - 1) >> 12) == (vaddr >> 12)) {
+		const uint64_t vpage = vaddr >> 12;
+		const uint64_t key = data_cache_key(regs);
+		DataPage &e = load_cache[vpage & (DATA_CACHE_SIZE - 1)];
+		if (e.vpage == vpage && e.key == key) {
+			const unsigned offset = (unsigned)(vaddr & 0xFFF);
+			uint64_t v = 0;
+			std::memcpy(&v, e.host + offset, size);
+			out = v;
+			if (access_log)
+				access_log->push_back({vaddr, e.ppage | offset, (uint8_t)size, false});
+			return true;
+		}
+		uint64_t paddr;
+		if (!translate_or_trap(regs, mem, vaddr, AccessType::Load, paddr, size))
+			return false;
+		switch (size) {
+		case 1:  out = mem.read8(paddr);  break;
+		case 2:  out = mem.read16(paddr); break;
+		case 4:  out = mem.read32(paddr); break;
+		default: out = mem.read64(paddr); break;
+		}
+		remember_data_page(regs, mem, e, vpage, key, paddr, pmp::ACC_LOAD);
+		return true;
+	}
+
+	// Straddling: check the whole access first, so the fault is reported
+	// before any bytes are gathered, then assemble little-endian.
+	uint64_t probe;
+	if (!translate_or_trap(regs, mem, vaddr, AccessType::Load, probe, size))
+		return false;
+
+	uint64_t value = 0;
+	for (unsigned i = 0; i < size; i++) {
+		uint64_t pa;
+		if (!translate_or_trap(regs, mem, vaddr + i, AccessType::Load, pa, 1))
+			return false;
+		value |= (uint64_t)mem.read8(pa) << (8 * i);
+	}
+	out = value;
+	return true;
+}
+
+bool RiscvCore::store_virtual(Registers &regs, Memory &mem, uint64_t vaddr,
+                              unsigned size, uint64_t value)
+{
+	if (((vaddr + size - 1) >> 12) == (vaddr >> 12)) {
+		const uint64_t vpage = vaddr >> 12;
+		const uint64_t key = data_cache_key(regs);
+		DataPage &e = store_cache[vpage & (DATA_CACHE_SIZE - 1)];
+		if (e.vpage == vpage && e.key == key) {
+			const unsigned offset = (unsigned)(vaddr & 0xFFF);
+			const uint64_t paddr = e.ppage | offset;
+			std::memcpy(e.host + offset, &value, size);
+			if (e.backing != Memory::Backing::Ram) mem.framebuffer_stored(e.backing, size);
+			if (access_log)
+				access_log->push_back({vaddr, paddr, (uint8_t)size, true});
+			// The bytes, as StoreCapture records them for a store that goes
+			// through Memory: little-endian, one entry each.
+			if (mem.store_log)
+				for (unsigned i = 0; i < size; i++)
+					mem.store_log->push_back({paddr + i, (uint8_t)(value >> (8 * i))});
+			return true;
+		}
+		uint64_t paddr;
+		if (!translate_or_trap(regs, mem, vaddr, AccessType::Store, paddr, size))
+			return false;
+		switch (size) {
+		case 1:  mem.write8(paddr, (uint8_t)value);   break;
+		// Memory has no write16 -- see memory.hpp, where the MMIO
+		// dispatch is defined for 8, 32 and 64 only.
+		case 2:  mem.write8(paddr, (uint8_t)value);
+		         mem.write8(paddr + 1, (uint8_t)(value >> 8)); break;
+		case 4:  mem.write32(paddr, (uint32_t)value); break;
+		default: mem.write64(paddr, value);           break;
+		}
+		remember_data_page(regs, mem, e, vpage, key, paddr, pmp::ACC_STORE);
+		return true;
+	}
+
+	// Every byte is translated before any is written. A store that
+	// straddles into a page it may not write must not leave the first page
+	// modified -- software that catches the fault and retries would
+	// otherwise write those bytes twice.
+	uint64_t pa[8];
+	for (unsigned i = 0; i < size; i++) {
+		if (!translate_or_trap(regs, mem, vaddr + i, AccessType::Store, pa[i], 1))
+			return false;
+	}
+	for (unsigned i = 0; i < size; i++)
+		mem.write8(pa[i], (uint8_t)(value >> (8 * i)));
+	return true;
+}
+
+bool RiscvCore::translate_or_trap(Registers &regs, Memory &mem, uint64_t vaddr, AccessType type, uint64_t &paddr, unsigned size)
+{
+	uint64_t cause, tval;
+	if (!mmu_translate(regs, mem, vaddr, type, paddr, cause, tval)) {
+		enter_trap(regs, cause, tval);
+		return false;
+	}
+	if (access_log && type != AccessType::Fetch)
+		access_log->push_back({vaddr, paddr, (uint8_t)size, type == AccessType::Store});
+
+	// An access that crosses a page boundary is two accesses as far as the
+	// page tables are concerned, and the second page can answer differently
+	// from the first: unmapped, read-only, or owned by another privilege.
+	// Translating only the base address means a misaligned load spanning
+	// into an unmapped page succeeds by reading whatever followed the first
+	// page physically -- no fault, wrong data, silently.
+	//
+	// Misalignment is ordinary here rather than exotic: RVA23S64 requires
+	// misaligned loads and stores to work, and with C an instruction can
+	// start on any even address, so a four-byte access two bytes from the
+	// end of a page is routine.
+	//
+	// The address the fault names is the *first byte of the access that
+	// lies in the faulting page* -- the page boundary itself, for a
+	// straddle. Not the original address (software already knows that one),
+	// and not the access's last byte: an access at offset 0xFFF spanning
+	// eight bytes ends at offset 0x006 of the next page, and naming that
+	// tells a hypervisor to back a page at an address four words past the
+	// one that actually faulted.
+	//
+	// It is also the address the byte-at-a-time store path arrives at by
+	// construction -- it translates ascending, so the first byte to fault
+	// is the boundary one. That the two paths disagreed is why straddling
+	// stores reported the right guest physical address and straddling
+	// loads did not.
+	if (size > 1) {
+		const uint64_t last = vaddr + size - 1;
+		if ((last >> 12) != (vaddr >> 12)) {
+			// Aligning `last` down gives the second page's first byte:
+			// nothing here is wider than eight bytes, so an access spans
+			// at most two pages and there is only ever one boundary.
+			const uint64_t tail = last & ~(uint64_t)0xFFF;
+			uint64_t tail_paddr;
+			if (!mmu_translate(regs, mem, tail, type, tail_paddr, cause, tval)) {
+				enter_trap(regs, cause, tval);
+				return false;
+			}
+		}
+	}
+
+	// PMP is checked on the *physical* address, after translation, and a
+	// denial is an access fault rather than a page fault. The difference
+	// is not cosmetic: a page fault tells the supervisor to fix a mapping
+	// and retry, while an access fault says this physical region is not
+	// reachable at this privilege however the tables are arranged.
+	//
+	// The privilege used is mstatus.MPP when MPRV is set and the access is
+	// a load or store, matching the translation the MMU just did. Checking
+	// at the current mode instead would let an M-mode MPRV access reach
+	// memory the effective privilege is denied.
+	static constexpr uint64_t CAUSE_INST_ACCESS_F  = 1;
+	static constexpr uint64_t CAUSE_LOAD_ACCESS_F  = 5;
+	static constexpr uint64_t CAUSE_STORE_ACCESS_F = 7;
+	auto access_cause = [&](AccessType t) {
+		if (t == AccessType::Fetch) return CAUSE_INST_ACCESS_F;
+		if (t == AccessType::Load)  return CAUSE_LOAD_ACCESS_F;
+		return CAUSE_STORE_ACCESS_F;   // Store, Amo, CacheBlock
+	};
+
+	// Physical memory attributes come first: an address nothing answers is
+	// an access fault regardless of what PMP would have said about it.
+	if (!mem.is_backed(paddr, size)) {
+		enter_trap(regs, access_cause(type), vaddr);
+		return false;
+	}
+
+	if (Extensions.SMPMP) {
+		uint8_t priv = (uint8_t)regs.get_priv();
+		if (type != AccessType::Fetch) {
+			uint64_t st = regs.read_csr(CSR_MSTATUS);
+			if (st & MSTATUS_MPRV) priv = (uint8_t)((st >> 11) & 3);
+		}
+		// A cache-block operation is permitted by PMP on read *or* write,
+		// the same rule its page permissions follow. Funnelling it into the
+		// store check demanded write and faulted on a legitimately
+		// read-only region -- over-faulting, which is just as wrong as
+		// letting an access through and harder to notice, since a spurious
+		// trap looks like the feature working.
+		bool ok;
+		if (type == AccessType::CacheBlock) {
+			ok = pmp::check(regs, paddr, size, pmp::ACC_LOAD, priv)
+			  || pmp::check(regs, paddr, size, pmp::ACC_STORE, priv);
+		} else {
+			int acc = (type == AccessType::Fetch) ? pmp::ACC_FETCH
+			        : (type == AccessType::Load)  ? pmp::ACC_LOAD
+			                                      : pmp::ACC_STORE;
+			ok = pmp::check(regs, paddr, size, acc, priv);
+		}
+		if (!ok) {
+			uint64_t c = access_cause(type);
+			// tval is the faulting *virtual* address, as for a page fault.
+			enter_trap(regs, c, vaddr);
+			return false;
+		}
+	}
+	return true;
+}
+
+void RiscvCore::raise_illegal_instruction(Registers &regs, uint64_t tval)
+{
+	// pc still sits on the offending instruction (a disabled/unknown
+	// encoding is never executed, so nothing advanced it), which is exactly
+	// what the trap should record as the return address.
+	enter_trap(regs, CAUSE_ILLEGAL_INSN, tval);
+}
+
+// Cause 18. tval names which check failed rather than holding an address:
+// 2 for a landing-pad violation, 3 for a shadow-stack one. pc still sits on
+// the offending instruction, which is what the handler wants to see.
+void RiscvCore::raise_software_check(Registers &regs, uint64_t tval)
+{
+	enter_trap(regs, 18, tval);
+}
+
+// Where a trap lands. In direct mode (0) every trap goes to the base; in
+// vectored mode (1) an interrupt goes to base + 4 * cause, so each has its own
+// entry, and an exception still goes to the base.
+static uint64_t trap_vector(uint64_t tvec, uint64_t cause, bool is_interrupt)
+{
+	const uint64_t base = tvec & ~0x3ull;
+	if ((tvec & 0x3) == 1 && is_interrupt) return base + ((cause & 0x7FFFFFFFFFFFFFFFull) << 2);
+	return base;
+}
+
+void RiscvCore::enter_trap(Registers &regs, uint64_t cause, uint64_t tval, bool is_interrupt)
+{
+	uint64_t pc = regs.get_pc();
+	PrivMode from = regs.get_priv();
+	trap_count++;
+	last_trap_cause = cause;
+	last_trap_tval = tval;
+	last_trap_epc = pc;
+	last_trap_interrupt = is_interrupt;
+
+	// Interrupt causes have bit 63 set (e.g. (1<<63)|7 for an M-timer
+	// interrupt) -- strip it for the delegation-bit lookup, which always
+	// indexes by the low cause number regardless. Interrupts delegate via
+	// mideleg, exceptions via medeleg; either way, delegation only ever
+	// applies below M (already-M-mode traps always stay in M) and only
+	// downward, never back up to a mode the hart has already left.
+	uint64_t cause_bit = cause & 0x7FFFFFFFFFFFFFFFull;
+	uint64_t deleg = is_interrupt ? regs.read_csr(CSR_MIDELEG) : regs.read_csr(CSR_MEDELEG);
+	bool to_s = (from != PrivMode::M) && (deleg & (1ull << cause_bit));
+
+	// Whether the hart was virtual when the trap happened must be saved
+	// before it is cleared -- into hstatus.SPV for a trap taken to HS, or
+	// mstatus.MPV for one taken to M. Without it the eventual xRET has no
+	// way to know it should resume a guest, and would return to the
+	// hypervisor's privilege level still running the guest's code.
+	bool was_virt = Extensions.H && regs.get_virt();
+
+	// A trap from a guest can be delegated one step further. medeleg sends
+	// it from M down to HS; hedeleg sends it from HS down to the guest's
+	// own handler, so the guest kernel services its own page faults and
+	// system calls without the hypervisor being involved at all. That is
+	// what makes virtualisation cheap -- a hypervisor that had to mediate
+	// every guest syscall would be unusable.
+	//
+	// Both levels have to agree: a cause the hypervisor has not delegated
+	// stays with the hypervisor even if the guest would like it.
+	uint64_t hdeleg = is_interrupt ? regs.read_csr(0x603)  // hideleg
+	                               : regs.read_csr(0x602); // hedeleg
+	bool to_vs = to_s && was_virt && (hdeleg & (1ull << cause_bit));
+
+	if (to_vs) {
+		// The guest's own trap registers, not the hypervisor's. These are
+		// the vs* shadows -- which is also what the guest would reach by
+		// their S-mode names, so from inside the guest this is
+		// indistinguishable from taking a trap on real hardware.
+		// A VS-level *interrupt* is renumbered on the way in: the guest
+		// must see its own supervisor cause, not the VS-level one. VSSIP
+		// (bit 2) arrives as cause 1, VSTIP (6) as 5, VSEIP (10) as 9 --
+		// one less in every case, since the VS bits sit exactly one
+		// position above the S bits they stand in for. Exceptions carry
+		// their own numbers through unchanged.
+		//
+		// Without this a guest kernel reads cause 2 for a software
+		// interrupt and dispatches on a number that means nothing to it.
+		uint64_t vs_cause = cause;
+		if (is_interrupt) vs_cause = (cause & (1ull << 63)) | (cause_bit - 1);
+
+		// ELP is live hart state at the moment of the trap, so it is
+		// stashed in the target mode's SPELP and cleared. An interrupt
+		// landing between an indirect jump and its lpad would otherwise
+		// disarm the check silently -- exactly when it matters most.
+		if (Extensions.ZICFILP) {
+			uint64_t vss = regs.read_csr(0x200);
+			vss = regs.elp ? (vss | cfilp::STATUS_SPELP) : (vss & ~cfilp::STATUS_SPELP);
+			regs.write_csr(0x200, vss);
+			regs.elp = false;
+		}
+
+		regs.write_csr(0x241, pc);       // vsepc
+		regs.write_csr(0x242, vs_cause); // vscause
+		regs.write_csr(0x243, tval);     // vstval
+
+		// Interrupt-enable stacking happens in vsstatus, the guest's own
+		// sstatus. Using the real sstatus here would corrupt the
+		// hypervisor's interrupt state on every guest trap.
+		uint64_t vsstatus = regs.read_csr(0x200);
+		vsstatus = (vsstatus & MSTATUS_SIE) ? (vsstatus | MSTATUS_SPIE) : (vsstatus & ~MSTATUS_SPIE);
+		vsstatus &= ~MSTATUS_SIE;
+		vsstatus = (from == PrivMode::S) ? (vsstatus | MSTATUS_SPP) : (vsstatus & ~MSTATUS_SPP);
+		regs.write_csr(0x200, vsstatus);
+
+		// The hart stays virtual: this trap never left the guest.
+		regs.set_priv(PrivMode::S);
+		regs.set_pc(trap_vector(regs.read_csr(0x205), vs_cause, is_interrupt)); // vstvec
+		return;
+	}
+
+	if (to_s) {
+		if (Extensions.ZICFILP) {
+			uint64_t st = regs.read_csr(CSR_MSTATUS);
+			st = regs.elp ? (st | cfilp::STATUS_SPELP) : (st & ~cfilp::STATUS_SPELP);
+			regs.write_csr(CSR_MSTATUS, st);
+			regs.elp = false;
+		}
+		regs.write_csr(CSR_SEPC, pc);
+		regs.write_csr(CSR_SCAUSE, cause);
+		regs.write_csr(CSR_STVAL, tval);
+
+		uint64_t mstatus = regs.read_csr(CSR_MSTATUS);
+		mstatus = (mstatus & MSTATUS_SIE) ? (mstatus | MSTATUS_SPIE) : (mstatus & ~MSTATUS_SPIE);
+		mstatus &= ~MSTATUS_SIE;
+		mstatus = (from == PrivMode::S) ? (mstatus | MSTATUS_SPP) : (mstatus & ~MSTATUS_SPP);
+		regs.write_csr(CSR_MSTATUS, mstatus);
+
+		if (Extensions.H) {
+			// htval is written by the MMU itself when a second-stage
+			// walk fails -- it is the only code that knows the guest
+			// physical address, and stval must keep the guest virtual
+			// one. Here it is only cleared for the causes that have no
+			// second-stage address to report, so a stale value from an
+			// earlier fault cannot be mistaken for a fresh one.
+			// htval carries the guest physical address of a G-stage
+			// fault, shifted right by two, while stval keeps the guest
+			// *virtual* one -- the hypervisor needs both, and one field
+			// cannot serve for both. For any other cause there is no
+			// second-stage address to report, and htval is cleared so a
+			// stale value from an earlier fault cannot be mistaken for a
+			// fresh one.
+			bool has_gpa = !is_interrupt
+			            && (cause_bit == 20 || cause_bit == 21 || cause_bit == 23);
+			regs.write_csr(0x643, has_gpa ? (regs.pending_gpa >> 2) : 0);
+			// htinst travels with htval: both describe the same fault, and
+			// a stale pseudoinstruction beside a fresh address is worse
+			// than none at all.
+			regs.write_csr(0x64A, has_gpa ? regs.pending_htinst : 0);
+
+			// A trap from a guest into HS-mode leaves virtual mode.
+			// SPVP records the guest's own privilege, so the
+			// hypervisor can tell it interrupted VS rather than VU.
+			uint64_t hstatus = hyp::read_hstatus(regs);
+			hstatus = was_virt ? (hstatus | (1ull << 7)) : (hstatus & ~(1ull << 7)); // SPV
+			if (was_virt) {
+				hstatus = (from == PrivMode::S) ? (hstatus | (1ull << 8))
+				                                : (hstatus & ~(1ull << 8)); // SPVP
+			}
+
+			// GVA says whether stval holds a guest *virtual* address. The
+			// hypervisor needs it to know how to read stval at all: for a
+			// fault it is an address in the guest's own address space and
+			// means nothing without the guest's page tables, while for an
+			// ECALL or an illegal instruction stval is not an address and
+			// GVA must read zero.
+			//
+			// It is written on every trap to HS, not only when set: leaving
+			// it alone would let a stale 1 from an earlier fault make the
+			// hypervisor read a non-address as a guest pointer.
+			static constexpr uint64_t HSTATUS_GVA_BIT = 1ull << 6;
+			bool gva = was_virt && tval_is_guest_va(cause_bit, is_interrupt);
+			hstatus = gva ? (hstatus | HSTATUS_GVA_BIT) : (hstatus & ~HSTATUS_GVA_BIT);
+
+			hyp::write_hstatus(regs, hstatus);
+			regs.set_virt(false);
+		}
+		regs.set_priv(PrivMode::S);
+		regs.set_pc(trap_vector(regs.read_csr(CSR_STVEC), cause, is_interrupt));
+		return;
+	}
+
+	if (Extensions.ZICFILP) {
+		uint64_t st = regs.read_csr(CSR_MSTATUS);
+		st = regs.elp ? (st | cfilp::STATUS_MPELP) : (st & ~cfilp::STATUS_MPELP);
+		regs.write_csr(CSR_MSTATUS, st);
+		regs.elp = false;
+	}
+	regs.write_csr(CSR_MEPC, pc);
+	regs.write_csr(CSR_MCAUSE, cause);
+	regs.write_csr(CSR_MTVAL, tval);
+
+	// Standard M-mode enable stacking: the current interrupt-enable bit is
+	// saved to MPIE and cleared, so a handler doesn't get pre-empted by
+	// itself; MRET reverses this. MPP records the mode being trapped out
+	// of, same idea as SPP above but 2 bits since M-mode traps can be
+	// entered from any of the three modes.
+	uint64_t mstatus = regs.read_csr(CSR_MSTATUS);
+	mstatus = (mstatus & MSTATUS_MIE) ? (mstatus | MSTATUS_MPIE) : (mstatus & ~MSTATUS_MPIE);
+	mstatus &= ~MSTATUS_MIE;
+	mstatus = (mstatus & ~MSTATUS_MPP) | (((uint64_t)from & 0x3) << 11);
+	// MPV is the M-mode counterpart of hstatus.SPV: it is what tells the
+	// eventual MRET whether the mode it is returning to was virtual.
+	if (Extensions.H) {
+		mstatus = was_virt ? (mstatus | MSTATUS_MPV) : (mstatus & ~MSTATUS_MPV);
+		// GVA has an M-mode copy for exactly the same reason it has an
+		// HS-mode one, and it was defined here and never written. A guest
+		// fault that is not delegated lands in M with mtval holding a guest
+		// virtual address, and nothing said so.
+		bool mgva = was_virt && tval_is_guest_va(cause_bit, is_interrupt);
+		mstatus = mgva ? (mstatus | MSTATUS_GVA) : (mstatus & ~MSTATUS_GVA);
+	}
+	regs.write_csr(CSR_MSTATUS, mstatus);
+
+	if (Extensions.H) {
+		// mtval2 is htval's M-mode counterpart, and it was never written.
+		// A guest page fault that the hypervisor has not been delegated
+		// lands here, and firmware that forwards such a trap -- by copying
+		// mtval2 into htval and entering the HS handler -- was copying a
+		// zero over the only correct value the fault had produced.
+		bool m_has_gpa = !is_interrupt
+		              && (cause_bit == 20 || cause_bit == 21 || cause_bit == 23);
+		regs.write_csr(0x34B, m_has_gpa ? (regs.pending_gpa >> 2) : 0);
+		regs.write_csr(0x34A, m_has_gpa ? regs.pending_htinst : 0);  // mtinst
+	}
+	if (Extensions.H) regs.set_virt(false); // M-mode is never virtual
+	regs.set_priv(PrivMode::M);
+	regs.set_pc(trap_vector(regs.read_csr(CSR_MTVEC), cause, is_interrupt));
+}
+
+bool RiscvCore::interrupt_enabled(Registers &regs, int bit)
+{
+	if (bit < 0 || bit > 63) return false;
+	if (!(regs.read_csr(CSR_MIE) & (1ull << bit))) return false;
+	PrivMode priv = regs.get_priv();
+	bool to_s = (regs.read_csr(CSR_MIDELEG) & (1ull << bit)) != 0;
+	uint64_t mstatus = regs.read_csr(CSR_MSTATUS);
+	if (Extensions.H && to_s && (regs.read_csr(0x603) & (1ull << bit))) {
+		if (!regs.get_virt()) return false;
+		return !(priv == PrivMode::S && !(regs.read_csr(0x200) & MSTATUS_SIE));
+	}
+	if (!to_s) return !(priv == PrivMode::M && !(mstatus & MSTATUS_MIE));
+	if (priv == PrivMode::M) return false;
+	return !(!regs.get_virt() && priv == PrivMode::S && !(mstatus & MSTATUS_SIE));
+}
+
+bool RiscvCore::check_and_take_interrupt(Registers &regs, Memory &mem)
+{
+	uint64_t pending_enabled = compute_mip(regs, mem) & regs.read_csr(CSR_MIE);
+	if (!pending_enabled) return false;
+
+	// Fixed priority order per spec: MEI > MSI > MTI > SEI > SSI > STI,
+	// then the VS-level ones below those, then SGEI. A VS interrupt is
+	// lower priority than every interrupt belonging to a more privileged
+	// mode, which is the whole point -- the hypervisor gets to run before
+	// the guest it is injecting into.
+	static const int priority_order[] = {
+		(int)CAUSE_M_EXTERNAL, (int)CAUSE_M_SOFTWARE, (int)CAUSE_M_TIMER,
+		(int)CAUSE_S_EXTERNAL, (int)CAUSE_S_SOFTWARE, (int)CAUSE_S_TIMER,
+		12 /* SGEI */, 10 /* VSEI */, 2 /* VSSI */, 6 /* VSTI */,
+	};
+	int bit = -1;
+	for (int b : priority_order) {
+		if (pending_enabled & (1ull << b)) { bit = b; break; }
+	}
+	if (bit < 0) return false; // only a bit outside this fixed set is pending -- nothing this project defines yet
+
+	PrivMode priv = regs.get_priv();
+	bool to_s = (regs.read_csr(CSR_MIDELEG) & (1ull << bit)) != 0;
+	uint64_t mstatus = regs.read_csr(CSR_MSTATUS);
+
+	// A VS-level interrupt that HS-mode has delegated onward with hideleg
+	// belongs to the guest, and can only be taken while the guest is
+	// actually running. Its enable is the guest's own vsstatus.SIE, not
+	// the hypervisor's sstatus.SIE: a hypervisor with interrupts disabled
+	// does not thereby disable its guest's.
+	//
+	// enter_trap handles the renumbering (VSSIP's bit 2 arrives as cause
+	// 1) and the vs* register selection, so nothing here has to know
+	// about it -- this only decides whether the interrupt is taken.
+	if (Extensions.H && to_s && (regs.read_csr(0x603) & (1ull << bit))) {
+		if (!regs.get_virt()) return false;   // no guest running to take it
+		if (priv == PrivMode::S && !(regs.read_csr(0x200) & MSTATUS_SIE))
+			return false;                      // vsstatus.SIE
+		enter_trap(regs, (1ull << 63) | (uint64_t)bit, 0, /*is_interrupt=*/true);
+		return true;
+	}
+
+	if (!to_s) {
+		// M-target: always taken from S/U; from M itself only if MIE is
+		// set (a hart in M can mask its own interrupts, but a mode below
+		// M can never mask one that isn't delegated to it).
+		if (priv == PrivMode::M && !(mstatus & MSTATUS_MIE)) return false;
+	} else {
+		// S-target: always taken from U; from S itself only if SIE is
+		// set; never taken while already in M (M can't be pre-empted by
+		// a trap delegated to a less-privileged mode).
+		//
+		// "From S itself" means HS. VS-mode and VU-mode are both strictly
+		// below HS, so an HS-targeted interrupt is never masked by the
+		// hypervisor's sstatus.SIE while a guest is running -- the guest is
+		// not the mode being interrupted. Without the virt test this read
+		// HS's SIE from inside VS-mode, where `priv == S` is true of both,
+		// and a VS-level interrupt the hypervisor had asked to keep for
+		// itself (hideleg bit clear) was dropped on the floor whenever the
+		// hypervisor happened to be running with its own interrupts off.
+		if (priv == PrivMode::M) return false;
+		if (!regs.get_virt() && priv == PrivMode::S && !(mstatus & MSTATUS_SIE))
+			return false;
+	}
+
+	enter_trap(regs, (1ull << 63) | (uint64_t)bit, 0, /*is_interrupt=*/true);
+	return true;
+}
+
+bool RiscvCore::wake_for_interrupt(Registers &regs, Memory &mem)
+{
+	return (compute_mip(regs, mem) & regs.read_csr(CSR_MIE)) != 0;
+}
+
+void RiscvCore::exec_32ZICSR(const DecodedOp &instr, Registers &regs, Memory &mem)
+{
+	uint64_t pc = regs.get_pc();
+
+	if (instr.funct3 == 0) {
+		// SFENCE.VMA (funct7==0b0001001, rd==0) isn't distinguishable by
+		// instr.imm alone -- rs2 (the ASID operand) varies per encoding, so
+		// it's matched on funct7 directly, ahead of the fixed-immediate
+		// switch below. No TLB exists to flush yet, so this is a real,
+		// deliberate no-op rather than an unrecognized encoding.
+		if (instr.funct7 == 0b0001001 && instr.rd == 0) {
+			// SFENCE.VMA is a supervisor instruction: attempting it from
+			// U-mode is illegal regardless of TVM, and DoomV let it through.
+			// From VU-mode the exception is a virtual instruction instead
+			// -- HS-mode could have run this, so it is the hypervisor's to
+			// emulate or refuse rather than something that does not exist.
+			if (regs.get_priv() == PrivMode::U) {
+				if (Extensions.H && regs.get_virt())
+					enter_trap(regs, hyp::CAUSE_VIRTUAL_INSTRUCTION, instr.raw);
+				else
+					raise_illegal_instruction(regs, instr.raw);
+				return;
+			}
+
+			// mstatus.TVM makes SFENCE.VMA illegal in S-mode. The point is
+			// not the fence -- there is no TLB here to flush -- but that a
+			// hypervisor running a guest supervisor traps on it to know the
+			// guest touched its page tables. A hart that quietly succeeds
+			// tells the hypervisor nothing happened.
+			// In VS-mode the governing bit is hstatus.VTVM, and the trap is
+			// a virtual instruction rather than an illegal one -- same
+			// reasoning as the satp case above.
+			if (Extensions.H && regs.get_virt() && regs.get_priv() == PrivMode::S
+			    && (regs.read_csr(hyp::CSR_HSTATUS_ADDR) & (1ull << 20))) {
+				enter_trap(regs, hyp::CAUSE_VIRTUAL_INSTRUCTION, instr.raw);
+				return;
+			}
+			if (!regs.get_virt() && regs.get_priv() == PrivMode::S
+			    && (regs.read_csr(CSR_MSTATUS) & MSTATUS_TVM)) {
+				raise_illegal_instruction(regs, instr.raw);
+				return;
+			}
+			// The fence now has something to do. This drops every cached
+			// translation rather than the one address or ASID the operands
+			// name -- invalidating more than asked is always permitted, and
+			// it keeps the argument for the cache being correct down to one
+			// sentence instead of a table.
+			mmu_tlb_flush();
+			regs.set_pc(pc + instr.length);
+			return;
+		}
+
+		// ECALL/EBREAK/MRET/SRET/WFI -- control transfer, not a CSR
+		// read/modify/write. Illegal-instruction detection deliberately
+		// stays a separate, unconditional debugger halt (see
+		// DoomSystem::step) rather than a real trap here: this project
+		// still has no illegal-instruction trap handler set up anywhere
+		// (OpenSBI/a kernel will eventually provide one), so routing
+		// illegal instructions through this same path would just spin
+		// forever re-trapping instead of surfacing a crash log.
+		switch (instr.imm) {
+		case 0x000: { // ECALL -- cause depends on the mode making the call
+			PrivMode priv = regs.get_priv();
+			uint64_t cause = (priv == PrivMode::M) ? CAUSE_ECALL_FROM_M
+			                : (priv == PrivMode::S) ? CAUSE_ECALL_FROM_S
+			                                         : CAUSE_ECALL_FROM_U;
+			// A guest's ecall gets its own cause, 10, distinct from
+			// HS-mode's 9. That is how a hypervisor tells a call from
+			// the guest kernel apart from one made by its own
+			// supervisor code -- the two mean entirely different
+			// things and are handled by different code paths. VU-mode
+			// keeps cause 8, the same as U: the guest's userspace
+			// calls its own kernel, not the hypervisor.
+			if (Extensions.H && regs.get_virt() && regs.get_priv() == PrivMode::S)
+				cause = 10;
+			enter_trap(regs, cause, 0);
+			return;
+		}
+		case 0x001: // EBREAK
+			enter_trap(regs, CAUSE_BREAKPOINT, pc);
+			return;
+		case 0x102: { // SRET -- mirrors MRET below, using the S-mode fields
+			// hstatus.VTSR traps a guest supervisor's SRET as a *virtual*
+			// instruction (cause 22) rather than an illegal one, so the
+			// hypervisor can emulate the return itself. The bit was defined
+			// and made writable and then never consulted, so a guest with
+			// VTSR set simply returned -- to whatever sepc held, which in a
+			// test that never set it is zero.
+			//
+			// Cause 22 and not 2: the distinction is the whole point. An
+			// illegal instruction tells the guest it did something no one
+			// may do; a virtual instruction tells the hypervisor the guest
+			// did something only the hypervisor may do, and can be emulated
+			// on its behalf.
+			if (Extensions.H && regs.get_virt() && regs.get_priv() == PrivMode::S
+			    && (regs.read_csr(hyp::CSR_HSTATUS_ADDR) & (1ull << 22))) {
+				enter_trap(regs, 22, 0);
+				return;
+			}
+			// mstatus.TSR is the other half of that pair, and it is the
+			// half that was missing. It closes SRET to *HS*-mode, so that
+			// M-mode can interpose on a supervisor's return the same way a
+			// hypervisor interposes on its guest's. Without it an S-mode
+			// SRET with TSR set simply returned -- and since the very next
+			// thing a test does after setting TSR is put the machine in
+			// S-mode and try one, the return went to a sepc chosen for a
+			// trap that never happened.
+			//
+			// Three deliberate exclusions, all of them Sail's:
+			//   * M-mode is exempt. TSR is M's own control, and a mode does
+			//     not trap itself with it.
+			//   * VS-mode is exempt. hstatus.VTSR governs there, checked
+			//     above; TSR does not reach through virtualisation to a
+			//     guest's return.
+			//   * U-mode does not need it -- SRET is illegal there under
+			//     any setting, which is the next check.
+			constexpr uint64_t MSTATUS_TSR = 1ull << 22;
+			if (regs.get_priv() == PrivMode::S && !regs.get_virt()
+			    && (regs.read_csr(CSR_MSTATUS) & MSTATUS_TSR)) {
+				raise_illegal_instruction(regs, instr.raw);
+				return;
+			}
+			// SRET is a supervisor instruction, so U-mode may not run it
+			// at all -- and from VU-mode the refusal is a virtual
+			// instruction, since HS-mode could have run it. DoomV checked
+			// neither, so a VU-mode SRET *returned*, to whatever vsepc
+			// happened to hold: in a test that never set one, address 4,
+			// which then took an instruction access fault the test could
+			// not attribute to anything.
+			if (regs.get_priv() == PrivMode::U) {
+				if (Extensions.H && regs.get_virt())
+					enter_trap(regs, hyp::CAUSE_VIRTUAL_INSTRUCTION, instr.raw);
+				else
+					raise_illegal_instruction(regs, instr.raw);
+				return;
+			}
+			// In VS-mode the names sstatus and sepc mean the guest's own
+			// vsstatus and vsepc -- the same redirection every other S-mode
+			// CSR access already goes through. SRET was reading the
+			// hypervisor's copies instead, so a guest returning from its own
+			// trap resumed at the *hypervisor's* sepc, which in a test that
+			// never set one is zero.
+			const bool vs = Extensions.H && regs.get_virt();
+			const uint16_t status_csr = vs ? hyp::CSR_VSSTATUS_ADDR : CSR_MSTATUS;
+			const uint16_t epc_csr    = vs ? hyp::CSR_VSEPC_ADDR    : CSR_SEPC;
+
+			uint64_t mstatus = regs.read_csr(status_csr);
+			// SPELP is consumed here -- the same one-shot discipline
+			// SPIE and SPP follow, so a second return cannot re-arm an
+			// expectation the first one already took. Whether it becomes
+			// a live expectation is decided below, once the mode being
+			// returned to is known.
+			const bool saved_elp = Extensions.ZICFILP
+			                    && (mstatus & cfilp::STATUS_SPELP) != 0;
+			if (Extensions.ZICFILP) mstatus &= ~cfilp::STATUS_SPELP;
+			mstatus = (mstatus & MSTATUS_SPIE) ? (mstatus | MSTATUS_SIE) : (mstatus & ~MSTATUS_SIE);
+			mstatus |= MSTATUS_SPIE; // SPIE reset to 1 on return, per spec
+			PrivMode target = (mstatus & MSTATUS_SPP) ? PrivMode::S : PrivMode::U;
+			mstatus &= ~MSTATUS_SPP; // SPP reset to U on return, per spec
+			regs.write_csr(status_csr, mstatus);
+
+			// An SRET in HS-mode returns to the guest when hstatus.SPV
+			// says the trap came from one; SPV is then cleared, so a
+			// later SRET cannot accidentally resume in VS-mode without
+			// a guest having been entered again.
+			//
+			// An SRET in VS-mode is the guest's own return from its own
+			// trap. It stays virtual, and hstatus -- which belongs to
+			// the hypervisor, not the guest -- is not consulted.
+			if (Extensions.H && !regs.get_virt()) {
+				uint64_t hstatus = hyp::read_hstatus(regs);
+				regs.set_virt((hstatus & (1ull << 7)) != 0); // SPV
+				hyp::write_hstatus(regs, hstatus & ~(1ull << 7));
+			}
+			regs.set_priv(target);
+			// ELP is restored only if the mode being returned to actually
+			// enforces landing pads. Returning to a guest that has them
+			// switched off with an expectation still armed would fault its
+			// next instruction for a check it is not subject to.
+			if (Extensions.ZICFILP)
+				regs.elp = saved_elp && cfilp::enabled(regs);
+			regs.set_pc(align_pc(regs.read_csr(epc_csr)));
+			return;
+		}
+		case 0x302: { // MRET
+			uint64_t mstatus = regs.read_csr(CSR_MSTATUS);
+			const bool saved_elp = Extensions.ZICFILP
+			                    && (mstatus & cfilp::STATUS_MPELP) != 0;
+			if (Extensions.ZICFILP) mstatus &= ~cfilp::STATUS_MPELP;
+			mstatus = (mstatus & MSTATUS_MPIE) ? (mstatus | MSTATUS_MIE) : (mstatus & ~MSTATUS_MIE);
+			mstatus |= MSTATUS_MPIE; // MPIE reset to 1 on return, per spec
+			PrivMode target = (PrivMode)((mstatus & MSTATUS_MPP) >> 11);
+			// MPV says whether the trap came from a virtual mode. It is
+			// only meaningful below M, since M-mode is never virtual --
+			// returning to M always clears V.
+			bool target_virt = Extensions.H && (mstatus & MSTATUS_MPV) != 0
+			                && target != PrivMode::M;
+			mstatus &= ~MSTATUS_MPP; // MPP reset to U on return, per spec
+			mstatus &= ~MSTATUS_MPV;
+			regs.write_csr(CSR_MSTATUS, mstatus);
+			if (Extensions.H) regs.set_virt(target_virt);
+			regs.set_priv(target);
+			if (Extensions.ZICFILP)
+				regs.elp = saved_elp && cfilp::enabled(regs);
+			regs.set_pc(align_pc(regs.read_csr(CSR_MEPC)));
+			return;
+		}
+		case 0x105: { // WFI
+			// Sail's WFI, with its configuration. M and S wait. U may not
+			// wait at all (wfi_available_to_user_mode is false), so it is
+			// an illegal instruction at once. VU never waits: illegal with
+			// mstatus.TW set, a virtual instruction without. VS with TW set
+			// is illegal at once, and otherwise waits.
+			//
+			// TW for S, and hstatus.VTW for VS, are checked when the wait
+			// times out rather than here: a WFI that an interrupt ends in
+			// time completes whatever they say. DoomSystem::run_wait runs
+			// the wait.
+			constexpr uint64_t MSTATUS_TW = 1ull << 21;
+			const bool tw = (regs.read_csr(CSR_MSTATUS) & MSTATUS_TW) != 0;
+			const PrivMode p = regs.get_priv();
+			const bool v = Extensions.H && regs.get_virt();
+			if (p == PrivMode::U && !v) {
+				raise_illegal_instruction(regs, instr.raw);
+				return;
+			}
+			if (p == PrivMode::U) {
+				if (tw) raise_illegal_instruction(regs, instr.raw);
+				else enter_trap(regs, hyp::CAUSE_VIRTUAL_INSTRUCTION, instr.raw);
+				return;
+			}
+			if (p == PrivMode::S && v && tw) {
+				raise_illegal_instruction(regs, instr.raw);
+				return;
+			}
+			wait_request = Wait::Wfi;
+			return;
+		}
+		default:
+			// Genuinely unrecognized SYSTEM encoding.
+			regs.set_pc(pc + instr.length);
+			return;
+		}
+	}
+
+	uint16_t csr = (uint16_t)instr.imm;
+
+	// A guest reaching for the hypervisor's own registers is attempting
+	// something only HS-mode may do, which is a *virtual* instruction
+	// exception rather than an illegal one. The difference is what lets a
+	// hypervisor emulate the access on the guest's behalf instead of
+	// killing it, so it has to be decided before the ordinary privilege
+	// check below turns it into cause 2.
+	if (Extensions.H && hyp::is_virtual_instruction_csr(regs, csr)) {
+		enter_trap(regs, hyp::CAUSE_VIRTUAL_INSTRUCTION, instr.raw);
+		return;
+	}
+
+	// hstatus.VTVM does for a guest supervisor what mstatus.TVM does for a
+	// real one: satp becomes unreachable, so the hypervisor sees every
+	// attempt the guest makes to install or inspect its own root table.
+	//
+	// The cause is 22, not 2. Refusing with an illegal instruction tells
+	// the guest it did something forbidden; a virtual instruction tells the
+	// hypervisor the guest did something only the hypervisor may do, which
+	// it can then emulate. This has to be checked *before* redirection,
+	// while the number is still satp rather than vsatp.
+	if (Extensions.H && regs.get_virt() && regs.get_priv() == PrivMode::S
+	    && csr == CSR_SATP
+	    && (regs.read_csr(hyp::CSR_HSTATUS_ADDR) & (1ull << 20))) { // VTVM
+		enter_trap(regs, hyp::CAUSE_VIRTUAL_INSTRUCTION, instr.raw);
+		return;
+	}
+
+	// In VS-mode the S-mode CSR names refer to the VS shadows. Rewriting
+	// the number here, rather than special-casing each register at its own
+	// read and write site, is what stops one of them being missed.
+	if (Extensions.H) csr = hyp::redirect_for_virt(regs, csr);
+
+	// Whether this instruction writes has to be decided before the access
+	// check, not after: writing a read-only CSR is illegal, but *reading*
+	// one is fine, and CSRRS/CSRRC with rs1==0 (the `csrr` pseudo-
+	// instruction) is a read even though its encoding is a
+	// read-modify-write. Deciding this later would make every csrr of a
+	// read-only counter trap.
+	bool writes = (instr.funct3 & 0x3) == 0b01 || instr.rs1 != 0;
+
+	if (!csr_access_permitted(regs, csr, writes)) {
+		// A guest refused by its hypervisor's state-enable gate gets a
+		// virtual instruction, not an illegal one -- the hypervisor set
+		// that gate and is entitled to be told when the guest hits it.
+		// Only hstateen produces this; a refusal from mstateen is the
+		// machine's, and stays cause 2.
+		if (Extensions.SSSTATEEN && stateen::is_stateen_csr(csr)
+		    && stateen::stateen_denial_is_virtual(regs, csr)) {
+			enter_trap(regs, hyp::CAUSE_VIRTUAL_INSTRUCTION, instr.raw);
+			return;
+		}
+		// Same rule for the counters: a guest refused by hcounteren has
+		// been refused by its hypervisor, which can emulate the read.
+		if (counters::is_counter_csr(csr)
+		    && counters::counter_denial_is_virtual(regs, csr)) {
+			enter_trap(regs, hyp::CAUSE_VIRTUAL_INSTRUCTION, instr.raw);
+			return;
+		}
+		// And for the guest's timer compare. stimecmp has already been
+		// redirected to vstimecmp by this point, so keying on the VS
+		// number is what actually catches a guest's access.
+		if (Extensions.H && regs.get_virt() && csr == 0x24D) {
+			enter_trap(regs, hyp::CAUSE_VIRTUAL_INSTRUCTION, instr.raw);
+			return;
+		}
+
+		if (Extensions.ZICFISS && csr == cfiss::CSR_SSP
+		    && cfiss::denial_is_virtual(regs)) {
+			enter_trap(regs, hyp::CAUSE_VIRTUAL_INSTRUCTION, instr.raw);
+			return;
+		}
+
+		if (Extensions.ZKR && csr == CSR_SEED
+		    && seed_denial_is_virtual(regs, writes)) {
+			enter_trap(regs, hyp::CAUSE_VIRTUAL_INSTRUCTION, instr.raw);
+			return;
+		}
+
+		// srmcfg from any virtual mode is the hypervisor's to emulate --
+		// it is HS-level state, and the guest asking for it is exactly
+		// the case the hypervisor wants to see.
+		//
+		// Unless M-mode has closed it first. mstateen0.SRMCFG clear means
+		// HS-mode cannot reach srmcfg either, so there is no hypervisor
+		// standing behind the register and nothing to emulate on the
+		// guest's behalf: the answer is "no such access", cause 2. Same
+		// ordering as the envcfg case immediately below, and as TW
+		// outranking VTW for WFI -- a refusal from above is never
+		// downgraded into a refusal from the middle.
+		if (Extensions.H && regs.get_virt() && csr == 0x181
+		    && (!Extensions.SSSTATEEN
+		        || (regs.read_csr(stateen::CSR_MSTATEEN0) & (1ull << 55)))) {
+			enter_trap(regs, hyp::CAUSE_VIRTUAL_INSTRUCTION, instr.raw);
+			return;
+		}
+
+		// An envcfg refused by hstateen0 was refused by the hypervisor,
+		// not by the machine, and takes cause 22 for the same reason a
+		// refused state-enable register does. mstateen0 closing it first
+		// stays illegal: the machine said no and no one is underneath.
+		if (Extensions.SSSTATEEN && Extensions.H && regs.get_virt()
+		    && (csr == 0x10A || csr == 0x60A)) {
+			constexpr uint64_t ENVCFG = 1ull << 62;
+			if ((regs.read_csr(stateen::CSR_MSTATEEN0) & ENVCFG)
+			    && !(regs.read_csr(stateen::CSR_HSTATEEN0) & ENVCFG)) {
+				enter_trap(regs, hyp::CAUSE_VIRTUAL_INSTRUCTION, instr.raw);
+				return;
+			}
+		}
+
+		// A VU-mode access to a supervisor CSR is a virtual instruction
+		// too. VU sits below its own guest supervisor, and the register it
+		// reached for is one VS-mode may have -- so the exception is the
+		// emulable kind rather than "no such register". Reaching for a
+		// *machine* CSR stays illegal: no one below M may touch those, and
+		// there is no hypervisor able to stand in for M.
+		//
+		// The number has already been redirected, so a guest's `sstatus`
+		// arrives here as vsstatus (0x2xx); both 0x1xx and 0x2xx are
+		// supervisor-level for this purpose.
+		if (Extensions.H && regs.get_virt() && regs.get_priv() == PrivMode::U
+		    && !(writes && ((csr >> 10) & 0x3) == 0x3)
+		    && !(Extensions.XLEN64 && is_rv32_high_half(csr))) {
+			uint8_t level = (csr >> 8) & 0x3;
+			if (level == 1 || level == 2) {
+				enter_trap(regs, hyp::CAUSE_VIRTUAL_INSTRUCTION, instr.raw);
+				return;
+			}
+		}
+		// tval is the whole instruction for an illegal-instruction trap,
+		// which is what a handler needs to work out which CSR was refused.
+		raise_illegal_instruction(regs, instr.raw);
+		return;
+	}
+
+	regs.record_csr_access(csr); // dashboard's CSRs panel -- see registers.hpp
+	uint64_t old = read_csr_effective(regs, mem, csr);
+
+	// The *I forms (funct3 bit 2 set) use the rs1 field as a 5-bit
+	// zero-extended immediate instead of a register number.
+	uint64_t operand = (instr.funct3 & 0x4) ? instr.rs1 : regs.read_x(instr.rs1);
+
+	uint64_t updated = old;
+	// mtopei/stopei's claim-on-write side effect must NOT fire for a pure
+	// read (CSRRS/CSRRC with rs1==0, e.g. the `csrr` pseudo-instruction --
+	// unlike every other CSR here, "rewrite the same value" is not
+	// harmless for these two, since the claim happens regardless of what
+	// value is nominally written).
+	bool did_write = writes;
+	switch (instr.funct3 & 0x3) {
+	case 0b01: updated = operand; break; // CSRRW/CSRRWI -- always writes
+	case 0b10: if (instr.rs1 != 0) updated = old | operand; break;  // CSRRS/CSRRSI -- rs1/uimm==0 means read-only
+	case 0b11: if (instr.rs1 != 0) updated = old & ~operand; break; // CSRRC/CSRRCI
+	}
+
+	// stvec/mtvec MODE (bits 1:0) is WARL. This hart implements direct mode
+	// (0) and vectored mode (1) -- see trap_vector. A reserved mode must not
+	// read back, so the write keeps the mode the register had.
+	//
+	// vstvec is in this list because it *is* stvec as far as a guest is
+	// concerned: the same field with the same rule, reached through the
+	// same name. Keying the clamp on the S-mode number alone missed it,
+	// since VS redirection has already rewritten the number by this point
+	// -- the guest's write arrives here as 0x205, not 0x105.
+	//
+	// That changed: the hart DoomV is held to -- Sail's RVA23S64
+	// configuration -- supports vectored mode on all three, where an
+	// interrupt goes to base + 4 * cause. Modes 0 and 1 are kept. Modes 2 and
+	// 3 are reserved, and the write keeps the mode the register already had
+	// with the new base, which is Sail's Xtvec_Ignore.
+	if (csr == CSR_STVEC || csr == CSR_MTVEC || csr == 0x205) {
+		if ((updated & 0x3) >= 2) updated = (updated & ~0x3ull) | (old & 0x3);
+	}
+
+	// mepc, sepc and vsepc hold instruction addresses, and no instruction
+	// starts on an odd byte: bit 0 is read-only zero. With C the alignment
+	// is two rather than four, so only that one bit is masked. Storing an
+	// odd value would have an xRET resume mid-instruction.
+	if (csr == CSR_MEPC || csr == CSR_SEPC || (Extensions.H && csr == 0x241))
+		updated &= ~1ull;
+
+	// mcounteren, scounteren, hcounteren and vscounteren are 32-bit
+	// fields, one bit per counter, in a 64-bit register. Bits 63:32 are
+	// read-only zero -- there is no counter 32 to enable, so a value that
+	// reads back there describes something that cannot exist.
+	if (csr == 0x306 || csr == 0x106 || (Extensions.H && csr == 0x606))
+		updated &= 0xFFFFFFFFull;
+
+	// The PMM field of menvcfg/senvcfg/henvcfg (bits 33:32) selects the
+	// pointer-masking length: 0 is off, 2 is PMLEN=7, 3 is PMLEN=16. Value
+	// 1 is reserved, and WARL means a reserved value must never be readable
+	// back -- software probes this field precisely by writing a value and
+	// seeing what it gets, so storing 1 and privately treating it as "off"
+	// tells the prober this hart implements a length it does not. Retaining
+	// the previous legal field is the ordinary WARL response.
+	if (Extensions.SSNPM && (csr == CSR_MENVCFG || csr == 0x10A || csr == 0x747
+	                         || (Extensions.H && csr == 0x60A))) {
+		constexpr uint64_t PMM = 3ull << 32;
+		if (((updated >> 32) & 0x3) == 1) updated = (updated & ~PMM) | (old & PMM);
+	}
+
+	// An envcfg bit for an extension this hart does not have reads as zero.
+	// That is how software discovers what is missing: the bits are WARL,
+	// and a probe writes all ones and sees which survive. Leaving LPE or
+	// SSE writable on a hart with no landing pads or shadow stack would
+	// have software enable a protection that then does not happen -- worse
+	// than not offering it, because the enable appears to succeed.
+	{
+		constexpr uint64_t ENVCFG_LPE = 1ull << 2;
+		constexpr uint64_t ENVCFG_SSE = 1ull << 3;
+		// DTE is Ssdbltrp's, and Ssdbltrp is not implemented here: there is
+		// no mstatus.MDT, no sstatus/vsstatus.SDT and no double-trap
+		// escalation. So the bit reads zero.
+		//
+		// It used to be writable, and that single fact was the whole of the
+		// last failing hypervisor assertion. The suite tests DTE the way it
+		// tests every other envcfg bit -- write it, read it back, and if it
+		// stuck, go on to check what it is supposed to enable. DTE reading
+		// back set is a promise that vsstatus.SDT exists, and it does not.
+		// Clearing the bit is not a way of dodging the test: the reference
+		// model has Ssdbltrp unimplemented too, its henvcfg.DTE
+		// legalization commented out with a TODO, and it passes the group
+		// for exactly this reason. Reporting the extension absent is the
+		// answer, and implementing half of it to turn the test green would
+		// be the failure mode this block exists to prevent.
+		constexpr uint64_t ENVCFG_DTE = 1ull << 59;
+		if (csr == CSR_MENVCFG || csr == 0x10A || (Extensions.H && csr == 0x60A)) {
+			if (!Extensions.ZICFILP) updated &= ~ENVCFG_LPE;
+			if (!Extensions.ZICFISS) updated &= ~ENVCFG_SSE;
+			updated &= ~ENVCFG_DTE;
+		}
+		// A guest cannot set senvcfg.SSE while its hypervisor has
+		// henvcfg.SSE clear -- the write has no effect rather than being
+		// refused, which is what "read-only zero" means for a WARL bit.
+		if (Extensions.ZICFISS && Extensions.H && regs.get_virt() && csr == 0x10A
+		    && !(regs.read_csr(0x60A) & ENVCFG_SSE))
+			updated &= ~ENVCFG_SSE;
+	}
+
+	// And then the bits that do not exist at all. The block above clears
+	// individual bits whose extension is absent, which is the right rule
+	// applied one bit at a time -- and one bit at a time is how DTE came to
+	// be writable, and how CDE and UKTE still were. The reference states it
+	// as a whole instead: its legalization names the fields it implements
+	// and its comment says "other extensions are not implemented yet so all
+	// other fields are read only zero".
+	//
+	// So this is the same rule turned round. Each register admits exactly
+	// the fields DoomV has, and anything else -- a future extension's
+	// enable, a reserved bit -- reads zero without needing to be remembered
+	// individually. What is deliberately absent:
+	//
+	//   60 CDE   Smcdeleg, counter delegation. Not implemented.
+	//   59 DTE   Ssdbltrp, double trap. Not implemented.
+	//    8 UKTE  Ssctr's constant-timing enable. Not implemented.
+	//
+	// STCE, PBMTE and ADUE exist in menvcfg and henvcfg but not in
+	// senvcfg -- there is no S-level control over a guest's timer, page
+	// types or A/D updates -- so the masks differ rather than being one
+	// shared constant.
+	{
+		constexpr uint64_t PMM   = 3ull << 32;   // pointer masking length
+		constexpr uint64_t COMMON = PMM
+		                          | (1ull << 7)  // CBZE
+		                          | (1ull << 6)  // CBCFE
+		                          | (3ull << 4)  // CBIE
+		                          | (1ull << 3)  // SSE
+		                          | (1ull << 2)  // LPE
+		                          | (1ull << 0); // FIOM
+		constexpr uint64_t DELEGATING = (1ull << 63)   // STCE
+		                              | (1ull << 62)   // PBMTE
+		                              | (1ull << 61);  // ADUE
+		if (csr == CSR_MENVCFG || (Extensions.H && csr == 0x60A))
+			updated &= COMMON | DELEGATING;
+		else if (csr == 0x10A)
+			updated &= COMMON;
+	}
+
+	// CBIE is WARL in all three envcfg registers, and henvcfg additionally
+	// cannot set a bit menvcfg has cleared -- see henvcfg_mask.
+	// An envcfg write can change whether an already-translated page
+	// faults -- PBMTE decides whether a nonzero memory-type field is
+	// legal -- and a cached entry was validated under the old setting.
+	if (csr == CSR_MENVCFG || csr == 0x10A || (Extensions.H && csr == 0x60A))
+		mmu_tlb_flush();
+	if (csr == CSR_MENVCFG || csr == 0x10A || (Extensions.H && csr == 0x60A))
+		updated = cbie_warl(updated, old);
+	if (Extensions.H && csr == 0x60A)
+		updated = (regs.read_csr(0x60A) & ~henvcfg_mask(regs))
+		        | (updated & henvcfg_mask(regs));
+
+	// hedeleg has read-only-zero bits, and they are not an arbitrary
+	// restriction -- each one names a trap the hypervisor must keep.
+	//
+	//    9  ECALL from HS-mode. It is the hypervisor's own call to the
+	//       machine, and never the guest's business.
+	//   10  ECALL from VS-mode. This *is* how a guest calls its
+	//       hypervisor. Delegating it back to the guest would leave the
+	//       guest unable to call out at all.
+	//   11  ECALL from M-mode. There is no mode above M to trap from, so
+	//       nothing can ever raise it below M either.
+	//   16  double trap. A trap taken while already handling one is the
+	//       machine's failure to recover, not something to hand downward.
+	//   20  instruction guest-page fault
+	//   21  load guest-page fault
+	//   23  store/AMO guest-page fault
+	//       All three mean the second stage refused, which is the
+	//       hypervisor's own mapping failing -- the guest cannot fix what
+	//       it cannot see.
+	//   22  virtual instruction. Raised precisely because the guest
+	//       attempted something only the hypervisor may do; handing it to
+	//       the guest would defeat the purpose.
+	if (Extensions.H && csr == 0x602) {
+		constexpr uint64_t HEDELEG_RO_ZERO =
+			(1ull << 9)  | (1ull << 10) | (1ull << 11) | (1ull << 16)
+			| (1ull << 20) | (1ull << 21) | (1ull << 22) | (1ull << 23);
+		updated &= ~HEDELEG_RO_ZERO;
+	}
+
+	// hideleg can only delegate the three VS-level interrupts. The
+	// hypervisor's own supervisor interrupts are not the guest's to take,
+	// and there is no meaning to delegating an M-level one downward twice.
+	if (Extensions.H && csr == 0x603) {
+		constexpr uint64_t HIDELEG_WMASK =
+			(1ull << 2) | (1ull << 6) | (1ull << 10); // VSSIP, VSTIP, VSEIP
+		updated &= HIDELEG_WMASK;
+	}
+
+	if (pmp::is_pmpcfg(csr)) pmp::write_cfg(regs, csr, updated);
+	else if (pmp::is_pmpaddr(csr)) pmp::write_addr(regs, csr, updated);
+	else if (csr == CSR_MSTATUS) regs.write_csr(CSR_MSTATUS, legalize_mstatus(updated));
+	else if (csr == CSR_MISA) write_misa(updated, pc + instr.length);
+	else if (csr == 0x100) write_sstatus(regs, updated);
+	else if (Extensions.H && csr == hyp::CSR_HSTATUS_ADDR) hyp::write_hstatus(regs, updated);
+	// minstret written holds what was written: the instruction writing it is
+	// not also counted. A read (CSRRS/CSRRC with nothing to set or clear)
+	// comes through here too, and is counted.
+	else if (csr == 0xB02) { regs.write_csr(csr, updated); if (writes) regs.minstret_increment = false; }
+	// mcountinhibit: time cannot be inhibited, so TM is read-only zero.
+	else if (csr == 0x320) regs.write_csr(csr, updated & 0xFFFFFFFDull);
+	// mcyclecfg and minstretcfg (Smcntrpmf): the mode filters MINH, SINH and
+	// UINH, and VSINH and VUINH with H; everything else reads as zero.
+	else if (csr == 0x321 || csr == 0x322)
+		regs.write_csr(csr, updated & ((0x7ull << 60) | (Extensions.H ? (0x3ull << 58) : 0)));
+	else if (sscofpmf::is_mhpmevent(csr))
+		regs.write_csr(csr, updated & sscofpmf::mhpmevent_wmask());
+	else if (Extensions.SSSTATEEN && stateen::is_stateen_csr(csr)) stateen::write_stateen(regs, csr, updated);
+	else if (csr == CSR_SATP) write_satp(regs, updated);
+	// vsatp is satp as far as a guest is concerned -- same MODE field,
+	// same WARL rule, reached through the same name. It needs the same
+	// clamping for the same reason vstvec did above, and for the same
+	// reason it is easy to miss: redirection has already rewritten the
+	// number, so keying on CSR_SATP alone never sees the guest's write.
+	//
+	// Not covered by a test yet: vsatp's MODE only becomes observable once
+	// two-stage translation reads it, which is the next increment.
+	else if (Extensions.H && csr == 0x280) write_satp_warl(regs, 0x280, updated);
+	else if (Extensions.H && csr == hyp::CSR_HGATP_ADDR) write_hgatp_warl(regs, updated);
+	else if (csr == CSR_MIDELEG)
+		regs.write_csr(CSR_MIDELEG, updated | mideleg_fixed_ones());
+	else if (Extensions.H && csr == CSR_HGEIE) regs.write_csr(CSR_HGEIE, updated & HGEI_MASK);
+	else if (Extensions.H && csr == CSR_HGEIP) { /* read-only */ }
+	else if (Extensions.H && csr == CSR_VSSTATUS_N) write_vsstatus(regs, updated);
+	else if (Extensions.H && csr == 0x204) write_vsie(regs, updated);
+	else if (Extensions.H && csr == 0x244) write_vsip(regs, updated);
+	else if (Extensions.H && csr == CSR_HIP) write_hip(regs, updated);
+	else if (Extensions.H && csr == CSR_HIE) write_hie(regs, updated);
+	else if (Extensions.H && csr == CSR_HVIP) write_hvip(regs, updated);
+	else if (csr == CSR_SIE) write_sie(regs, updated);
+	else if (csr == CSR_SIP) write_sip(regs, updated);
+	else if (csr == CSR_MIP) regs.write_csr(CSR_MIP, updated & MIP_SHADOW_MASK);
+	else if (csr == CSR_MIREG) mem.get_imsic_m().write_indirect(regs.read_csr(CSR_MISELECT), updated);
+	else if (csr == CSR_SIREG) mem.get_imsic_s().write_indirect(regs.read_csr(CSR_SISELECT), updated);
+	else if (csr == CSR_MTOPEI) { if (did_write) mem.get_imsic_m().claim(); }
+	else if (csr == CSR_STOPEI) { if (did_write) mem.get_imsic_s().claim(); }
+	else if (csr == CSR_MTOPI || csr == CSR_STOPI) { /* read-only */ }
+	// Writing fflags, frm or fcsr changes floating-point state, and so does
+	// writing vstart, vxsat, vxrm or vcsr for the vector unit: either marks
+	// its status field Dirty, in mstatus and (under V) vsstatus. The CSR
+	// write never did, so a context switch deciding what to save from FS or
+	// VS could skip state a CSR instruction had just changed. Sail marks it
+	// on every such write; lock-stepping against it found the gap at the
+	// first fcsr write of every floating-point test.
+	else if (csr == 0x001) { regs.set_fflags((uint8_t)updated); if (Extensions.F) vcommon::mark_fp_dirty(regs); }
+	else if (csr == 0x002) { regs.set_frm((uint8_t)updated); if (Extensions.F) vcommon::mark_fp_dirty(regs); }
+	else if (csr == 0x003) {
+		regs.set_frm((uint8_t)(updated >> 5));
+		regs.set_fflags((uint8_t)updated);
+		if (Extensions.F) vcommon::mark_fp_dirty(regs);
+	}
+	else if (csr == 0x008) { regs.set_vstart(updated); if (Extensions.V) vcommon::mark_vector_dirty(regs); }
+	else if (csr == 0x009) { regs.set_vxsat((uint8_t)updated); if (Extensions.V) vcommon::mark_vector_dirty(regs); }
+	else if (csr == 0x00A) { regs.set_vxrm((uint8_t)updated); if (Extensions.V) vcommon::mark_vector_dirty(regs); }
+	else if (csr == 0x00F) {
+		regs.set_vxrm((uint8_t)(updated >> 1));
+		regs.set_vxsat((uint8_t)updated);
+		if (Extensions.V) vcommon::mark_vector_dirty(regs);
+	}
+	else regs.write_csr(csr, updated);
+
+	regs.write_x(instr.rd, old);
+	regs.set_pc(pc + instr.length);
+}
