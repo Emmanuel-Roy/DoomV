@@ -58,6 +58,11 @@ struct ExtensionConfig {
 	// fminm/fmaxm differ from FMIN/FMAX on NaN, and fleq/fltq differ from
 	// FLE/FLT only in which NaNs raise invalid.
 	bool ZFA = true;
+	// Zfhmin, not Zfh: RVA23U64 mandates the minimal half-precision set
+	// (load/store, bit moves, conversions) and makes full half-precision
+	// arithmetic an expansion option. Software is expected to widen to
+	// single, compute, and narrow back.
+	bool ZFHMIN = true;
 
 	// Base ISA width, not an optional extension. Registers/Memory always
 	// store values in 64-bit containers regardless of this flag: RV32

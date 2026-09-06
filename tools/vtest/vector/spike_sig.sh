@@ -28,6 +28,8 @@ SPIKE="${SPIKE:-/root/build/spike-build/spike}"
 case "$TEST" in
   vtest_v)  MARCH=rv64gcv_zvbb
             ISA=rv64gcv_zvbb_zvl128b_zicsr_zifencei ;;
+  vtest_zvfh) MARCH=rv64gcv_zvfhmin
+            ISA=rv64gcv_zvfhmin_zvl128b_zicsr_zifencei ;;
   vtest_zvbb) MARCH=rv64gcv_zvbb
             ISA=rv64gcv_zvbb_zvl128b_zicsr_zifencei ;;
   vtest_restart) MARCH=rv64gcv
@@ -36,6 +38,8 @@ case "$TEST" in
             ISA=rv64gcv_zvl128b_zicsr_zifencei ;;
   vtest_mmu) MARCH=rv64gcv
             ISA=rv64gcv_zvl128b_zicsr_zifencei ;;
+  vtest_zfh) MARCH=rv64gc_zfhmin
+            ISA=rv64gc_zfhmin_zicsr_zifencei ;;
   vtest_zfa) MARCH=rv64gc_zfa
             ISA=rv64gc_zfa_zicsr_zifencei ;;
   vtest_fd) MARCH=rv64gc

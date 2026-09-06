@@ -84,7 +84,7 @@
 			// vectors to a kernel booted without them produces illegal
 			// instructions in the kernel's own routines rather than a
 			// clean refusal.
-			riscv,isa = "rv64imafdc_zicbom_zicbop_zicboz_zicntr_zicond_zicsr_zifencei_zihintntl_zihintpause_zihpm_zimop_zawrs_zba_zbb_zbs_zcmop_smaia_ssaia_sstc";
+			riscv,isa = "rv64imafdc_zicbom_zicbop_zicboz_zicntr_zicond_zicsr_zifencei_zihintntl_zihintpause_zihpm_zimop_zawrs_zfa_zfhmin_zba_zbb_zbs_zcmop_smaia_ssaia_sstc";
 			// riscv,isa is deprecated; 6.12 prefers this pair and only
 			// falls back to parsing the string above. Both are kept so the
 			// same DTB works either way.
@@ -93,6 +93,7 @@
 					       "zicbom", "zicbop", "zicboz", "zicntr",
 					       "zicond", "zicsr", "zifencei", "zihintntl",
 					       "zihintpause", "zihpm", "zimop", "zawrs",
+					       "zfa", "zfhmin",
 					       "zba", "zbb", "zbs", "zcmop",
 					       "smaia", "ssaia", "sstc";
 			// Zicbom/Zicbop are architecturally required to state their

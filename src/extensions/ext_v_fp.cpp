@@ -13,6 +13,7 @@
 #include "registers.hpp"
 #include "ext_v_common.hpp"
 #include "ext_fp_common.hpp"
+#include "ext_fp16.hpp"
 #include <cstdint>
 #include <cmath>
 
@@ -84,7 +85,23 @@ void exec_v_fp(const DecodedInstruction &instr, Registers &regs)
 	uint8_t rm = regs.get_frm(); // vector FP ops always use the dynamic (fcsr-configured) rounding mode -- there's no per-instruction rm field
 	bool is_vv = (instr.funct3 == 0b001);
 
-	if (sew != 32 && sew != 64) return; // no FP16 support -- reserved for this SEW
+	// SEW=16 is legal for exactly two instructions, the Zvfhmin conversions
+	// vfwcvt.f.f.v and vfncvt.f.f.w (VFUNARY0, vs1 0x0C and 0x14). Half
+	// precision arithmetic would need Zvfh, which RVA23 makes an expansion
+	// option and this emulator does not implement.
+	//
+	// Everything else at SEW=16 returns without doing anything, which is
+	// the same silent no-op that hid the rest of VFUNARY0 for so long. It
+	// is kept deliberately here rather than fixed in passing: making it an
+	// illegal instruction is a separate behaviour change, and the honest
+	// thing is to say so rather than leave the reader to infer it.
+	if (sew == 16) {
+		bool zvfhmin_convert = (instr.funct3 == 0b001) && (op_v_funct6(instr.funct7) == 0x12)
+		                    && (instr.rs1 == 0x0C || instr.rs1 == 0x14);
+		if (!zvfhmin_convert) return;
+	} else if (sew != 32 && sew != 64) {
+		return;
+	}
 
 	// Second operand: vs1[i] (.vv) or the scalar f-register rs1 (.vf).
 	auto op2 = [&](uint64_t i) -> double {
@@ -140,6 +157,142 @@ void exec_v_fp(const DecodedInstruction &instr, Registers &regs)
 			// non-observable distinction for a single-threaded, non-reassociating sequential implementation like this one.
 		});
 		if (vl > 0) write_felem(regs, instr.rd, sew, 0, acc);
+		return;
+	}
+
+	// VFUNARY0's widening (vs1 0x08-0x0F) and narrowing (0x10-0x17) halves.
+	// These used to fall off the end of the same-width handler below and
+	// return having done nothing -- the destination register kept whatever
+	// it held before, silently, which is the same failure Zvbb had.
+	//
+	// vfwcvt.f.f.v and vfncvt.f.f.w are what Zvfhmin mandates (SEW 16 <-> 32);
+	// the rest of the family is base V and is implemented here too, because
+	// leaving a subset silently ignored is what caused the problem in the
+	// first place.
+	//
+	// Widening reads at SEW and writes at 2*SEW; narrowing reads the wide
+	// operand at 2*SEW and writes at SEW. Half precision only ever appears
+	// as the narrow side, and goes through ext_fp16.hpp rather than the host
+	// FPU, which has no 16-bit type.
+	if (is_vv && funct6 == 0x12 && instr.rs1 >= 0x08) {
+		uint8_t sub = instr.rs1;
+		bool widening = sub < 0x10;
+		int nsew = sew;              // the narrow side
+		int wsew = sew * 2;          // the wide side
+		if (wsew > 64) return;       // no format wider than 64 bits exists
+
+		// Reading and writing a float element of a width the host has no
+		// type for: 16-bit goes through the software conversion, 32 and 64
+		// use the host float and double directly.
+		auto read_f = [&](int vreg, int esew, uint64_t i) -> double {
+			if (esew != 16) return read_felem(regs, vreg, esew, i);
+			uint8_t fl = 0;
+			double d = f64_from_bits(fp16::h_to_f64_bits((uint16_t)read_velem(regs, vreg, 16, i), fl));
+			regs.or_fflags(fl);
+			return d;
+		};
+		auto write_f = [&](int vreg, int esew, uint64_t i, double v, int rm) {
+			if (esew != 16) { write_felem(regs, vreg, esew, i, v); return; }
+			uint8_t fl = 0;
+			uint16_t h = fp16::f64_bits_to_h(bits_from_f64(v), rm, fl);
+			regs.or_fflags(fl);
+			write_velem(regs, vreg, 16, i, h);
+		};
+
+		int rm_default = host_round_mode(0b111, regs.get_frm());
+
+		for_each_active(regs, vm, vl, [&](uint64_t i) {
+			clear_fp_exceptions();
+			int old_round = std::fegetround();
+
+			if (widening) {
+				switch (sub) {
+				case 0x08: case 0x09: case 0x0E: case 0x0F: { // int <- float, widened
+					// The .rtz forms (0x0E/0x0F) ignore frm entirely.
+					std::fesetround((sub >= 0x0E) ? FE_TOWARDZERO : rm_default);
+					double src = read_f(instr.rs2, nsew, i);
+					bool uns = (sub == 0x08 || sub == 0x0E);
+					volatile uint64_t xr = uns
+						? (wsew == 64 ? fcvt_to_u64(src, regs) : (uint64_t)fcvt_to_u32(src, regs))
+						: (wsew == 64 ? (uint64_t)fcvt_to_i64(src, regs)
+						              : (uint64_t)(int64_t)fcvt_to_i32(src, regs));
+					std::fesetround(old_round);
+					regs.or_fflags(collect_fflags());
+					write_velem(regs, instr.rd, wsew, i, xr & elem_mask(wsew));
+					break;
+				}
+				case 0x0A: case 0x0B: { // float <- int, widened
+					std::fesetround(rm_default);
+					uint64_t raw = read_velem(regs, instr.rs2, nsew, i);
+					double r0 = (sub == 0x0A) ? (double)raw : (double)sext_elem(raw, nsew);
+					volatile double r = (wsew == 32) ? (double)(float)r0 : r0;
+					std::fesetround(old_round);
+					regs.or_fflags(collect_fflags());
+					write_f(instr.rd, wsew, i, r, rm_default);
+					break;
+				}
+				case 0x0C: { // vfwcvt.f.f.v -- the Zvfhmin one. Always exact:
+					// every value of the narrow format is representable in
+					// the wide one, so no rounding mode is consulted.
+					double v = read_f(instr.rs2, nsew, i);
+					write_f(instr.rd, wsew, i, v, rm_default);
+					break;
+				}
+				default: break; // 0x0D is reserved
+				}
+			} else {
+				switch (sub) {
+				case 0x10: case 0x11: case 0x16: case 0x17: { // int <- float, narrowed
+					std::fesetround((sub >= 0x16) ? FE_TOWARDZERO : rm_default);
+					double src = read_f(instr.rs2, wsew, i);
+					bool uns = (sub == 0x10 || sub == 0x16);
+					volatile uint64_t xr = uns ? (uint64_t)fcvt_to_u32(src, regs)
+					                           : (uint64_t)(int64_t)fcvt_to_i32(src, regs);
+					std::fesetround(old_round);
+					regs.or_fflags(collect_fflags());
+					write_velem(regs, instr.rd, nsew, i, xr & elem_mask(nsew));
+					break;
+				}
+				case 0x12: case 0x13: { // float <- int, narrowed
+					std::fesetround(rm_default);
+					uint64_t raw = read_velem(regs, instr.rs2, wsew, i);
+					double r0 = (sub == 0x12) ? (double)raw : (double)sext_elem(raw, wsew);
+					volatile double r = (nsew == 32) ? (double)(float)r0 : r0;
+					std::fesetround(old_round);
+					regs.or_fflags(collect_fflags());
+					write_f(instr.rd, nsew, i, r, rm_default);
+					break;
+				}
+				case 0x14: case 0x15: { // vfncvt.f.f.w, and .rod
+					// 0x15 is round-to-odd, which exists so that a
+					// narrowing done in two steps cannot double-round: it
+					// forces the intermediate's low bit set whenever the
+					// result is inexact.
+					int rm = (sub == 0x15) ? FE_TOWARDZERO : rm_default;
+					double v = read_f(instr.rs2, wsew, i);
+					if (nsew == 16) {
+						uint8_t fl = 0;
+						uint16_t h = fp16::f64_bits_to_h(bits_from_f64(v), rm, fl);
+						if (sub == 0x15 && (fl & fp16::FLAG_NX)) h |= 1; // round to odd
+						regs.or_fflags(fl);
+						write_velem(regs, instr.rd, 16, i, h);
+					} else {
+						std::fesetround(rm);
+						volatile double r = (double)(float)v;
+						std::fesetround(old_round);
+						uint8_t fl = collect_fflags();
+						uint32_t fb = bits_from_f32((float)r);
+						if (sub == 0x15 && (fl & 0x01)) fb |= 1;
+						regs.or_fflags(fl);
+						write_velem(regs, instr.rd, 32, i, fb);
+					}
+					break;
+				}
+				default: break;
+				}
+			}
+			std::fesetround(old_round);
+		});
 		return;
 	}
 

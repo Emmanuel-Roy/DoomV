@@ -168,13 +168,16 @@ Extension Decoder::classify(uint32_t raw_instr) const
 		uint8_t funct3 = (raw_instr >> 12) & 0x07;
 		if (funct3 == 0b011) return Extension::D;
 		if (funct3 == 0b010) return Extension::F;
+		// Width 001 is the half-precision slot, which base F/D leave unused.
+		if (funct3 == 0b001) return Extensions.ZFHMIN ? Extension::ZFHMIN : Extension::ILLEGAL;
 		if (funct3 == 0b000 || funct3 == 0b101 || funct3 == 0b110 || funct3 == 0b111) return Extension::V;
 		return Extension::ILLEGAL;
 	}
-	case 0b0100111: { // STORE-FP: FSW (F) / FSD (D) / vector stores (V) -- same split as LOAD-FP above
+	case 0b0100111: { // STORE-FP: FSW (F) / FSD (D) / FSH (Zfhmin) / vector stores (V)
 		uint8_t funct3 = (raw_instr >> 12) & 0x07;
 		if (funct3 == 0b011) return Extension::D;
 		if (funct3 == 0b010) return Extension::F;
+		if (funct3 == 0b001) return Extensions.ZFHMIN ? Extension::ZFHMIN : Extension::ILLEGAL;
 		if (funct3 == 0b000 || funct3 == 0b101 || funct3 == 0b110 || funct3 == 0b111) return Extension::V;
 		return Extension::ILLEGAL;
 	}
@@ -198,6 +201,18 @@ Extension Decoder::classify(uint32_t raw_instr) const
 			case 0x20: case 0x21: if (rs2 == 4 || rs2 == 5) return Extension::ZFA; break; // fround/froundnx
 			case 0x61: if (rs2 == 8) return Extension::ZFA; break;                    // fcvtmod.w.d
 			case 0x50: case 0x51: if (f3 == 4 || f3 == 5) return Extension::ZFA; break; // fleq/fltq
+			default: break;
+			}
+		}
+		// Zfhmin shares 0x20/0x21 with FCVT.S.D/FCVT.D.S (rs2 == 2 is the
+		// half form) and owns 0x22, 0x72 and 0x7A outright. Together with
+		// Zfa above, funct7 0x20 alone carries three extensions separated
+		// only by rs2.
+		if (Extensions.ZFHMIN) {
+			switch (funct7) {
+			case 0x20: case 0x21: if (rs2 == 2) return Extension::ZFHMIN; break;
+			case 0x22: if (rs2 == 0 || rs2 == 1) return Extension::ZFHMIN; break;
+			case 0x72: case 0x7A: if (rs2 == 0) return Extension::ZFHMIN; break;
 			default: break;
 			}
 		}
@@ -234,12 +249,14 @@ DecodedInstruction Decoder::decode(uint32_t raw_instr, Extension ext) const
 		return decode_i(raw_instr, ext);
 	case 0b0000111: // LOAD-FP / vector load -- ext (already split by classify()) picks the side
 	case 0b0100111: // STORE-FP / vector store
+		if (ext == Extension::ZFHMIN) return decode_zfhmin(raw_instr);
 		return (ext == Extension::V) ? decode_v(raw_instr) : ((ext == Extension::D) ? decode_d(raw_instr) : decode_f(raw_instr));
 	case 0b1000011: // FMADD
 	case 0b1000111: // FMSUB
 	case 0b1001011: // FNMSUB
 	case 0b1001111: // FNMADD
 	case 0b1010011: // OP-FP
+		if (ext == Extension::ZFHMIN) return decode_zfhmin(raw_instr);
 		if (ext == Extension::ZFA) return decode_zfa(raw_instr);
 		return ((ext == Extension::D) ? decode_d(raw_instr) : decode_f(raw_instr));
 	case 0b1010111: // OP-V
@@ -313,7 +330,8 @@ DispatchResult Decoder::decode_and_dispatch(uint64_t pc, uint32_t raw_word)
 		       || (instr.ext == Extension::ZICBOP && Extensions.ZICBOP)
 		       || (instr.ext == Extension::ZICBOZ && Extensions.ZICBOZ)
 		       || (instr.ext == Extension::ZAWRS && Extensions.ZAWRS)
-		       || (instr.ext == Extension::ZFA && Extensions.ZFA);
+		       || (instr.ext == Extension::ZFA && Extensions.ZFA)
+		       || (instr.ext == Extension::ZFHMIN && Extensions.ZFHMIN);
 
 		entry = {true, pc, tag, instr, enabled};
 	}
@@ -329,8 +347,8 @@ DispatchResult Decoder::decode_and_dispatch(uint64_t pc, uint32_t raw_word)
 	if (instr.ext == Extension::V && !vcommon::vector_unit_enabled(regs)) {
 		return {true, instr};
 	}
-	if ((instr.ext == Extension::F || instr.ext == Extension::D || instr.ext == Extension::ZFA)
-	    && !vcommon::fp_unit_enabled(regs)) {
+	if ((instr.ext == Extension::F || instr.ext == Extension::D || instr.ext == Extension::ZFA
+	     || instr.ext == Extension::ZFHMIN) && !vcommon::fp_unit_enabled(regs)) {
 		return {true, instr};
 	}
 
@@ -395,6 +413,9 @@ DispatchResult Decoder::decode_and_dispatch(uint64_t pc, uint32_t raw_word)
 		break;
 	case Extension::ZFA:
 		core.exec_ZFA(instr, regs, mem);
+		break;
+	case Extension::ZFHMIN:
+		core.exec_ZFHMIN(instr, regs, mem);
 		break;
 	case Extension::V:
 		core.exec_V(instr, regs, mem);

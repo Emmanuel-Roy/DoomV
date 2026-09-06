@@ -50,6 +50,8 @@ opt-in since it's not needed to boot Doom itself.
 | Zicntr (`cycle`/`time`/`instret`) | ✅ |
 | Zihpm (`hpmcounter3-31`) | ✅ (read as zero) |
 | Zfa (additional FP) | ✅ |
+| Zfhmin (half-precision converts) | ✅ |
+| Zvfhmin (vector half converts) | ✅ |
 
 The bitmanip families and `Zicond` are on by default despite Doom never
 emitting them: every modern riscv64 Linux userspace assumes them, so
@@ -96,6 +98,26 @@ base F and D extensions, where `FMIN`/`FMAX`/`FEQ` raised invalid for a
 quiet NaN when the spec reserves that for a signalling one — a documented
 simplification that was harmless for results and wrong for flags, and that
 the accrued-flags-only test could not see.
+
+RVA23 mandates `Zfhmin` and `Zvfhmin`, not the full `Zfh`/`Zvfh` — half
+precision *arithmetic* is an expansion option, so there is no `fadd.h`
+here and software is expected to widen to single, compute, and narrow
+back. MinGW has no `_Float16` on x86, so every half conversion is
+hand-written integer code (`src/extensions/ext_fp16.hpp`) rather than a
+host FPU operation. Narrowing rounds exactly once from the source
+significand: going double → float → half rounds twice, and a value that
+is an exact midpoint in half but not in single rounds the wrong way.
+
+Adding them surfaced two older gaps. `exec_v_fp` returned silently for
+any SEW other than 32 or 64, so every vector FP instruction at `e16` was
+a no-op; and the whole widening/narrowing half of VFUNARY0
+(`vfwcvt.*`/`vfncvt.*`, 14 instructions) was ignored the same way. Both
+are implemented now. Separately, float-to-integer conversions never
+reported inexact: `collect_fflags()` reads MXCSR, but `std::llrint` on
+this toolchain goes through x87, so the flag was dropped. It is now
+decided from the values — a conversion is inexact exactly when its
+result converts back to something different — which holds for every
+rounding mode and does not depend on the host.
 
 CSR accesses are privilege-checked: writing a read-only CSR, or touching
 one above the current privilege level, raises an illegal instruction, and

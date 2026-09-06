@@ -279,23 +279,48 @@ uint64_t fclassify(T v)
 // Float/double -> integer conversions. Out-of-range and NaN clamp to the
 // target type's max/min (NaN -> max) and set NV, matching FCVT.*'s spec'd
 // "invalid" behavior instead of relying on UB from an out-of-range cast.
+// Float-to-integer conversions have to report inexact themselves rather than
+// leaning on the host's accrued flags.
+//
+// collect_fflags() reads MXCSR, which covers SSE arithmetic, but std::llrint
+// on this toolchain goes through x87 and leaves its status in the x87 word
+// instead -- so the inexact from a conversion was simply never seen. That
+// was invisible until a differential test dumped fflags per operation and
+// spike reported NX where DoomV reported none.
+//
+// Deciding it from the values is also more robust than either host path: a
+// conversion is inexact exactly when the integer it produced, converted
+// back, differs from the input. That holds for every rounding mode without
+// having to know which one was in force.
+template <typename INT>
+inline void note_cvt_inexact(double v, INT result, Registers &regs)
+{
+	if ((double)result != v) regs.or_fflags(0x01); // NX
+}
+
 inline int32_t fcvt_to_i32(double v, Registers &regs)
 {
 	if (std::isnan(v) || v >= 2147483648.0) { regs.or_fflags(0x10); return INT32_MAX; }
 	if (v < -2147483648.0) { regs.or_fflags(0x10); return INT32_MIN; }
-	return (int32_t)std::llrint(v);
+	int32_t r = (int32_t)std::llrint(v);
+	note_cvt_inexact(v, r, regs);
+	return r;
 }
 inline uint32_t fcvt_to_u32(double v, Registers &regs)
 {
 	if (std::isnan(v) || v >= 4294967296.0) { regs.or_fflags(0x10); return 0xFFFFFFFFu; }
 	if (v < 0.0) { regs.or_fflags(0x10); return 0; }
-	return (uint32_t)std::llrint(v);
+	uint32_t r = (uint32_t)std::llrint(v);
+	note_cvt_inexact(v, r, regs);
+	return r;
 }
 inline int64_t fcvt_to_i64(double v, Registers &regs)
 {
 	if (std::isnan(v) || v >= 9223372036854775808.0) { regs.or_fflags(0x10); return INT64_MAX; }
 	if (v < -9223372036854775808.0) { regs.or_fflags(0x10); return INT64_MIN; }
-	return std::llrint(v);
+	int64_t r = std::llrint(v);
+	note_cvt_inexact(v, r, regs);
+	return r;
 }
 inline uint64_t fcvt_to_u64(double v, Registers &regs)
 {
@@ -313,7 +338,11 @@ inline uint64_t fcvt_to_u64(double v, Registers &regs)
 	// Shift the input down into llrint's safe signed range, round there,
 	// then shift the rounded integer back up unsigned.
 	if (v >= 9223372036854775808.0) {
-		return 0x8000000000000000ull + (uint64_t)std::llrint(v - 9223372036854775808.0);
+		uint64_t r = 0x8000000000000000ull + (uint64_t)std::llrint(v - 9223372036854775808.0);
+		note_cvt_inexact(v, r, regs);
+		return r;
 	}
-	return (uint64_t)std::llrint(v);
+	uint64_t r = (uint64_t)std::llrint(v);
+	note_cvt_inexact(v, r, regs);
+	return r;
 }
