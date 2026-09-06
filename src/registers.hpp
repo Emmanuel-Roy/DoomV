@@ -62,6 +62,19 @@ public:
 	PrivMode get_priv() const;
 	void set_priv(PrivMode mode);
 
+	// Virtualisation mode (the H extension's V bit). Orthogonal to the
+	// privilege level rather than another value of it: the hart is in one
+	// of M, HS, VS, HU or VU, which is (priv, virt) rather than a single
+	// five-valued enum. Keeping them separate is what lets every existing
+	// priv comparison keep working unchanged -- VS-mode code is still
+	// PrivMode::S, and only the places that genuinely care about
+	// virtualisation ask for get_virt().
+	//
+	// M-mode is never virtual, so set_virt(true) is only ever meaningful
+	// alongside S or U.
+	bool get_virt() const { return virt; }
+	void set_virt(bool v) { virt = v; }
+
 	uint64_t read_csr(uint16_t addr) const;
 	void write_csr(uint16_t addr, uint64_t value);
 
@@ -117,6 +130,7 @@ private:
 	uint8_t v[32][VLEN_BYTES];
 	uint64_t pc;
 	PrivMode priv;
+	bool virt = false; // the H extension's V bit -- see get_virt()
 	uint64_t csr[4096];
 	uint8_t frm;
 	uint8_t fflags;

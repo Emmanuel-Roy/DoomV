@@ -13,6 +13,7 @@ void parse_march(const std::string &march)
 	Extensions.ZFHMIN = false;
 	Extensions.SVINVAL = Extensions.SVNAPOT = Extensions.SVPBMT = false;
 	Extensions.SSNPM = false;
+	Extensions.H = false;
 
 	size_t pos = 0;
 	if (march.rfind("rv64", 0) == 0) { Extensions.XLEN64 = true; pos = 4; }
@@ -30,6 +31,7 @@ void parse_march(const std::string &march)
 		case 'd': Extensions.D = true; break;
 		case 'c': Extensions.C = true; break;
 		case 'v': Extensions.V = true; break;
+		case 'h': Extensions.H = true; break;
 		case 'g': Extensions.I = Extensions.M = Extensions.A = Extensions.F = Extensions.D = true; break;
 		default: break; // unrecognized letter -- ignored, not a strict validator
 		}
@@ -58,6 +60,9 @@ void parse_march(const std::string &march)
 	if (march.find("svpbmt") != std::string::npos) Extensions.SVPBMT = true;
 	if (march.find("ssnpm") != std::string::npos || march.find("smnpm") != std::string::npos
 	    || march.find("sspm") != std::string::npos) Extensions.SSNPM = true;
+	// "h" as a single letter, the way misa spells it. Checked against the
+	// base-letter loop below rather than a token search, since "h" appears
+	// inside plenty of multi-letter names ("zfh", "zihintpause").
 	// "b" is the umbrella name for Zba+Zbb+Zbs (the ratified B extension).
 	for (char c : base) if (c == 'b') { Extensions.ZBA = Extensions.ZBB = Extensions.ZBS = true; }
 

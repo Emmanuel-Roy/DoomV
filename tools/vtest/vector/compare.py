@@ -522,6 +522,39 @@ LAYOUT_PM = [(2, n) for n in [
     "PMM=1 reserved behaves as off: sentinel intact",
 ]]
 
+# The hypervisor extension's CSR file and privilege plumbing -- H's first
+# increment, before two-stage translation exists.
+#
+# The cause numbers carry most of the weight. A guest reaching for the
+# hypervisor's registers must raise 22 (virtual instruction) and not 2
+# (illegal), because that is what lets a hypervisor emulate the access
+# rather than kill the guest -- and the read-only-CSR case is here to show
+# 2 still happens, so the two are genuinely distinguished.
+LAYOUT_H = [(2, n) for n in [
+    "misa.H advertised (1)",
+    "hstatus after writing all-ones (WARL: reserved bits read zero)",
+    "hstatus after writing zero (VSXL still reads 2)",
+    "vstvec read/write from HS-mode",
+    "vsscratch read/write from HS-mode",
+    "guest writes 'stvec': reads back its own value",
+    "guest writes 'sscratch': reads back its own value",
+    "guest reads hstatus: trap count (1)",
+    "guest reads hstatus: cause (22 = virtual instruction)",
+    "guest reads vstvec by name: trap count (1)",
+    "guest reads vstvec by name: cause (22)",
+    "guest reads hgatp: trap count (1)",
+    "guest reads hgatp: cause (22)",
+    "guest writes read-only cycle: trap count (1)",
+    "guest writes read-only cycle: cause (2 = illegal, not 22)",
+    "ecall from VS-mode: cause (10, not 9)",
+    "mstatus.MPV recorded by the trap (1)",
+    "mstatus.MPP recorded by the trap (1 = S)",
+    "hypervisor's sscratch survived the guest (0x1111)",
+    "guest's sscratch write landed in vsscratch (0x3333)",
+    "guest's stvec write landed in vstvec",
+    "hypervisor's stvec unchanged (0)",
+]]
+
 LAYOUTS = {
     "vtest_v": LAYOUT_V,
     "vtest_zb": LAYOUT_ZB,
@@ -537,6 +570,7 @@ LAYOUTS = {
     "vtest_zvfh": LAYOUT_ZVFH,
     "vtest_sv": LAYOUT_SV,
     "vtest_pm": LAYOUT_PM,
+    "vtest_h": LAYOUT_H,
 }
 
 

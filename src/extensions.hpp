@@ -73,6 +73,11 @@ struct ExtensionConfig {
 	// same mechanism named for which envcfg holds the PMM field, and no
 	// guest would sensibly have one without the others.
 	bool SSNPM = true;
+	// H: the hypervisor extension. Off by default -- unlike the others
+	// here it changes how existing CSR numbers behave (the VS-mode
+	// redirection), so a guest that never asked for virtualisation should
+	// not have to pay for it.
+	bool H = false;
 
 	// Base ISA width, not an optional extension. Registers/Memory always
 	// store values in 64-bit containers regardless of this flag: RV32

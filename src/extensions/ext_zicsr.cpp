@@ -1,6 +1,7 @@
 // Zicsr extension: ECALL/EBREAK/MRET control-transfer plus CSR read/modify/
 // write. Also owns the M-mode trap-entry sequence (enter_trap), since ECALL/
 // EBREAK are the only things in this project that ever trigger one.
+#include "ext_h.hpp"
 #include "ext_zicntr.hpp"
 #include "riscv_decoder.hpp"
 #include "riscv_core.hpp"
@@ -136,6 +137,12 @@ constexpr uint64_t MIP_SHADOW_MASK = MIP_SSIP | MIP_MSIP | MIP_SEIP | MIP_STIP;
 
 constexpr uint64_t MENVCFG_STCE = 1ull << 63;
 
+// mstatus's virtualisation fields. Both sit above bit 32, so they exist
+// only on RV64 -- MPV records whether an M-mode trap came from a virtual
+// mode, and GVA whether the faulting address was a guest virtual one.
+constexpr uint64_t MSTATUS_GVA = 1ull << 38;
+constexpr uint64_t MSTATUS_MPV = 1ull << 39;
+
 constexpr uint64_t CAUSE_S_EXTERNAL = 9;
 constexpr uint64_t CAUSE_S_TIMER    = 5;
 constexpr uint64_t CAUSE_S_SOFTWARE = 1;
@@ -262,6 +269,7 @@ uint64_t compute_misa()
 	if (Extensions.F) bit('F');
 	if (Extensions.D) bit('D');
 	if (Extensions.V) bit('V');
+	if (Extensions.H) bit('H');
 	bit('S');
 	bit('U');
 	v |= (Extensions.XLEN64 ? 2ull : 1ull) << (Extensions.XLEN64 ? 62 : 30);
@@ -288,11 +296,16 @@ uint64_t compute_misa()
 // bisecting crash.log: it halted on an illegal instruction at
 // pc=0xffffffff80001146 (canonical high-half kernel VA) with
 // satp.MODE=0xa (Sv57) already active.
-void write_satp(Registers &regs, uint64_t value)
+void write_satp_warl(Registers &regs, uint16_t csr, uint64_t value)
 {
 	uint64_t mode = value >> 60;
 	if (mode != 0 && mode != 8) return; // reject the whole write, not just the MODE field -- matches real WARL clamping
-	regs.write_csr(CSR_SATP, value);
+	regs.write_csr(csr, value);
+}
+
+void write_satp(Registers &regs, uint64_t value)
+{
+	write_satp_warl(regs, CSR_SATP, value);
 }
 
 uint64_t read_sstatus(Registers &regs)
@@ -342,7 +355,17 @@ bool RiscvCore::csr_access_permitted(Registers &regs, uint16_t csr, bool writing
 {
 	if (writing && ((csr >> 10) & 0x3) == 0x3) return false;
 
+	// csr[9:8] normally encodes the lowest privilege that may access the
+	// register -- 0 for U, 1 for S, 3 for M. The value 2 is not a
+	// privilege level at all: it is the hypervisor and VS-CSR encoding,
+	// and those registers are reachable from HS-mode and M.
+	//
+	// Reading it as a literal privilege number denies every VS CSR to
+	// every mode, since no PrivMode equals 2. That is invisible until
+	// something actually redirects an S-mode CSR name into the 0x2xx
+	// range, at which point a guest's ordinary csrw stvec starts trapping.
 	uint8_t min_priv = (csr >> 8) & 0x3;
+	if (min_priv == 2) min_priv = (uint8_t)PrivMode::S;
 	if ((uint8_t)regs.get_priv() < min_priv) return false;
 
 	if (counters::is_counter_csr(csr) && !counters::counter_permitted(regs, csr))
@@ -355,6 +378,7 @@ uint64_t RiscvCore::read_csr_effective(Registers &regs, Memory &mem, uint16_t cs
 {
 	if (csr == 0x100) return read_sstatus(regs);
 	if (csr == CSR_MISA) return compute_misa();
+	if (Extensions.H && csr == hyp::CSR_HSTATUS_ADDR) return hyp::read_hstatus(regs);
 	if (csr == CSR_SIE) return read_sie(regs);
 	if (csr == CSR_SIP) return read_sip(regs, mem);
 	if (csr == CSR_MIP) return compute_mip(regs, mem);
@@ -412,6 +436,13 @@ void RiscvCore::enter_trap(Registers &regs, uint64_t cause, uint64_t tval, bool 
 	uint64_t deleg = is_interrupt ? regs.read_csr(CSR_MIDELEG) : regs.read_csr(CSR_MEDELEG);
 	bool to_s = (from != PrivMode::M) && (deleg & (1ull << cause_bit));
 
+	// Whether the hart was virtual when the trap happened must be saved
+	// before it is cleared -- into hstatus.SPV for a trap taken to HS, or
+	// mstatus.MPV for one taken to M. Without it the eventual xRET has no
+	// way to know it should resume a guest, and would return to the
+	// hypervisor's privilege level still running the guest's code.
+	bool was_virt = Extensions.H && regs.get_virt();
+
 	if (to_s) {
 		regs.write_csr(CSR_SEPC, pc);
 		regs.write_csr(CSR_SCAUSE, cause);
@@ -423,6 +454,19 @@ void RiscvCore::enter_trap(Registers &regs, uint64_t cause, uint64_t tval, bool 
 		mstatus = (from == PrivMode::S) ? (mstatus | MSTATUS_SPP) : (mstatus & ~MSTATUS_SPP);
 		regs.write_csr(CSR_MSTATUS, mstatus);
 
+		if (Extensions.H) {
+			// A trap from a guest into HS-mode leaves virtual mode.
+			// SPVP records the guest's own privilege, so the
+			// hypervisor can tell it interrupted VS rather than VU.
+			uint64_t hstatus = hyp::read_hstatus(regs);
+			hstatus = was_virt ? (hstatus | (1ull << 7)) : (hstatus & ~(1ull << 7)); // SPV
+			if (was_virt) {
+				hstatus = (from == PrivMode::S) ? (hstatus | (1ull << 8))
+				                                : (hstatus & ~(1ull << 8)); // SPVP
+			}
+			hyp::write_hstatus(regs, hstatus);
+			regs.set_virt(false);
+		}
 		regs.set_priv(PrivMode::S);
 		// Direct mode only (stvec[1:0] ignored) -- vectored mode's
 		// cause-indexed offset isn't implemented; every trap, interrupt or
@@ -444,8 +488,14 @@ void RiscvCore::enter_trap(Registers &regs, uint64_t cause, uint64_t tval, bool 
 	mstatus = (mstatus & MSTATUS_MIE) ? (mstatus | MSTATUS_MPIE) : (mstatus & ~MSTATUS_MPIE);
 	mstatus &= ~MSTATUS_MIE;
 	mstatus = (mstatus & ~MSTATUS_MPP) | (((uint64_t)from & 0x3) << 11);
+	// MPV is the M-mode counterpart of hstatus.SPV: it is what tells the
+	// eventual MRET whether the mode it is returning to was virtual.
+	if (Extensions.H) {
+		mstatus = was_virt ? (mstatus | MSTATUS_MPV) : (mstatus & ~MSTATUS_MPV);
+	}
 	regs.write_csr(CSR_MSTATUS, mstatus);
 
+	if (Extensions.H) regs.set_virt(false); // M-mode is never virtual
 	regs.set_priv(PrivMode::M);
 	// Direct mode only (mtvec[1:0] ignored) -- vectored mode's cause-indexed
 	// offset for interrupts isn't implemented; every trap goes to the same
@@ -519,6 +569,15 @@ void RiscvCore::exec_32ZICSR(const DecodedInstruction &instr, Registers &regs, M
 			uint64_t cause = (priv == PrivMode::M) ? CAUSE_ECALL_FROM_M
 			                : (priv == PrivMode::S) ? CAUSE_ECALL_FROM_S
 			                                         : CAUSE_ECALL_FROM_U;
+			// A guest's ecall gets its own cause, 10, distinct from
+			// HS-mode's 9. That is how a hypervisor tells a call from
+			// the guest kernel apart from one made by its own
+			// supervisor code -- the two mean entirely different
+			// things and are handled by different code paths. VU-mode
+			// keeps cause 8, the same as U: the guest's userspace
+			// calls its own kernel, not the hypervisor.
+			if (Extensions.H && regs.get_virt() && priv == PrivMode::S)
+				cause = 10;
 			enter_trap(regs, cause, 0);
 			return;
 		}
@@ -532,6 +591,20 @@ void RiscvCore::exec_32ZICSR(const DecodedInstruction &instr, Registers &regs, M
 			PrivMode target = (mstatus & MSTATUS_SPP) ? PrivMode::S : PrivMode::U;
 			mstatus &= ~MSTATUS_SPP; // SPP reset to U on return, per spec
 			regs.write_csr(CSR_MSTATUS, mstatus);
+
+			// An SRET in HS-mode returns to the guest when hstatus.SPV
+			// says the trap came from one; SPV is then cleared, so a
+			// later SRET cannot accidentally resume in VS-mode without
+			// a guest having been entered again.
+			//
+			// An SRET in VS-mode is the guest's own return from its own
+			// trap. It stays virtual, and hstatus -- which belongs to
+			// the hypervisor, not the guest -- is not consulted.
+			if (Extensions.H && !regs.get_virt()) {
+				uint64_t hstatus = hyp::read_hstatus(regs);
+				regs.set_virt((hstatus & (1ull << 7)) != 0); // SPV
+				hyp::write_hstatus(regs, hstatus & ~(1ull << 7));
+			}
 			regs.set_priv(target);
 			regs.set_pc(regs.read_csr(CSR_SEPC));
 			return;
@@ -541,8 +614,15 @@ void RiscvCore::exec_32ZICSR(const DecodedInstruction &instr, Registers &regs, M
 			mstatus = (mstatus & MSTATUS_MPIE) ? (mstatus | MSTATUS_MIE) : (mstatus & ~MSTATUS_MIE);
 			mstatus |= MSTATUS_MPIE; // MPIE reset to 1 on return, per spec
 			PrivMode target = (PrivMode)((mstatus & MSTATUS_MPP) >> 11);
+			// MPV says whether the trap came from a virtual mode. It is
+			// only meaningful below M, since M-mode is never virtual --
+			// returning to M always clears V.
+			bool target_virt = Extensions.H && (mstatus & MSTATUS_MPV) != 0
+			                && target != PrivMode::M;
 			mstatus &= ~MSTATUS_MPP; // MPP reset to U on return, per spec
+			mstatus &= ~MSTATUS_MPV;
 			regs.write_csr(CSR_MSTATUS, mstatus);
+			if (Extensions.H) regs.set_virt(target_virt);
 			regs.set_priv(target);
 			regs.set_pc(regs.read_csr(CSR_MEPC));
 			return;
@@ -562,6 +642,22 @@ void RiscvCore::exec_32ZICSR(const DecodedInstruction &instr, Registers &regs, M
 	}
 
 	uint16_t csr = (uint16_t)instr.imm;
+
+	// A guest reaching for the hypervisor's own registers is attempting
+	// something only HS-mode may do, which is a *virtual* instruction
+	// exception rather than an illegal one. The difference is what lets a
+	// hypervisor emulate the access on the guest's behalf instead of
+	// killing it, so it has to be decided before the ordinary privilege
+	// check below turns it into cause 2.
+	if (Extensions.H && hyp::is_virtual_instruction_csr(regs, csr)) {
+		enter_trap(regs, hyp::CAUSE_VIRTUAL_INSTRUCTION, instr.raw);
+		return;
+	}
+
+	// In VS-mode the S-mode CSR names refer to the VS shadows. Rewriting
+	// the number here, rather than special-casing each register at its own
+	// read and write site, is what stops one of them being missed.
+	if (Extensions.H) csr = hyp::redirect_for_virt(regs, csr);
 
 	// Whether this instruction writes has to be decided before the access
 	// check, not after: writing a read-only CSR is illegal, but *reading*
@@ -598,8 +694,31 @@ void RiscvCore::exec_32ZICSR(const DecodedInstruction &instr, Registers &regs, M
 	case 0b11: if (instr.rs1 != 0) updated = old & ~operand; break; // CSRRC/CSRRCI
 	}
 
+	// stvec/mtvec MODE (bits 1:0) is WARL, and this hart implements only
+	// direct mode -- every trap goes to the base address regardless of
+	// cause. Storing a mode it does not implement would let software read
+	// back a vectored setting that is not honoured, so it is clamped on
+	// write rather than merely ignored on use.
+	//
+	// vstvec is in this list because it *is* stvec as far as a guest is
+	// concerned: the same field with the same rule, reached through the
+	// same name. Keying the clamp on the S-mode number alone missed it,
+	// since VS redirection has already rewritten the number by this point
+	// -- the guest's write arrives here as 0x205, not 0x105.
+	if (csr == CSR_STVEC || csr == CSR_MTVEC || csr == 0x205) updated &= ~0x3ull;
+
 	if (csr == 0x100) write_sstatus(regs, updated);
+	else if (Extensions.H && csr == hyp::CSR_HSTATUS_ADDR) hyp::write_hstatus(regs, updated);
 	else if (csr == CSR_SATP) write_satp(regs, updated);
+	// vsatp is satp as far as a guest is concerned -- same MODE field,
+	// same WARL rule, reached through the same name. It needs the same
+	// clamping for the same reason vstvec did above, and for the same
+	// reason it is easy to miss: redirection has already rewritten the
+	// number, so keying on CSR_SATP alone never sees the guest's write.
+	//
+	// Not covered by a test yet: vsatp's MODE only becomes observable once
+	// two-stage translation reads it, which is the next increment.
+	else if (Extensions.H && csr == 0x280) write_satp_warl(regs, 0x280, updated);
 	else if (csr == CSR_SIE) write_sie(regs, updated);
 	else if (csr == CSR_SIP) write_sip(regs, updated);
 	else if (csr == CSR_MIP) regs.write_csr(CSR_MIP, updated & MIP_SHADOW_MASK);
