@@ -38,6 +38,8 @@ constexpr uint16_t CSR_VSATP      = 0x280; // the guest's satp, used by hlv/hsv
 constexpr uint16_t CSR_VSSTATUS   = 0x200; // the guest's sstatus: its own SUM/MXR
 constexpr uint16_t CSR_HSTATUS    = 0x600;
 constexpr uint64_t HSTATUS_SPVP   = 1ull << 8;
+constexpr uint16_t CSR_HGATP      = 0x680; // the second-stage root
+constexpr uint16_t CSR_HTVAL      = 0x643; // faulting guest physical address
 constexpr uint64_t MENVCFG_PBMTE  = 1ull << 62;
 constexpr uint64_t MENVCFG_ADUE   = 1ull << 61;
 
@@ -54,6 +56,144 @@ uint64_t fault_cause(AccessType type)
 	case AccessType::Load:  return CAUSE_LOAD_PAGE_FAULT;
 	default:                return CAUSE_STORE_PAGE_FAULT; // Store, Amo
 	}
+}
+
+// A second-stage (G-stage) failure gets its own cause number, distinct from
+// the first-stage one. That is not decoration: a hypervisor has to tell
+// "the guest's own page tables rejected this" -- which is the guest kernel's
+// problem to fix -- from "my page tables rejected this", which is the
+// hypervisor's, and typically means a page it has not backed yet.
+uint64_t guest_fault_cause(AccessType type)
+{
+	switch (type) {
+	case AccessType::Fetch: return 20; // instruction guest-page fault
+	case AccessType::Load:  return 21; // load guest-page fault
+	default:                return 23; // store/AMO guest-page fault
+	}
+}
+
+// G-stage translation: guest physical address -> real physical address,
+// through hgatp.
+//
+// Sv39x4 rather than Sv39. The root table is four pages wide and its top
+// index is 11 bits instead of 9, which extends the guest physical address
+// space to 41 bits -- a guest may be given more physical memory than a
+// single Sv39 root could describe. Only the root level differs; the two
+// levels below it are ordinary Sv39.
+//
+// `implicit` marks a walk of the *first stage's own page tables* rather
+// than the guest's final access. The distinction matters for reporting:
+// spec requires such a fault to be reported against the original access,
+// and it is also why a single guest load can perform a dozen memory
+// accesses and fault at any of them.
+bool gstage_translate(Registers &regs, Memory &mem, uint64_t gpa, AccessType type,
+                      uint64_t &pa, uint64_t &cause, uint64_t &tval, bool implicit)
+{
+	uint64_t hgatp = regs.read_csr(CSR_HGATP);
+	uint64_t mode = hgatp >> 60;
+	if (mode == 0) { // bare: the guest's physical addresses are real ones
+		pa = gpa;
+		return true;
+	}
+	if (mode != SATP_MODE_SV39) { // only Sv39x4 is implemented
+		pa = gpa;
+		return true;
+	}
+
+	// The guest physical address space is 41 bits wide. Anything above that
+	// cannot be described by the root table and faults rather than
+	// wrapping.
+	if (gpa >> 41) {
+		cause = guest_fault_cause(type);
+		// htval carries the guest physical address, shifted right by two;
+		// stval keeps the guest *virtual* address, which the caller
+		// restores. The hypervisor needs both -- the VA to tell the guest
+		// what it touched, the GPA to know which page to back -- and they
+		// are different numbers, so one field cannot serve for both.
+		regs.write_csr(CSR_HTVAL, gpa >> 2);
+		tval = gpa;
+		return false;
+	}
+
+	uint64_t vpn[3] = {
+		(gpa >> 12) & 0x1FF,
+		(gpa >> 21) & 0x1FF,
+		(gpa >> 30) & 0x7FF, // 11 bits at the root, not 9
+	};
+
+	uint64_t a = (hgatp & 0xFFFFFFFFFFFull) * PAGESIZE;
+	uint64_t pte = 0;
+	int level = -1;
+	for (int i = 2; i >= 0; i--) {
+		uint64_t pte_addr = a + vpn[i] * PTESIZE;
+		pte = mem.read64(pte_addr);
+		if (!(pte & PTE_V) || (!(pte & PTE_R) && (pte & PTE_W))) {
+			cause = guest_fault_cause(type);
+			tval = gpa;
+			return false;
+		}
+		if ((pte & PTE_R) || (pte & PTE_X)) { level = i; break; }
+		if (i == 0) {
+			cause = guest_fault_cause(type);
+			tval = gpa;
+			return false;
+		}
+		a = pte_ppn(pte) * PAGESIZE;
+	}
+
+	// Every G-stage leaf must be user-accessible. Both VS and VU sit below
+	// HS, so from the second stage's point of view the guest is always
+	// user code -- a G-stage page without U would be unreachable by any
+	// guest at all, which makes it a configuration error rather than a
+	// permission the hypervisor could have intended.
+	if (!(pte & PTE_U)) {
+		cause = guest_fault_cause(type);
+		// htval carries the guest physical address, shifted right by two;
+		// stval keeps the guest *virtual* address, which the caller
+		// restores. The hypervisor needs both -- the VA to tell the guest
+		// what it touched, the GPA to know which page to back -- and they
+		// are different numbers, so one field cannot serve for both.
+		regs.write_csr(CSR_HTVAL, gpa >> 2);
+		tval = gpa;
+		return false;
+	}
+
+	bool perm_ok;
+	switch (type) {
+	case AccessType::Fetch: perm_ok = (pte & PTE_X) != 0; break;
+	case AccessType::Load:  perm_ok = (pte & PTE_R) != 0; break;
+	case AccessType::Store: perm_ok = (pte & PTE_W) != 0; break;
+	default:                perm_ok = (pte & PTE_R) && (pte & PTE_W); break;
+	}
+	// A walk of the guest's page tables is a *read* of memory whatever the
+	// original access was: fetching a PTE needs the page holding it to be
+	// readable, not executable or writable.
+	if (implicit) perm_ok = (pte & PTE_R) != 0;
+	if (!perm_ok || !(pte & PTE_A)
+	    || ((type == AccessType::Store || type == AccessType::Amo) && !implicit && !(pte & PTE_D))) {
+		cause = guest_fault_cause(type);
+		// htval carries the guest physical address, shifted right by two;
+		// stval keeps the guest *virtual* address, which the caller
+		// restores. The hypervisor needs both -- the VA to tell the guest
+		// what it touched, the GPA to know which page to back -- and they
+		// are different numbers, so one field cannot serve for both.
+		regs.write_csr(CSR_HTVAL, gpa >> 2);
+		tval = gpa;
+		return false;
+	}
+
+	uint64_t ppn_full = pte_ppn(pte);
+	if (level > 0) {
+		uint64_t low_mask = (1ull << (9 * level)) - 1;
+		if (ppn_full & low_mask) {
+			cause = guest_fault_cause(type);
+			tval = gpa;
+			return false;
+		}
+	}
+	uint64_t low_bits = 12 + 9 * level;
+	pa = (ppn_full << 12) | (gpa & ((1ull << low_bits) - 1));
+	return true;
 }
 }
 
@@ -132,6 +272,16 @@ bool mmu_translate(Registers &regs, Memory &mem, uint64_t vaddr, AccessType type
 	}
 	uint64_t mode = satp >> 60;
 	if (eff_priv == PrivMode::M || mode == 0) {
+		// No first stage, but a guest access still owes the second one:
+		// with the guest's own paging off its addresses are guest
+		// *physical* addresses, which hgatp still has to place.
+		if (as_guest) {
+			if (!gstage_translate(regs, mem, vaddr, type, paddr, cause, tval, false)) {
+				tval = vaddr; // stval reports the guest VA, htval the GPA
+				return false;
+			}
+			return true;
+		}
 		paddr = vaddr;
 		return true;
 	}
@@ -170,6 +320,19 @@ bool mmu_translate(Registers &regs, Memory &mem, uint64_t vaddr, AccessType type
 	int level = -1;
 	for (int i = 2; i >= 0; i--) {
 		uint64_t pte_addr = a + vpn[i] * PTESIZE;
+		// In a guest walk this address is a guest physical one, so the
+		// second stage has to place it before the PTE can be read. This
+		// is the part that makes two-stage translation expensive: a
+		// single guest access performs one of these per level, plus one
+		// for the final address, and any of them can fault.
+		if (as_guest) {
+			uint64_t pte_pa;
+			if (!gstage_translate(regs, mem, pte_addr, type, pte_pa, cause, tval, true)) {
+				tval = vaddr; // the access that faulted, not the PTE address
+				return false;
+			}
+			pte_addr = pte_pa;
+		}
 		pte = mem.read64(pte_addr);
 		if (!(pte & PTE_V) || (!(pte & PTE_R) && (pte & PTE_W))) {
 			// Invalid, or the reserved W=1/R=0 encoding.
@@ -312,5 +475,17 @@ bool mmu_translate(Registers &regs, Memory &mem, uint64_t vaddr, AccessType type
 	uint64_t va_low_bits = 12 + 9 * level;
 	uint64_t va_mask = (1ull << va_low_bits) - 1;
 	paddr = (ppn_full << 12) | (vaddr & va_mask);
+
+	// What the guest's tables produced is a guest physical address, not a
+	// real one. The second stage places it -- and can fault here even
+	// though the guest's own tables were perfectly happy, which is exactly
+	// the case the distinct guest-page-fault causes exist to report.
+	if (as_guest) {
+		uint64_t gpa = paddr;
+		if (!gstage_translate(regs, mem, gpa, type, paddr, cause, tval, false)) {
+			tval = vaddr;
+			return false;
+		}
+	}
 	return true;
 }

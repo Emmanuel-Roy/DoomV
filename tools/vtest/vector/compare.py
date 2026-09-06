@@ -592,6 +592,36 @@ LAYOUT_HLV = [(2, n) for n in [
     "guest issuing hlv: cause (22 = virtual instruction)",
 ]]
 
+# Two-stage translation. The guest's tables produce guest *physical*
+# addresses, which hgatp then places into real memory -- including every
+# intermediate page-table pointer, not just the final address.
+#
+# Entry 1 is the decisive one. Three pages hold three values, so the answer
+# says which stages ran: 0x1111 means no guest translation, 0x2222 means
+# the guest's table but no G-stage, 0x3333 means both. An implementation
+# that skipped the second stage returns 0x2222 and faults nothing.
+#
+# The cause numbers are the other half: the guest's tables being satisfied
+# while the G-stage refuses is what 20/21/23 exist to report, and it means
+# the hypervisor has not backed that page rather than the guest kernel
+# having made a mistake.
+LAYOUT_HGATP = [(2, n) for n in [
+    "ordinary ld: hypervisor's table only (0x1111...)",
+    "hlv.d: BOTH stages applied (0x3333..., not 0x2222...)",
+    "hsv.d landed on the G-stage's real page",
+    "hsv.d left the guest-physical page untouched",
+    "G-stage mapping removed: trap count (1)",
+    "G-stage mapping removed: cause (21 = load guest-page fault, not 13)",
+    "store to unmapped guest page: trap count (1)",
+    "store to unmapped guest page: cause (23 = store guest-page fault)",
+    "mapping restored: no fault (0)",
+    "mapping restored: value reads back",
+    "G-stage page without U: trap count (1)",
+    "G-stage page without U: cause (21)",
+    "guest paging off: G-stage alone still relocates",
+    "guest paging off: no fault (0)",
+]]
+
 LAYOUTS = {
     "vtest_v": LAYOUT_V,
     "vtest_zb": LAYOUT_ZB,
@@ -609,6 +639,7 @@ LAYOUTS = {
     "vtest_pm": LAYOUT_PM,
     "vtest_h": LAYOUT_H,
     "vtest_hlv": LAYOUT_HLV,
+    "vtest_hgatp": LAYOUT_HGATP,
 }
 
 
