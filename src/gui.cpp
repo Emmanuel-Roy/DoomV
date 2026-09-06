@@ -594,24 +594,45 @@ void Gui::draw_char(int x, int y, char c, uint32_t col, float scale_x_, float sc
 	// string still lines up with normal-scale text around it.
 	float px_scale = scale_x * scale_x_;
 	float py_scale = scale_y * scale_y_;
-	int bw = (int)(px_scale + 0.5f); if (bw < 1) bw = 1;
-	int bh = (int)(py_scale + 0.5f); if (bh < 1) bh = 1;
 	int origin_x = (int)(x * scale_x);
 	int origin_y = (int)(y * scale_y);
 
+	// Each source pixel covers the span from where it starts to where the
+	// *next* one starts. That sounds like a long way of saying "draw a
+	// block of size px_scale", and it is not: a fixed rounded size and a
+	// truncated position disagree whenever the scale is not an integer,
+	// and the disagreement leaves undrawn columns and rows scattered
+	// through the glyph.
+	//
+	// Concretely, at px_scale 2.25 a rounded size of 2 puts source column
+	// 3 at pixels 6-7 and column 4 at pixel 9 -- pixel 8 is never written.
+	// Repeated down the glyph that reads as a transparent line straight
+	// through every character, and since the same arithmetic runs on the
+	// other axis, the two cross. It only showed up at some window sizes,
+	// because it needs a fractional scale to appear at all: the trace text
+	// draws at 0.75, so a 1920-wide window (scale_x 3.0) lands exactly on
+	// it while a 1280-wide one (2.0, giving 1.5) happens not to.
+	//
+	// Deriving the extent from the next start makes the blocks tile with
+	// no gaps and no overlap at any scale, which is what nearest-neighbour
+	// scaling should have been doing in the first place.
 	for (int r = 0; r < 8; r++) {
 		uint8_t b = font8x8[(uint8_t)c][r];
+		int py0 = origin_y + (int)(r * py_scale);
+		int py1 = origin_y + (int)((r + 1) * py_scale);
+		if (py1 <= py0) py1 = py0 + 1; // never collapse a row away entirely
+
 		for (int cl = 0; cl < 8; cl++) {
 			if (!(b & (0x80 >> cl))) continue;
 
-			int px = origin_x + (int)(cl * px_scale);
-			int py = origin_y + (int)(r * py_scale);
-			for (int by = 0; by < bh; by++) {
-				int ty = py + by;
+			int px0 = origin_x + (int)(cl * px_scale);
+			int px1 = origin_x + (int)((cl + 1) * px_scale);
+			if (px1 <= px0) px1 = px0 + 1;
+
+			for (int ty = py0; ty < py1; ty++) {
 				if (ty < 0 || ty >= canvas_h) continue;
 				uint32_t *row = &screen_buf[(size_t)ty * canvas_w];
-				for (int bx = 0; bx < bw; bx++) {
-					int tx = px + bx;
+				for (int tx = px0; tx < px1; tx++) {
 					if (tx < 0 || tx >= canvas_w) continue;
 					row[tx] = col;
 				}
