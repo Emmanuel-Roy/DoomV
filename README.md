@@ -45,6 +45,10 @@ opt-in since it's not needed to boot Doom itself.
 | Zihintpause / Zihintntl | ✅ (hints — retire without effect) |
 | Zimop / Zcmop | ✅ (write zero to `rd`) |
 | Zicbom / Zicbop | ✅ (no cache to manage — see below) |
+| Zicboz (`cbo.zero`) | ✅ |
+| Zawrs (`wrs.nto`/`wrs.sto`) | ✅ (retires immediately) |
+| Zicntr (`cycle`/`time`/`instret`) | ✅ |
+| Zihpm (`hpmcounter3-31`) | ✅ (read as zero) |
 
 The bitmanip families and `Zicond` are on by default despite Doom never
 emitting them: every modern riscv64 Linux userspace assumes them, so
@@ -62,6 +66,31 @@ makes those reserved encodings safe for a future extension to claim.
 `Zicbom`'s cache-management ops are satisfied trivially by a machine with
 no cache; what is *not* modelled is the `menvcfg`/`senvcfg` permission
 layer that lets M-mode make them trap in S/U mode.
+
+`Zicboz` is different from its Zicbom siblings — `cbo.zero` is a real
+store, and the address is aligned *down* to the 64-byte block, so
+`cbo.zero (base+8)` still zeroes from `base`.
+
+`Zawrs` retires immediately. The spec explicitly permits that, and the
+software contract is built around it: the surrounding loop always re-checks
+its condition, because a `wrs` may return for any reason or none. On a
+single-hart interpreter it is also the only implementation that terminates,
+since no other hart exists to break the reservation.
+
+The counters are one number. `mtime` advances once per retired instruction
+(that is what makes this machine's timer deterministic), so `cycle`, `time`
+and `instret` all read the same counter — an interpreter that retires one
+instruction per step has `cycle == instret` by construction. `hpmcounter3`
+through `hpmcounter31` read as zero, which the spec permits and which is
+the honest answer for a machine that counts no events.
+
+CSR accesses are privilege-checked: writing a read-only CSR, or touching
+one above the current privilege level, raises an illegal instruction, and
+`cycle`/`time`/`instret` are gated in S- and U-mode by the
+`mcounteren`/`scounteren` chain. CSR *numbers* this machine gives no
+meaning to are still readable and writable — OpenSBI detects hart features
+by reading a spread of CSRs to see which trap, so making unknown ones
+illegal is a much larger change than making privilege boundaries real.
 
 Every extension is a runtime toggle, not a compile-time one — pass
 `-march=rv64imafdc_zicsr_zifencei` (the default), add a `v` for vector

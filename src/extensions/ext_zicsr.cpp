@@ -1,6 +1,7 @@
 // Zicsr extension: ECALL/EBREAK/MRET control-transfer plus CSR read/modify/
 // write. Also owns the M-mode trap-entry sequence (enter_trap), since ECALL/
 // EBREAK are the only things in this project that ever trigger one.
+#include "ext_zicntr.hpp"
 #include "riscv_decoder.hpp"
 #include "riscv_core.hpp"
 #include "registers.hpp"
@@ -41,6 +42,8 @@ DecodedInstruction Decoder::decode_zicsr(uint32_t raw_instr) const
 		else if (raw_instr == 0x30200073) instr.mnemonic = "MRET";
 		else if (raw_instr == 0x10200073) instr.mnemonic = "SRET";
 		else if (raw_instr == 0x10500073) instr.mnemonic = "WFI";
+		else if (raw_instr == 0x00D00073) { instr.mnemonic = "WRS.NTO"; instr.ext = Extension::ZAWRS; }
+		else if (raw_instr == 0x01D00073) { instr.mnemonic = "WRS.STO"; instr.ext = Extension::ZAWRS; }
 		else if (funct7 == 0b0001001 && rd == 0) instr.mnemonic = "SFENCE.VMA";
 		// else: genuinely unrecognized SYSTEM encoding -- mnemonic stays
 		// "???", exec_32ZICSR's default case no-ops it the same as before.
@@ -89,10 +92,12 @@ constexpr uint16_t CSR_SATP    = 0x180; // must match mmu.cpp's own CSR_SATP
 // positions unchanged -- AIA doesn't move them. miselect/siselect need no
 // special handling below (they're just the plain selector value mireg/
 // sireg read back out of Registers::csr[] each access), only mireg/sireg/
-// mtopei/stopei do. mtopi/stopi (read-only priority summaries) aren't
-// implemented -- nothing in this stage's verification needs them, and
-// leaving them at their generic-array default (0) is spec-plausible
-// enough not to be worth the extra surface right now.
+// mtopei/stopei do. mtopi/stopi are computed too (see compute_topi): they
+// started out as generic-array zeros on the reasoning that nothing needed
+// them, which turned out to be exactly wrong. A device tree advertising
+// smaia/ssaia makes Linux dispatch interrupts solely from a csr_read of
+// TOPI, so returning zero meant interrupts were never dispatched *or
+// acknowledged* -- a silent livelock rather than a missing feature.
 constexpr uint16_t CSR_SIE      = 0x104;
 constexpr uint16_t CSR_SIP      = 0x144;
 constexpr uint16_t CSR_MIE      = 0x304;
@@ -313,6 +318,36 @@ void write_sstatus(Registers &regs, uint64_t value)
 // reasons noted at each accessor's declaration (registers.hpp). Side-
 // effect free either way -- topei_value() is a plain peek; claim() is a
 // separate call the real write side makes only on an actual write.
+// Who is allowed to touch a CSR. Three rules, all from the privileged spec's
+// CSR-address encoding, plus the counter chain Zicntr/Zihpm add:
+//
+//   * csr[11:10] == 11 marks a read-only CSR -- writing one is illegal.
+//   * csr[9:8] is the lowest privilege that may access it at all.
+//   * the unprivileged counters are further gated by mcounteren/scounteren.
+//
+// None of this was enforced before: every mode could read and write every
+// CSR. That is invisible while only M-mode firmware runs, and becomes very
+// visible the moment a guest kernel deliberately probes a CSR expecting a
+// trap -- which is exactly how OpenSBI detects hart features.
+//
+// Deliberately *not* added here: trapping on CSR numbers this machine gives
+// no meaning to. Registers::csr[] backs all 4096 addresses generically, and
+// OpenSBI's feature detection reads a spread of them to see which exist.
+// Making unknown CSRs illegal is a separate, much larger behaviour change
+// than making privilege boundaries real, and belongs in its own step.
+bool RiscvCore::csr_access_permitted(Registers &regs, uint16_t csr, bool writing)
+{
+	if (writing && ((csr >> 10) & 0x3) == 0x3) return false;
+
+	uint8_t min_priv = (csr >> 8) & 0x3;
+	if ((uint8_t)regs.get_priv() < min_priv) return false;
+
+	if (counters::is_counter_csr(csr) && !counters::counter_permitted(regs, csr))
+		return false;
+
+	return true;
+}
+
 uint64_t RiscvCore::read_csr_effective(Registers &regs, Memory &mem, uint16_t csr)
 {
 	if (csr == 0x100) return read_sstatus(regs);
@@ -326,7 +361,10 @@ uint64_t RiscvCore::read_csr_effective(Registers &regs, Memory &mem, uint16_t cs
 	if (csr == CSR_STOPEI) return mem.get_imsic_s().topei_value();
 	if (csr == CSR_MTOPI) return compute_topi(regs, mem, /*s_level=*/false);
 	if (csr == CSR_STOPI) return compute_topi(regs, mem, /*s_level=*/true);
-	if (csr == CSR_TIME) return mem.get_timer().get_mtime();
+	// cycle/time/instret/hpmcounter* (Zicntr, Zihpm). time was already
+	// here as an mtime alias; the other two read the same counter for the
+	// reason ext_zicntr.cpp explains.
+	if (counters::is_counter_csr(csr)) return counters::read_counter(regs, mem, csr);
 	if (csr == 0x001) return regs.get_fflags();
 	if (csr == 0x002) return regs.get_frm();
 	if (csr == 0x003) return ((uint64_t)regs.get_frm() << 5) | regs.get_fflags();
@@ -521,6 +559,22 @@ void RiscvCore::exec_32ZICSR(const DecodedInstruction &instr, Registers &regs, M
 	}
 
 	uint16_t csr = (uint16_t)instr.imm;
+
+	// Whether this instruction writes has to be decided before the access
+	// check, not after: writing a read-only CSR is illegal, but *reading*
+	// one is fine, and CSRRS/CSRRC with rs1==0 (the `csrr` pseudo-
+	// instruction) is a read even though its encoding is a
+	// read-modify-write. Deciding this later would make every csrr of a
+	// read-only counter trap.
+	bool writes = (instr.funct3 & 0x3) == 0b01 || instr.rs1 != 0;
+
+	if (!csr_access_permitted(regs, csr, writes)) {
+		// tval is the whole instruction for an illegal-instruction trap,
+		// which is what a handler needs to work out which CSR was refused.
+		raise_illegal_instruction(regs, instr.raw);
+		return;
+	}
+
 	regs.record_csr_access(csr); // dashboard's CSRs panel -- see registers.hpp
 	uint64_t old = read_csr_effective(regs, mem, csr);
 
@@ -534,11 +588,11 @@ void RiscvCore::exec_32ZICSR(const DecodedInstruction &instr, Registers &regs, M
 	// unlike every other CSR here, "rewrite the same value" is not
 	// harmless for these two, since the claim happens regardless of what
 	// value is nominally written).
-	bool did_write = true;
+	bool did_write = writes;
 	switch (instr.funct3 & 0x3) {
 	case 0b01: updated = operand; break; // CSRRW/CSRRWI -- always writes
-	case 0b10: if (instr.rs1 != 0) updated = old | operand; else did_write = false; break;  // CSRRS/CSRRSI -- rs1/uimm==0 means read-only
-	case 0b11: if (instr.rs1 != 0) updated = old & ~operand; else did_write = false; break; // CSRRC/CSRRCI
+	case 0b10: if (instr.rs1 != 0) updated = old | operand; break;  // CSRRS/CSRRSI -- rs1/uimm==0 means read-only
+	case 0b11: if (instr.rs1 != 0) updated = old & ~operand; break; // CSRRC/CSRRCI
 	}
 
 	if (csr == 0x100) write_sstatus(regs, updated);

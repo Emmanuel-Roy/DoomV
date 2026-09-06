@@ -65,9 +65,11 @@ Extension Decoder::classify(uint32_t raw_instr) const
 	case 0b0001111: { // MISC-MEM: FENCE (I), FENCE.I (Zifencei), cbo.* (Zicbom) -- split by funct3
 		uint8_t funct3 = (raw_instr >> 12) & 0x07;
 		if (funct3 == 0b001) return Extension::ZIFENCEI;
-		if (funct3 == 0b010) { // cbo.inval/clean/flush, selected by imm; 4 is Zicboz's cbo.zero
+		if (funct3 == 0b010) { // cbo.*, selected by imm: 0/1/2 are Zicbom, 4 is Zicboz
 			uint32_t imm = (raw_instr >> 20) & 0xFFF;
-			return (imm <= 2) ? Extension::ZICBOM : Extension::ILLEGAL;
+			if (imm <= 2) return Extension::ZICBOM;
+			if (imm == 4) return Extension::ZICBOZ;
+			return Extension::ILLEGAL;
 		}
 		// PAUSE is FENCE pred=W, succ=none with rd/rs1/fm zero, so it already
 		// retired as a plain FENCE. Classifying it separately is what lets
@@ -152,6 +154,12 @@ Extension Decoder::classify(uint32_t raw_instr) const
 		uint8_t funct3 = (raw_instr >> 12) & 0x07;
 		if (funct3 == 0b100)
 			return (raw_instr & 0x80000000u) ? Extension::ZIMOP : Extension::ILLEGAL;
+		// Zawrs' wrs.nto/wrs.sto are two more fixed immediates in the
+		// ECALL/EBREAK/xRET/WFI space. Base I reserves these, so gating
+		// Zawrs off correctly makes them illegal rather than reverting them
+		// to some other meaning.
+		if (funct3 == 0b000 && (raw_instr == 0x00D00073u || raw_instr == 0x01D00073u))
+			return Extensions.ZAWRS ? Extension::ZAWRS : Extension::ILLEGAL;
 		return Extension::ZICSR;
 	}
 	case 0b0000111: { // LOAD-FP: FLW (F) / FLD (D) / vector loads (V) -- share this opcode with no real
@@ -200,8 +208,11 @@ DecodedInstruction Decoder::decode(uint32_t raw_instr, Extension ext) const
 		return decode_a(raw_instr);
 	case 0b1110011: // SYSTEM
 		return (ext == Extension::ZIMOP) ? decode_zimop(raw_instr) : decode_zicsr(raw_instr);
+		// Zawrs falls through to decode_zicsr, which names it and keeps
+		// ext as classify() set it -- see ext_zawrs.cpp.
 	case 0b0001111: // MISC-MEM
 		if (ext == Extension::ZICBOM) return decode_zicbom(raw_instr);
+		if (ext == Extension::ZICBOZ) return decode_zicboz(raw_instr);
 		if (ext == Extension::ZIHINTPAUSE) return decode_zihintpause(raw_instr);
 		return decode_i(raw_instr, ext);
 	case 0b0000111: // LOAD-FP / vector load -- ext (already split by classify()) picks the side
@@ -261,6 +272,7 @@ DispatchResult Decoder::decode_and_dispatch(uint64_t pc, uint32_t raw_word)
 			// dashboard/crash log instead of "???".
 			instr = decode(raw_word, ext);
 		}
+		instr.raw = tag;
 
 		enabled = (instr.ext == Extension::I && Extensions.I)
 		       || (instr.ext == Extension::M && Extensions.M)
@@ -280,7 +292,9 @@ DispatchResult Decoder::decode_and_dispatch(uint64_t pc, uint32_t raw_word)
 		       || (instr.ext == Extension::ZIMOP && Extensions.ZIMOP)
 		       || (instr.ext == Extension::ZCMOP && Extensions.ZCMOP)
 		       || (instr.ext == Extension::ZICBOM && Extensions.ZICBOM)
-		       || (instr.ext == Extension::ZICBOP && Extensions.ZICBOP);
+		       || (instr.ext == Extension::ZICBOP && Extensions.ZICBOP)
+		       || (instr.ext == Extension::ZICBOZ && Extensions.ZICBOZ)
+		       || (instr.ext == Extension::ZAWRS && Extensions.ZAWRS);
 
 		entry = {true, pc, tag, instr, enabled};
 	}
@@ -352,6 +366,12 @@ DispatchResult Decoder::decode_and_dispatch(uint64_t pc, uint32_t raw_word)
 		break;
 	case Extension::ZICBOP:
 		core.exec_ZICBOP(instr, regs, mem);
+		break;
+	case Extension::ZICBOZ:
+		core.exec_ZICBOZ(instr, regs, mem);
+		break;
+	case Extension::ZAWRS:
+		core.exec_ZAWRS(instr, regs, mem);
 		break;
 	case Extension::V:
 		core.exec_V(instr, regs, mem);

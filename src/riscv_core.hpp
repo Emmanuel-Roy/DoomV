@@ -36,6 +36,8 @@ public:
 	void exec_ZCMOP(const DecodedInstruction &instr, Registers &regs, Memory &mem);
 	void exec_ZICBOM(const DecodedInstruction &instr, Registers &regs, Memory &mem);
 	void exec_ZICBOP(const DecodedInstruction &instr, Registers &regs, Memory &mem);
+	void exec_ZICBOZ(const DecodedInstruction &instr, Registers &regs, Memory &mem);
+	void exec_ZAWRS(const DecodedInstruction &instr, Registers &regs, Memory &mem);
 	void exec_ZIFENCEI(const DecodedInstruction &instr, Registers &regs, Memory &mem);
 
 	// Sv39 address translation, shared by every load/store/AMO/FP-load/
@@ -72,6 +74,7 @@ public:
 	// carry on, while a bare-metal guest with no handler still gets caught
 	// at the exact instruction instead of vanishing into a trap loop.
 	void raise_illegal_instruction(Registers &regs, uint64_t tval);
+	static bool csr_access_permitted(Registers &regs, uint16_t csr, bool writing);
 
 private:
 	// LR/SC reservation state. Single-hart, no interrupts, so this only

@@ -49,6 +49,11 @@ struct ExtensionConfig {
 	bool ZCMOP = true;
 	bool ZICBOM = true;
 	bool ZICBOP = true;
+	// Zicboz has real behaviour, unlike the group above: cbo.zero is a
+	// store. Zawrs retires immediately, which the spec explicitly permits
+	// and which is the only implementation that terminates on one hart.
+	bool ZICBOZ = true;
+	bool ZAWRS = true;
 
 	// Base ISA width, not an optional extension. Registers/Memory always
 	// store values in 64-bit containers regardless of this flag: RV32

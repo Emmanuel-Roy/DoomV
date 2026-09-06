@@ -149,6 +149,25 @@ LAYOUT_HINTS = [(2, n) for n in [
     "sp (unchanged across every hint)",
 ]]
 
+# Counter *values* are not comparable between the two machines -- spike
+# counts simulated cycles, DoomV counts retired instructions -- so this
+# layout deliberately contains no counter value, only the properties both
+# must agree on: that counters never go backwards, and that reading one the
+# counter-enable chain has not permitted raises an illegal-instruction trap.
+LAYOUT_CSR = [(2, n) for n in [
+    "cycle monotonic (1)", "time monotonic (1)", "instret monotonic (1)",
+    "hpmcounter3 (readable, 0)", "hpmcounter31 (readable, 0)",
+    "cbo.zero: block word 0 (aligned down from base+8)",
+    "cbo.zero: block word 3", "cbo.zero: block word 7",
+    "cbo.zero: guard before block (must survive)",
+    "cbo.zero: guard after block (must survive)",
+    "wrs.nto/wrs.sto: a0 sentinel", "wrs.nto/wrs.sto: a1 sentinel",
+    "S-mode reads with mcounteren=0: trap count (2)",
+    "S-mode reads with mcounteren=0: first mcause (2 = illegal)",
+    "S-mode reads with mcounteren=7: trap count (0)",
+    "write to read-only cycle: trap count (1)",
+]]
+
 LAYOUTS = {
     "vtest_v": LAYOUT_V,
     "vtest_zb": LAYOUT_ZB,
@@ -157,6 +176,7 @@ LAYOUTS = {
     "vtest_restart": LAYOUT_RESTART,
     "vtest_fd": LAYOUT_FD,
     "vtest_hints": LAYOUT_HINTS,
+    "vtest_csr": LAYOUT_CSR,
 }
 
 

@@ -38,6 +38,8 @@ case "$TEST" in
             ISA=rv64gc_zicsr_zifencei ;;
   vtest_hints) MARCH=rv64gc_zihintpause_zihintntl_zimop_zcmop_zicbom_zicbop
             ISA=rv64gc_zihintpause_zihintntl_zimop_zcmop_zicbom_zicbop_zicsr_zifencei ;;
+  vtest_csr) MARCH=rv64gc_zicboz_zawrs
+            ISA=rv64gc_zicboz_zawrs_zicntr_zihpm_zicsr_zifencei ;;
   vtest_zb) MARCH=rv64gc_zba_zbb_zbs_zicond_zcb
             ISA=rv64gc_zba_zbb_zbs_zicond_zcb_zicsr_zifencei ;;
   *) echo "unknown test: $TEST" >&2; exit 1 ;;

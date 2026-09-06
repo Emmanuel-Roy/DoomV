@@ -22,6 +22,8 @@ enum class Extension {
 	ZCMOP,
 	ZICBOM,
 	ZICBOP,
+	ZICBOZ,
+	ZAWRS,
 	ILLEGAL,
 };
 
@@ -32,6 +34,10 @@ struct DecodedInstruction {
 	uint8_t rs3;    // R4-type fourth operand -- only the fused multiply-add family (FMADD/FMSUB/FNMSUB/FNMADD) uses this
 	uint8_t funct3, funct7;
 	int64_t imm;    // sign-extends to full XLEN (64 bits)
+	uint32_t raw;   // the instruction word as fetched (16 bits' worth for a compressed one).
+	                // Only needed as the tval of an illegal-instruction trap, which has to
+	                // report the encoding that was refused; filled in centrally by
+	                // decode_and_dispatch so no per-extension decode has to remember to.
 	uint8_t length; // 2 or 4 bytes
 	bool word_op;   // true for the *W-suffixed RV64 forms (ADDIW, SLLW, MULW, ...) -- 32-bit op, sign-extend result to 64
 	bool op_64;     // true for the .D-suffixed RV64A forms (LR.D/SC.D/AMO*.D) -- selects 64-bit vs 32-bit memory width
@@ -88,6 +94,10 @@ private:
 	DecodedInstruction decode_zimop(uint32_t raw_instr) const;
 	DecodedInstruction decode_zicbom(uint32_t raw_instr) const;
 	DecodedInstruction decode_zicbop(uint32_t raw_instr) const;
+	DecodedInstruction decode_zicboz(uint32_t raw_instr) const;
+	// Zawrs has no decode_* of its own: wrs.nto/wrs.sto share SYSTEM
+	// funct3=000 with ECALL/EBREAK/xRET/WFI and are separated by their
+	// immediate, inside ext_zicsr.cpp's decode and exec switches.
 	// The two compressed hint spaces, called from decode_compressed()
 	// the same way the Zcb helpers are.
 	DecodedInstruction decode_zihintntl(uint16_t raw16) const;
