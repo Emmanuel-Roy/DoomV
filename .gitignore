@@ -1,0 +1,121 @@
+# WAD files (copyrighted commercial game data, not source) -- the
+# shareware IWAD is an exception, id Software released it for free
+# redistribution, so it's fine to commit.
+*.wad
+*.WAD
+!DOOM1.WAD
+!doom1.wad
+
+# Build outputs
+*.o
+*.obj
+*.exe
+*.elf
+*.bin
+riscv_doom.exe
+
+# Runtime files the guest may write (config save, crash dumps)
+.default.cfg
+.savegame/
+crash.log
+
+# Out-of-tree build directories for the external tool submodules under
+# tools/ (spike, and eventually the Linux kernel) -- their own in-repo
+# .gitignore files (opensbi, doomgeneric) already cover build output
+# generated *inside* those submodules; this covers build dirs DoomV's
+# own build.sh scripts create as siblings of src/.
+tools/*/build/
+
+# Kernel build output -- extensionless, so *.elf/*.bin above don't
+# catch these.
+tools/linux/Image
+tools/linux/vmlinux
+
+# tools/linux/rootfs/mkdisk.sh's and tools/linux/ubuntu/mkrootfs.sh's
+# outputs, and the DTBs that go with them. All large and reproducible from
+# their scripts in one command.
+/rootfs.img
+/ubuntu.img
+/disk.dtb
+/ubuntu.dtb
+/ubuntu-stage2.log
+# Generated per run from tools/linux/dts/doomv.dts by the Ubuntu boot
+# scripts, which rewrite its bootargs -- never edited by hand.
+/tools/linux/ubuntu/stage2.dts
+/tools/linux/ubuntu/stage2.dtb
+/tools/linux/ubuntu/ubuntu.dts
+/tools/linux/ubuntu/ubuntu.dtb
+/ubuntu.dtb
+
+# BusyBox initramfs build output -- also extensionless-adjacent
+# (.cpio isn't covered by *.bin/*.elf above).
+tools/rootfs/initramfs.cpio
+
+# Signature dump written by -sig= (arch-test / vector differential runs).
+# Hardcoded to this name relative to DoomV's cwd, so it lands at the repo
+# root whenever a test is run from here.
+signature.log
+
+# Lock directory the vector differential runner uses to serialise DoomV
+# invocations (they all write signature.log to the repo root).
+.signature.lock/
+
+# Sail model build output and generated config (regenerate with
+# tools/verification/simulators/sail/{build.sh,mkconfig.py}).
+tools/verification/simulators/sail/src/build/
+tools/verification/simulators/sail/rva23s64.json
+*.sail.sig
+
+# riscv-arch-test working tree: compiled ELFs plus the Sail reference
+# signature for each. Regenerate with
+# tools/verification/tests/archtest/gen_reference.sh -- it is a build
+# product of the submodule's tests, not a source of truth, and it is large.
+tools/verification/tests/archtest/work/
+tools/verification/tests/archtest/out/
+
+__pycache__/
+
+# Precompiled third-party test suites (riscv-tests, damo-rv-priv-ats
+# hypervisor tests, riscv-vector-tests). Fetched by
+# tools/verification/tests/suites/fetch.sh from the sail-riscv-tests
+# releases the Sail model's own test tree uses -- binaries, not sources.
+tools/verification/tests/suites/*
+!tools/verification/tests/suites/fetch.sh
+!tools/verification/tests/suites/run_suite.py
+
+.scripts.lock/
+*.doomv.sig
+tools/linux/linux/Image
+tools/linux/linux/vmlinux
+tools/linux/rootfs/initramfs.cpio
+tools/linux/dts/*.dtb
+
+# SoftFloat object files (built from the spike submodule sources).
+build/
+
+# Sail instruction traces, generated on demand when diffing execution
+# against DoomV to locate a divergence. Large and reproducible.
+tools/verification/tests/archtest/sail_trace*.txt
+
+# HTIF verdict and console transcripts from the third-party suites.
+tohost.log
+tools/verification/tests/suites/out/
+tools/verification/tests/suites/ref/
+
+# Framebuffer dumps from -fbdump=<path>, and anything converted from one.
+*.ppm
+fb*.png
+
+# Storage drive images for the Linux guest. The folder and its README are
+# tracked; the images are the user's data, and large.
+/drives/*
+!/drives/README.md
+
+# The shared folder's contents are whatever the user puts there; only its
+# README is part of the repository.
+/shared/*
+!/shared/README.md
+
+# The copy `boot.py ubuntu --install-desktops` takes before changing the image.
+/ubuntu.pre-desktop.img
+/build/logs/ubuntu-desktop-install.log

@@ -1,0 +1,21 @@
+# core.autocrlf=true converts everything to CRLF on checkout, which is right
+# for the C++ sources built by MinGW but breaks anything executed by a POSIX
+# shell: WSL bash reads `set -euo pipefail\r` and reports "pipefail: invalid
+# option name". The toolchain scripts and the differential harness all run
+# inside WSL, so they have to survive checkout as LF.
+#
+# Scoped to this project's own files -- the vendored trees under
+# tools/*/src are submodules and keep whatever their upstream uses.
+/Makefile text eol=lf
+/tools/*/build.sh text eol=lf
+/tools/vtest/**/*.sh text eol=lf
+/tools/vtest/**/*.py text eol=lf
+/tools/vtest/**/*.S text eol=lf
+/tools/vtest/**/*.lds text eol=lf
+
+# Keep relocated automation executable by Bash/WSL after Windows checkout.
+*.sh text eol=lf
+*.py text eol=lf
+*.S text eol=lf
+*.lds text eol=lf
+**/Makefile text eol=lf
