@@ -38,6 +38,30 @@ opt-in since it's not needed to boot Doom itself.
 | Zicsr | ✅ |
 | Zifencei | ✅ (no-op — see below) |
 | V (vector) | ✅, off by default |
+| Zba / Zbb / Zbs (bitmanip) | ✅ |
+| Zcb (compressed bitmanip/mem) | ✅ |
+| Zicond (conditional move) | ✅ |
+| Zvbb (vector bitmanip) | ✅ (`vandn` only) |
+| Zihintpause / Zihintntl | ✅ (hints — retire without effect) |
+| Zimop / Zcmop | ✅ (write zero to `rd`) |
+| Zicbom / Zicbop | ✅ (no cache to manage — see below) |
+
+The bitmanip families and `Zicond` are on by default despite Doom never
+emitting them: every modern riscv64 Linux userspace assumes them, so
+defaulting them off would only manufacture illegal instructions.
+
+The last three rows are the RVA23 extensions that are defined to do
+nothing observable. Several of them were already retiring correctly
+before they had names here, because they are encoded inside another
+instruction's space in a way that discards the result — `pause` is a
+`fence`, the `ntl.*` hints are `c.add` into `x0`, and `prefetch.*` are
+`ori` into `x0`. Claiming them properly still matters: it lets `-march`
+gate them and the dashboard name them, and `Zimop`/`Zcmop` carry one real
+rule — they must write **zero** to `rd`, which is the guarantee that
+makes those reserved encodings safe for a future extension to claim.
+`Zicbom`'s cache-management ops are satisfied trivially by a machine with
+no cache; what is *not* modelled is the `menvcfg`/`senvcfg` permission
+layer that lets M-mode make them trap in S/U mode.
 
 Every extension is a runtime toggle, not a compile-time one — pass
 `-march=rv64imafdc_zicsr_zifencei` (the default), add a `v` for vector

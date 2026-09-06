@@ -72,7 +72,34 @@
 			// never attaches, and it silently falls back to SBI-only
 			// IPIs -- degraded, not fatal by itself, but suspected of
 			// contributing to a later hang once interrupts are enabled.
-			riscv,isa = "rv64imafdc_zicsr_zifencei_smaia_ssaia_sstc";
+			// This string had been describing a smaller machine than the
+			// one it runs on: Zba/Zbb/Zbs and Zicond have been implemented
+			// and differentially tested for a while, and nothing was
+			// telling Linux so, which costs the optimised string and
+			// bitmap routines the kernel selects at boot from exactly this
+			// list. The hint extensions are new alongside this change.
+			//
+			// Deliberately absent: "v". The vector unit is real but is
+			// opt-in at runtime (-march=...v), and a DT that promises
+			// vectors to a kernel booted without them produces illegal
+			// instructions in the kernel's own routines rather than a
+			// clean refusal.
+			riscv,isa = "rv64imafdc_zicbom_zicbop_zicond_zicsr_zifencei_zihintntl_zihintpause_zimop_zba_zbb_zbs_zcmop_smaia_ssaia_sstc";
+			// riscv,isa is deprecated; 6.12 prefers this pair and only
+			// falls back to parsing the string above. Both are kept so the
+			// same DTB works either way.
+			riscv,isa-base = "rv64i";
+			riscv,isa-extensions = "i", "m", "a", "f", "d", "c",
+					       "zicbom", "zicbop", "zicond", "zicsr",
+					       "zifencei", "zihintntl", "zihintpause",
+					       "zimop", "zba", "zbb", "zbs", "zcmop",
+					       "smaia", "ssaia", "sstc";
+			// Zicbom/Zicbop are architecturally required to state their
+			// block size here -- Linux refuses to use the cbo instructions
+			// without it. 64 bytes is also what Zic64b names, and DoomV has
+			// no cache to contradict the claim with.
+			riscv,cbom-block-size = <64>;
+			riscv,cbop-block-size = <64>;
 			mmu-type = "riscv,sv39";
 
 			cpu0_intc: interrupt-controller {

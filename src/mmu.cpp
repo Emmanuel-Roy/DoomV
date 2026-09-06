@@ -129,11 +129,17 @@ bool mmu_translate(Registers &regs, Memory &mem, uint64_t vaddr, AccessType type
 		}
 	}
 
-	// This stage doesn't implement hardware A/D auto-set, so a page table
-	// that hasn't pre-set these (as real OS page tables generally don't --
-	// they rely on the CPU setting them on first access/write) will fault
-	// here. Known gap, to be revisited once OpenSBI/Linux bring-up
-	// actually exercises it.
+	// Faulting on a clear A (or a clear D on a write) rather than setting
+	// the bit in hardware is Svade -- one of the two behaviours RVA23
+	// permits here, and the one this machine implements. It is not a
+	// shortcut: the alternative, Svadu, is what the *other* half of the
+	// profile allows, and a hart is required to pick one and be consistent.
+	//
+	// Linux handles both. It reads the choice out of the DT and, for an
+	// Svade hart, pre-sets A/D when it installs a PTE and re-walks in the
+	// fault handler -- which is why the boot path here works without ever
+	// needing hardware update. Implementing Svadu later would mean setting
+	// the bits atomically with respect to the walk, not just assigning them.
 	if (!(pte & PTE_A)) { cause = fault_cause(type); tval = vaddr; return false; }
 	if ((type == AccessType::Store || type == AccessType::Amo) && !(pte & PTE_D)) {
 		cause = fault_cause(type);

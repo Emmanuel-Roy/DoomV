@@ -52,11 +52,29 @@ Extension Decoder::classify(uint32_t raw_instr) const
 			default: return Extension::ILLEGAL;
 			}
 		}
+		// Zicbop's prefetch.{i,r,w} are ORI with rd=x0 and imm[4:0] naming
+		// the variant -- an encoding base I reserves as a HINT. Only claim it
+		// when the extension is on: with it off the encoding is still a
+		// perfectly legal (result-discarding) ORI, not an illegal instruction.
+		if (funct3 == 0b110 && Extensions.ZICBOP && ((raw_instr >> 7) & 0x1F) == 0) {
+			uint32_t sel = (raw_instr >> 20) & 0x1F;
+			if (sel == 0 || sel == 1 || sel == 3) return Extension::ZICBOP;
+		}
 		return Extension::I; // ADDI/SLTI/SLTIU/XORI/ORI/ANDI
 	}
-	case 0b0001111: { // FENCE (I) / FENCE.I (Zifencei) -- split by funct3
+	case 0b0001111: { // MISC-MEM: FENCE (I), FENCE.I (Zifencei), cbo.* (Zicbom) -- split by funct3
 		uint8_t funct3 = (raw_instr >> 12) & 0x07;
-		return (funct3 == 0b001) ? Extension::ZIFENCEI : Extension::I;
+		if (funct3 == 0b001) return Extension::ZIFENCEI;
+		if (funct3 == 0b010) { // cbo.inval/clean/flush, selected by imm; 4 is Zicboz's cbo.zero
+			uint32_t imm = (raw_instr >> 20) & 0xFFF;
+			return (imm <= 2) ? Extension::ZICBOM : Extension::ILLEGAL;
+		}
+		// PAUSE is FENCE pred=W, succ=none with rd/rs1/fm zero, so it already
+		// retired as a plain FENCE. Classifying it separately is what lets
+		// the dashboard name it and -march gate it.
+		if (funct3 == 0b000 && Extensions.ZIHINTPAUSE && raw_instr == 0x0100000Fu)
+			return Extension::ZIHINTPAUSE;
+		return Extension::I;
 	}
 	case 0b0011011: { // OP-IMM-32 (RV64 only): ADDIW/SLLIW/SRLIW/SRAIW, plus
 		// Zba's slli.uw and Zbb's clzw/ctzw/cpopw/roriw in the same shift space.
@@ -128,8 +146,14 @@ Extension Decoder::classify(uint32_t raw_instr) const
 	}
 	case 0b0101111: // AMO
 		return Extension::A;
-	case 0b1110011: // SYSTEM: ECALL/EBREAK/CSR*, all gated behind Zicsr
+	case 0b1110011: { // SYSTEM: ECALL/EBREAK/CSR* (Zicsr), plus Zimop's MOP.R/MOP.RR.
+		// funct3=100 is a slot Zicsr never uses. Bit 31 marks the MOP space,
+		// and bit 25 picks the one-source (MOP.R) or two-source (MOP.RR) form.
+		uint8_t funct3 = (raw_instr >> 12) & 0x07;
+		if (funct3 == 0b100)
+			return (raw_instr & 0x80000000u) ? Extension::ZIMOP : Extension::ILLEGAL;
 		return Extension::ZICSR;
+	}
 	case 0b0000111: { // LOAD-FP: FLW (F) / FLD (D) / vector loads (V) -- share this opcode with no real
 		// collision: F/D only ever use funct3 (the spec's "width" field) 010/011, V's vector-load
 		// encoding only ever uses 000/101/110/111 (EEW 8/16/32/64), so the two spaces don't overlap.
@@ -175,7 +199,11 @@ DecodedInstruction Decoder::decode(uint32_t raw_instr, Extension ext) const
 	case 0b0101111: // AMO
 		return decode_a(raw_instr);
 	case 0b1110011: // SYSTEM
-		return decode_zicsr(raw_instr);
+		return (ext == Extension::ZIMOP) ? decode_zimop(raw_instr) : decode_zicsr(raw_instr);
+	case 0b0001111: // MISC-MEM
+		if (ext == Extension::ZICBOM) return decode_zicbom(raw_instr);
+		if (ext == Extension::ZIHINTPAUSE) return decode_zihintpause(raw_instr);
+		return decode_i(raw_instr, ext);
 	case 0b0000111: // LOAD-FP / vector load -- ext (already split by classify()) picks the side
 	case 0b0100111: // STORE-FP / vector store
 		return (ext == Extension::V) ? decode_v(raw_instr) : ((ext == Extension::D) ? decode_d(raw_instr) : decode_f(raw_instr));
@@ -195,6 +223,7 @@ DecodedInstruction Decoder::decode(uint32_t raw_instr, Extension ext) const
 		if (ext == Extension::ZBB) return decode_zbb(raw_instr);
 		if (ext == Extension::ZBS) return decode_zbs(raw_instr);
 		if (ext == Extension::ZICOND) return decode_zicond(raw_instr);
+		if (ext == Extension::ZICBOP) return decode_zicbop(raw_instr);
 		if (ext == Extension::ZIFENCEI) return decode_zifencei(raw_instr);
 		return (ext == Extension::M) ? decode_m(raw_instr) : decode_i(raw_instr, ext);
 	default:
@@ -245,7 +274,13 @@ DispatchResult Decoder::decode_and_dispatch(uint64_t pc, uint32_t raw_word)
 		       || (instr.ext == Extension::ZBA && Extensions.ZBA)
 		       || (instr.ext == Extension::ZBB && Extensions.ZBB)
 		       || (instr.ext == Extension::ZBS && Extensions.ZBS)
-		       || (instr.ext == Extension::ZICOND && Extensions.ZICOND);
+		       || (instr.ext == Extension::ZICOND && Extensions.ZICOND)
+		       || (instr.ext == Extension::ZIHINTPAUSE && Extensions.ZIHINTPAUSE)
+		       || (instr.ext == Extension::ZIHINTNTL && Extensions.ZIHINTNTL)
+		       || (instr.ext == Extension::ZIMOP && Extensions.ZIMOP)
+		       || (instr.ext == Extension::ZCMOP && Extensions.ZCMOP)
+		       || (instr.ext == Extension::ZICBOM && Extensions.ZICBOM)
+		       || (instr.ext == Extension::ZICBOP && Extensions.ZICBOP);
 
 		entry = {true, pc, tag, instr, enabled};
 	}
@@ -299,6 +334,24 @@ DispatchResult Decoder::decode_and_dispatch(uint64_t pc, uint32_t raw_word)
 		break;
 	case Extension::ZICOND:
 		core.exec_ZICOND(instr, regs, mem);
+		break;
+	case Extension::ZIHINTPAUSE:
+		core.exec_ZIHINTPAUSE(instr, regs, mem);
+		break;
+	case Extension::ZIHINTNTL:
+		core.exec_ZIHINTNTL(instr, regs, mem);
+		break;
+	case Extension::ZIMOP:
+		core.exec_ZIMOP(instr, regs, mem);
+		break;
+	case Extension::ZCMOP:
+		core.exec_ZCMOP(instr, regs, mem);
+		break;
+	case Extension::ZICBOM:
+		core.exec_ZICBOM(instr, regs, mem);
+		break;
+	case Extension::ZICBOP:
+		core.exec_ZICBOP(instr, regs, mem);
 		break;
 	case Extension::V:
 		core.exec_V(instr, regs, mem);

@@ -30,6 +30,12 @@ public:
 	void exec_ZBB(const DecodedInstruction &instr, Registers &regs, Memory &mem);
 	void exec_ZBS(const DecodedInstruction &instr, Registers &regs, Memory &mem);
 	void exec_ZICOND(const DecodedInstruction &instr, Registers &regs, Memory &mem);
+	void exec_ZIHINTPAUSE(const DecodedInstruction &instr, Registers &regs, Memory &mem);
+	void exec_ZIHINTNTL(const DecodedInstruction &instr, Registers &regs, Memory &mem);
+	void exec_ZIMOP(const DecodedInstruction &instr, Registers &regs, Memory &mem);
+	void exec_ZCMOP(const DecodedInstruction &instr, Registers &regs, Memory &mem);
+	void exec_ZICBOM(const DecodedInstruction &instr, Registers &regs, Memory &mem);
+	void exec_ZICBOP(const DecodedInstruction &instr, Registers &regs, Memory &mem);
 	void exec_ZIFENCEI(const DecodedInstruction &instr, Registers &regs, Memory &mem);
 
 	// Sv39 address translation, shared by every load/store/AMO/FP-load/

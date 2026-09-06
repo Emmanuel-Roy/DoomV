@@ -16,6 +16,12 @@ enum class Extension {
 	ZBB,
 	ZBS,
 	ZICOND,
+	ZIHINTPAUSE,
+	ZIHINTNTL,
+	ZIMOP,
+	ZCMOP,
+	ZICBOM,
+	ZICBOP,
 	ILLEGAL,
 };
 
@@ -78,6 +84,14 @@ private:
 	DecodedInstruction decode_zbs(uint32_t raw_instr) const;
 	DecodedInstruction decode_zicond(uint32_t raw_instr) const;
 	DecodedInstruction decode_zifencei(uint32_t raw_instr) const;
+	DecodedInstruction decode_zihintpause(uint32_t raw_instr) const;
+	DecodedInstruction decode_zimop(uint32_t raw_instr) const;
+	DecodedInstruction decode_zicbom(uint32_t raw_instr) const;
+	DecodedInstruction decode_zicbop(uint32_t raw_instr) const;
+	// The two compressed hint spaces, called from decode_compressed()
+	// the same way the Zcb helpers are.
+	DecodedInstruction decode_zihintntl(uint16_t raw16) const;
+	DecodedInstruction decode_zcmop(uint16_t raw16) const;
 	// Zcb lives in its own file but has no exec of its own: every encoding
 	// is an alias, decoded into the standard instruction that executes it.
 	DecodedInstruction decode_zcb_mem(uint16_t raw16) const;

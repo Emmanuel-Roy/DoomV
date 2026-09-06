@@ -164,6 +164,11 @@ DecodedInstruction Decoder::decode_compressed(uint16_t raw16) const
 				instr.mnemonic = "C.ADDI16SP";
 				instr.opcode = 0b0010011; instr.funct3 = 0b000;
 				instr.rd = 2; instr.rs1 = 2; instr.imm = imm;
+			} else if (Extensions.ZCMOP && (rd & 1) && (raw16 & 0x107C) == 0) {
+				// C.MOP.n (Zcmop): the C.LUI slot with a zero immediate,
+				// which base RVC reserves precisely so this could claim it.
+				// n is the odd rd value, and every n behaves identically.
+				instr = decode_zcmop(raw16);
 			} else { // C.LUI rd,imm -> LUI rd,imm (nonzero rd, imm already positioned/sign-extended like a U-type imm)
 				int32_t imm = (((raw16 >> 2) & 0x1F) << 12) | (int32_t)(((raw16 >> 12) & 0x1) << 17);
 				if (imm & 0x20000) imm |= ~0x3FFFF;
@@ -301,6 +306,12 @@ DecodedInstruction Decoder::decode_compressed(uint16_t raw16) const
 				instr.mnemonic = "C.JALR";
 				instr.opcode = 0b1100111; instr.funct3 = 0b000;
 				instr.rd = 1; instr.rs1 = rd_rs1; instr.imm = 0;
+			} else if (Extensions.ZIHINTNTL && rd_rs1 == 0 && rs2 >= 2 && rs2 <= 5) {
+				// C.NTL.* (Zihintntl): the C.ADD slot with rd=x0, which
+				// base RVC defines as a HINT. It was already retiring
+				// correctly here -- the add's result went to x0 -- so this
+				// only makes the hint decode under its own name.
+				instr = decode_zihintntl(raw16);
 			} else { // C.ADD rd,rd,rs2 -> ADD rd,rd,rs2
 				instr.mnemonic = "C.ADD";
 				instr.opcode = 0b0110011; instr.funct3 = 0b000;

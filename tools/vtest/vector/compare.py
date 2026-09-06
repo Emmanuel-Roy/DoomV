@@ -129,6 +129,26 @@ LAYOUT_FD = [(2, n) for n in [
     "fflags",
 ]]
 
+# Zimop is the only member of this group with an observable result (rd must
+# read back zero). Everything else is checked by dumping the sentinel
+# registers afterwards: a hint that decoded as its host instruction -- PAUSE
+# as a FENCE is harmless, but C.NTL as a C.ADD or PREFETCH as an ORI is not
+# -- shows up as a corrupted sentinel rather than as a wrong result.
+LAYOUT_HINTS = [(2, n) for n in [
+    "ld after ntl.all (hint must not disturb the load)",
+    "sd/ld after ntl.p1",
+    "ld after cbo.clean/flush/inval (data must survive)",
+    "mop.r.0 -> rd (must be 0)",
+    "mop.r.1 -> rd (must be 0)",
+    "mop.r.31 -> rd (must be 0)",
+    "mop.rr.0 -> rd (must be 0)",
+    "mop.rr.7 -> rd (must be 0)",
+    "x0 after mop with rd=x0",
+    "a0 sentinel", "a1 sentinel", "a2 sentinel", "a3 sentinel",
+    "a4 sentinel", "a5 sentinel", "t0 sentinel", "t1 sentinel",
+    "sp (unchanged across every hint)",
+]]
+
 LAYOUTS = {
     "vtest_v": LAYOUT_V,
     "vtest_zb": LAYOUT_ZB,
@@ -136,6 +156,7 @@ LAYOUTS = {
     "vtest_trap": LAYOUT_TRAP,
     "vtest_restart": LAYOUT_RESTART,
     "vtest_fd": LAYOUT_FD,
+    "vtest_hints": LAYOUT_HINTS,
 }
 
 

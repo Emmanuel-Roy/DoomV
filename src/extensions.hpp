@@ -30,6 +30,26 @@ struct ExtensionConfig {
 	bool ZBS = true;
 	bool ZICOND = true; // czero.eqz/czero.nez -- RVA23 again, same reason as Zb*
 
+
+	// The RVA23 hint and reserved-encoding extensions. All six retire
+	// without architectural effect on this machine, and several were
+	// already retiring correctly by accident -- PAUSE is a FENCE, the NTL
+	// hints are C.ADD into x0, and the prefetches are ORI into x0. What
+	// enabling them buys is that the machine names them honestly, and that
+	// Zimop/Zcmop write the zero the spec requires rather than leaving rd
+	// untouched, which is the one place a "does nothing" extension can
+	// actually be wrong.
+	//
+	// Default on for the same reason as Zb*: RVA23 mandates them, so a
+	// distro userspace may emit them freely and defaulting them off would
+	// only manufacture illegal instructions.
+	bool ZIHINTPAUSE = true;
+	bool ZIHINTNTL = true;
+	bool ZIMOP = true;
+	bool ZCMOP = true;
+	bool ZICBOM = true;
+	bool ZICBOP = true;
+
 	// Base ISA width, not an optional extension. Registers/Memory always
 	// store values in 64-bit containers regardless of this flag: RV32
 	// mode just means every integer op computes at 32-bit width and
