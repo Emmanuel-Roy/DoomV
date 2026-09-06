@@ -41,6 +41,7 @@ public:
 	void exec_ZFA(const DecodedInstruction &instr, Registers &regs, Memory &mem);
 	void exec_ZFHMIN(const DecodedInstruction &instr, Registers &regs, Memory &mem);
 	void exec_SVINVAL(const DecodedInstruction &instr, Registers &regs, Memory &mem);
+	void exec_H(const DecodedInstruction &instr, Registers &regs, Memory &mem);
 	void exec_ZIFENCEI(const DecodedInstruction &instr, Registers &regs, Memory &mem);
 
 	// Sv39 address translation, shared by every load/store/AMO/FP-load/

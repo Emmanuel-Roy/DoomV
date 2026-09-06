@@ -26,5 +26,11 @@ enum class AccessType : uint8_t {
 // fills `cause`/`tval` (a page-fault cause matching `type`, and the
 // faulting virtual address) on failure, for the caller to pass straight
 // into RiscvCore::enter_trap.
+// as_guest makes the walk use the *guest's* translation rather than the
+// current mode's: vsatp instead of satp, and the guest's privilege from
+// hstatus.SPVP rather than the hart's own. It is what hlv/hsv need -- they
+// execute in HS-mode but must reach memory exactly as the guest would,
+// which is the whole reason those instructions exist rather than the
+// hypervisor simply dereferencing a pointer.
 bool mmu_translate(Registers &regs, Memory &mem, uint64_t vaddr, AccessType type,
-                    uint64_t &paddr, uint64_t &cause, uint64_t &tval);
+                    uint64_t &paddr, uint64_t &cause, uint64_t &tval, bool as_guest = false);

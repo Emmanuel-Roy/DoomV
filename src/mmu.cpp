@@ -34,6 +34,10 @@ constexpr uint64_t PTE_RESERVED = 0x7Full << 54; // bits 60:54
 // discover whether the hardware supports them.
 constexpr uint16_t CSR_MENVCFG    = 0x30A;
 constexpr uint16_t CSR_SENVCFG    = 0x10A;
+constexpr uint16_t CSR_VSATP      = 0x280; // the guest's satp, used by hlv/hsv
+constexpr uint16_t CSR_VSSTATUS   = 0x200; // the guest's sstatus: its own SUM/MXR
+constexpr uint16_t CSR_HSTATUS    = 0x600;
+constexpr uint64_t HSTATUS_SPVP   = 1ull << 8;
 constexpr uint64_t MENVCFG_PBMTE  = 1ull << 62;
 constexpr uint64_t MENVCFG_ADUE   = 1ull << 61;
 
@@ -99,7 +103,7 @@ uint64_t apply_pointer_mask(Registers &regs, uint64_t vaddr, AccessType type)
 }
 
 bool mmu_translate(Registers &regs, Memory &mem, uint64_t vaddr, AccessType type,
-                    uint64_t &paddr, uint64_t &cause, uint64_t &tval)
+                    uint64_t &paddr, uint64_t &cause, uint64_t &tval, bool as_guest)
 {
 	// M-mode never translates. Real hardware lets M-mode opt into S/U's
 	// table via mstatus.MPRV for a single access -- not modeled yet, since
@@ -109,9 +113,25 @@ bool mmu_translate(Registers &regs, Memory &mem, uint64_t vaddr, AccessType type
 	// translation of one, so it applies whether or not paging is on.
 	vaddr = apply_pointer_mask(regs, vaddr, type);
 
-	uint64_t satp = regs.read_csr(CSR_SATP);
+	// A guest access reads the guest's own satp and runs at the guest's own
+	// privilege, which is what makes hlv/hsv reach exactly the memory the
+	// guest could reach -- and fault where the guest would fault -- rather
+	// than whatever the hypervisor happens to have mapped.
+	//
+	// Second-stage translation through hgatp is not applied here yet. With
+	// hgatp left at zero the second stage is bare, and a two-stage walk
+	// reduces exactly to this one-stage walk, which is why this increment
+	// is checkable against spike on its own.
+	uint64_t satp = regs.read_csr(as_guest ? CSR_VSATP : CSR_SATP);
+	PrivMode eff_priv = regs.get_priv();
+	if (as_guest) {
+		// hstatus.SPVP says whether the guest was in VS or VU -- an hlv
+		// must be checked against the guest's supervisor/user permission
+		// bits, not the hypervisor's.
+		eff_priv = (regs.read_csr(CSR_HSTATUS) & HSTATUS_SPVP) ? PrivMode::S : PrivMode::U;
+	}
 	uint64_t mode = satp >> 60;
-	if (regs.get_priv() == PrivMode::M || mode == 0) {
+	if (eff_priv == PrivMode::M || mode == 0) {
 		paddr = vaddr;
 		return true;
 	}
@@ -131,10 +151,13 @@ bool mmu_translate(Registers &regs, Memory &mem, uint64_t vaddr, AccessType type
 		return false;
 	}
 
-	uint64_t mstatus = regs.read_csr(CSR_MSTATUS);
+	uint64_t mstatus = regs.read_csr(as_guest ? CSR_VSSTATUS : CSR_MSTATUS);
 	bool sum = mstatus & MSTATUS_SUM;
 	bool mxr = mstatus & MSTATUS_MXR;
-	PrivMode priv = regs.get_priv();
+	// The same effective privilege the walk was started with: for an hlv
+	// this is the guest's, not the hypervisor's, so a U-page check tests
+	// what the guest could reach.
+	PrivMode priv = eff_priv;
 
 	uint64_t vpn[3] = {
 		(vaddr >> 12) & 0x1FF,

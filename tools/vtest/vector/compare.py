@@ -555,6 +555,43 @@ LAYOUT_H = [(2, n) for n in [
     "hypervisor's stvec unchanged (0)",
 ]]
 
+# hlv/hsv -- the hypervisor's explicit guest accesses.
+#
+# The decisive entry is the second: the same virtual address is mapped to
+# two different physical pages, one in the hypervisor's table and one in
+# the guest's. An ordinary load reaches the first, hlv must reach the
+# second. An implementation that translated through satp instead of vsatp
+# does not fault -- it just returns the other page's value, so nothing but
+# the value distinguishes the two.
+#
+# The SPVP pair is the other half: the same instruction on the same
+# address must succeed as VS and fault as VU, since hlv runs at the
+# guest's privilege rather than the hypervisor's.
+LAYOUT_HLV = [(2, n) for n in [
+    "ordinary ld uses the hypervisor's table (0x1111...)",
+    "hlv.d uses the GUEST's table (0x2222...) -- the whole point",
+    "hlv.b  (sign-extended)",
+    "hlv.bu (zero-extended)",
+    "hlv.h  (sign-extended)",
+    "hlv.hu (zero-extended)",
+    "hlv.w  (sign-extended)",
+    "hlv.wu (zero-extended)",
+    "hlv.d  (full width)",
+    "hsv.d wrote to the guest's page",
+    "hsv.d left the hypervisor's page untouched",
+    "hsv.b wrote only the low byte",
+    "hsv.h wrote only the low halfword",
+    "hsv.w wrote only the low word",
+    "SPVP=1: supervisor-only guest page reachable (0 faults)",
+    "SPVP=0: same page as VU faults (1)",
+    "SPVP=0: cause (13 = load page fault)",
+    "U-bit page still reachable as VU (0 faults)",
+    "value unchanged across hfence.vvma/gvma",
+    "no faults from the fences",
+    "guest issuing hlv: trap count (1)",
+    "guest issuing hlv: cause (22 = virtual instruction)",
+]]
+
 LAYOUTS = {
     "vtest_v": LAYOUT_V,
     "vtest_zb": LAYOUT_ZB,
@@ -571,6 +608,7 @@ LAYOUTS = {
     "vtest_sv": LAYOUT_SV,
     "vtest_pm": LAYOUT_PM,
     "vtest_h": LAYOUT_H,
+    "vtest_hlv": LAYOUT_HLV,
 }
 
 

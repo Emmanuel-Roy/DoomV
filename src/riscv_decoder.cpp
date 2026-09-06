@@ -152,8 +152,16 @@ Extension Decoder::classify(uint32_t raw_instr) const
 		// funct3=100 is a slot Zicsr never uses. Bit 31 marks the MOP space,
 		// and bit 25 picks the one-source (MOP.R) or two-source (MOP.RR) form.
 		uint8_t funct3 = (raw_instr >> 12) & 0x07;
-		if (funct3 == 0b100)
-			return (raw_instr & 0x80000000u) ? Extension::ZIMOP : Extension::ILLEGAL;
+		if (funct3 == 0b100) {
+			// Shared space: Zimop's MOP.R sets bit 31, the hypervisor's
+			// hlv/hsv leave it clear. Without this split hlv decodes as
+			// a may-be-operation and quietly writes zero to rd instead
+			// of reading guest memory.
+			if (raw_instr & 0x80000000u) return Extension::ZIMOP;
+			uint8_t f7 = (raw_instr >> 25) & 0x7F;
+			if (Extensions.H && f7 >= 0x30 && f7 <= 0x37) return Extension::H;
+			return Extension::ILLEGAL;
+		}
 		// Zawrs' wrs.nto/wrs.sto are two more fixed immediates in the
 		// ECALL/EBREAK/xRET/WFI space. Base I reserves these, so gating
 		// Zawrs off correctly makes them illegal rather than reverting them
@@ -163,6 +171,10 @@ Extension Decoder::classify(uint32_t raw_instr) const
 		// Svinval sits next to SFENCE.VMA (funct7 0x09) at 0x0B and 0x0C.
 		if (funct3 == 0b000 && ((raw_instr >> 7) & 0x1F) == 0) {
 			uint8_t f7 = (raw_instr >> 25) & 0x7F;
+			// hfence.vvma (0x11) and hfence.gvma (0x31). The latter
+			// shares its funct7 with hsv.b -- funct3 is what separates
+			// them, which is why this test is inside the funct3==0 arm.
+			if (Extensions.H && (f7 == 0x11 || f7 == 0x31)) return Extension::H;
 			uint8_t rs2 = (raw_instr >> 20) & 0x1F;
 			if (f7 == 0x0B) return Extensions.SVINVAL ? Extension::SVINVAL : Extension::ILLEGAL;
 			if (f7 == 0x0C && ((raw_instr >> 15) & 0x1F) == 0 && (rs2 == 0 || rs2 == 1))
@@ -247,6 +259,7 @@ DecodedInstruction Decoder::decode(uint32_t raw_instr, Extension ext) const
 	case 0b0101111: // AMO
 		return decode_a(raw_instr);
 	case 0b1110011: // SYSTEM
+		if (ext == Extension::H) return decode_h_ldst(raw_instr);
 		return (ext == Extension::ZIMOP) ? decode_zimop(raw_instr) : decode_zicsr(raw_instr);
 		// Zawrs falls through to decode_zicsr, which names it and keeps
 		// ext as classify() set it -- see ext_zawrs.cpp.
@@ -340,7 +353,8 @@ DispatchResult Decoder::decode_and_dispatch(uint64_t pc, uint32_t raw_word)
 		       || (instr.ext == Extension::ZAWRS && Extensions.ZAWRS)
 		       || (instr.ext == Extension::ZFA && Extensions.ZFA)
 		       || (instr.ext == Extension::ZFHMIN && Extensions.ZFHMIN)
-		       || (instr.ext == Extension::SVINVAL && Extensions.SVINVAL);
+		       || (instr.ext == Extension::SVINVAL && Extensions.SVINVAL)
+		       || (instr.ext == Extension::H && Extensions.H);
 
 		entry = {true, pc, tag, instr, enabled};
 	}
@@ -428,6 +442,9 @@ DispatchResult Decoder::decode_and_dispatch(uint64_t pc, uint32_t raw_word)
 		break;
 	case Extension::SVINVAL:
 		core.exec_SVINVAL(instr, regs, mem);
+		break;
+	case Extension::H:
+		core.exec_H(instr, regs, mem);
 		break;
 	case Extension::V:
 		core.exec_V(instr, regs, mem);
