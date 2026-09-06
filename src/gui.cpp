@@ -552,17 +552,32 @@ void Gui::render(const Snapshot &snap)
 		trace_y += TRACE_ROW_H;
 	}
 
-	// Paused banner, drawn last so nothing overdraws it. Without this the
+	// Paused indicator, drawn last so nothing overdraws it. Without this the
 	// dashboard looks identical whether the machine is running or frozen --
 	// the trace panel simply stops changing, which is indistinguishable from
 	// a guest stuck in a tight loop.
+	//
+	// It sits in the bottom-right corner, under the last register row,
+	// rather than centered across the top where it used to cover the game
+	// view. Two lines at the register file's own scale rather than one at
+	// full size: the corner has 211 design units of width and 22 of height
+	// below x31/v31, and the message is 336 units on one line at scale 1.0.
+	// Shrinking it to fit on a single line would land on 210 of the 211
+	// available, which is not a margin so much as a coincidence.
 	if (snap.halted) {
-		const char *msg = "PAUSED -- F9 TO RESUME (DELIVERS THE TRAP)";
-		const float BANNER_SCALE = 1.0f;
-		int bw = text_w(msg, BANNER_SCALE);
-		int bx = (int)((DESIGN_W - bw) * scale_x) / 2;
-		int by = (int)(2 * scale_y);
-		draw_shadow_text(bx, by, msg, pal_red, BANNER_SCALE);
+		const char *msg_top = "PAUSED -- F9 TO RESUME";
+		const char *msg_bot = "(DELIVERS THE TRAP)";
+		const float BANNER_SCALE = REG_SCALE_X; // matches the register text beside it
+		// Right-aligned to the register block's own right edge, which is
+		// what makes it read as being in the corner rather than merely
+		// low down. Anchored off REG_TOTAL_W so it tracks that block if
+		// its columns are ever resized, instead of a bare literal.
+		const int right_edge = hud_x + REG_TOTAL_W;
+		int by = reg_start_y + 32 * REG_ROW_H;
+		draw_shadow_text(right_edge - text_w(msg_top, BANNER_SCALE), by,
+		                 msg_top, pal_red, BANNER_SCALE, REG_SCALE_Y);
+		draw_shadow_text(right_edge - text_w(msg_bot, BANNER_SCALE), by + 9,
+		                 msg_bot, pal_red, BANNER_SCALE, REG_SCALE_Y);
 	}
 
 	SDL_UpdateTexture(texture, nullptr, screen_buf.data(), canvas_w * 4);
