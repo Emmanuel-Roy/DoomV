@@ -33,6 +33,7 @@ constexpr uint64_t PTE_RESERVED = 0x7Full << 54; // bits 60:54
 // reserved, i.e. a nonzero value is a page fault. That is what lets an OS
 // discover whether the hardware supports them.
 constexpr uint16_t CSR_MENVCFG    = 0x30A;
+constexpr uint16_t CSR_SENVCFG    = 0x10A;
 constexpr uint64_t MENVCFG_PBMTE  = 1ull << 62;
 constexpr uint64_t MENVCFG_ADUE   = 1ull << 61;
 
@@ -52,12 +53,62 @@ uint64_t fault_cause(AccessType type)
 }
 }
 
+// Pointer masking (Smnpm / Ssnpm / Sspm).
+//
+// A two-bit PMM field selects how many of an address's top bits are ignored
+// on a *data* access: 0 means masking off, 2 means PMLEN=7, 3 means
+// PMLEN=16. Value 1 is reserved. RVA23 requires PMLEN=0 and PMLEN=7 at
+// minimum, and both of those are here.
+//
+// The field lives in the envcfg of the mode *above* the one being masked --
+// menvcfg.PMM governs S-mode, senvcfg.PMM governs U-mode -- so a mode
+// cannot exempt itself from masking its supervisor imposed.
+//
+// "Ignored" is not "cleared": the discarded bits are replaced by the sign
+// extension of the highest retained bit. That is what keeps a masked kernel
+// pointer canonical, and getting it wrong by zeroing instead would send
+// every high address into the bottom half of the space.
+//
+// Instruction fetch is never masked, and neither are the addresses the page
+// table walk itself produces -- masking applies to the effective address a
+// load or store computed, and nothing further down.
+int pointer_mask_len(Registers &regs)
+{
+	uint64_t pmm;
+	switch (regs.get_priv()) {
+	case PrivMode::U: pmm = (regs.read_csr(CSR_SENVCFG) >> 32) & 0x3; break;
+	case PrivMode::S: pmm = (regs.read_csr(CSR_MENVCFG) >> 32) & 0x3; break;
+	default: return 0; // M-mode masking is Smmpm, which RVA23 does not mandate
+	}
+	switch (pmm) {
+	case 2: return 7;
+	case 3: return 16;
+	default: return 0; // 0 = off; 1 is reserved and behaves as off
+	}
+}
+
+uint64_t apply_pointer_mask(Registers &regs, uint64_t vaddr, AccessType type)
+{
+	if (type == AccessType::Fetch) return vaddr;
+	if (!Extensions.SSNPM) return vaddr;
+	int pmlen = pointer_mask_len(regs);
+	if (pmlen == 0) return vaddr;
+	// Sign-extend from the highest bit that survives, discarding the top
+	// pmlen bits.
+	return (uint64_t)((int64_t)(vaddr << pmlen) >> pmlen);
+}
+
 bool mmu_translate(Registers &regs, Memory &mem, uint64_t vaddr, AccessType type,
                     uint64_t &paddr, uint64_t &cause, uint64_t &tval)
 {
 	// M-mode never translates. Real hardware lets M-mode opt into S/U's
 	// table via mstatus.MPRV for a single access -- not modeled yet, since
 	// nothing needs it until OpenSBI (Stage 3) shows up doing exactly that.
+	// Masking happens before anything else, including the bare-mode path
+	// below: it transforms the effective address itself, not the
+	// translation of one, so it applies whether or not paging is on.
+	vaddr = apply_pointer_mask(regs, vaddr, type);
+
 	uint64_t satp = regs.read_csr(CSR_SATP);
 	uint64_t mode = satp >> 60;
 	if (regs.get_priv() == PrivMode::M || mode == 0) {

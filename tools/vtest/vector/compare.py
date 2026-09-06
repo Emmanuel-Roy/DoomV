@@ -502,6 +502,26 @@ LAYOUT_SV = [(2, n) for n in [
     "Svnapot bad size encoding: scause",
 ]]
 
+# Pointer masking. Address arithmetic, so a wrong implementation does not
+# fault -- it reaches a different address and succeeds. Every entry here is
+# therefore either a value written through a tagged pointer and read back
+# through a clean one, or a fault count proving the tag still mattered when
+# masking was off.
+LAYOUT_PM = [(2, n) for n in [
+    "masking off: clean sentinel untouched by the tagged store",
+    "PMLEN=7: value read back through the clean pointer",
+    "PMLEN=7: fault count (0)",
+    "PMLEN=7: clean store, tagged load",
+    "PMLEN=7: a different tag reaches the same address",
+    "sign extension: sentinel intact (a zeroing impl would corrupt it)",
+    "senvcfg does not govern S-mode: sentinel intact",
+    "U-mode (Ssnpm): value read back",
+    "U-mode (Ssnpm): fault count (0)",
+    "PMLEN=16: value read back",
+    "PMLEN=16: fault count (0)",
+    "PMM=1 reserved behaves as off: sentinel intact",
+]]
+
 LAYOUTS = {
     "vtest_v": LAYOUT_V,
     "vtest_zb": LAYOUT_ZB,
@@ -516,6 +536,7 @@ LAYOUTS = {
     "vtest_zfh": LAYOUT_ZFH,
     "vtest_zvfh": LAYOUT_ZVFH,
     "vtest_sv": LAYOUT_SV,
+    "vtest_pm": LAYOUT_PM,
 }
 
 

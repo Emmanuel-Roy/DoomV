@@ -36,6 +36,8 @@ case "$TEST" in
             ISA=rv64gcv_zvl128b_zicsr_zifencei ;;
   vtest_trap) MARCH=rv64gcv
             ISA=rv64gcv_zvl128b_zicsr_zifencei ;;
+  vtest_pm) MARCH=rv64gc
+            ISA=rv64gc_ssnpm_smnpm_zicsr_zifencei ;;
   vtest_sv) MARCH=rv64gc_svinval
             ISA=rv64gc_svinval_svnapot_svpbmt_zicsr_zifencei ;;
   vtest_mmu) MARCH=rv64gcv
@@ -79,6 +81,17 @@ PY
 # single-steps once per line instead of running the commands.
 timeout 120 "$SPIKE" -d --debug-cmd=/tmp/spike_cmds.txt --isa="$ISA" "./$TEST.elf" \
     > /tmp/spike_raw.txt 2>&1 || true
+
+# spike refusing to start at all -- an unusable --isa string, a missing
+# binary, an ELF it cannot load -- produces an empty signature that looks
+# exactly like a hang. Report its own words first; guessing at a trap when
+# the real answer was "bad --isa option: unsupported extension" costs a lot
+# more time than this check.
+if grep -qi "^error\|bad --isa\|unsupported extension" /tmp/spike_raw.txt; then
+	echo "ERROR: spike did not start:" >&2
+	grep -i -m3 "^error\|bad --isa\|unsupported extension" /tmp/spike_raw.txt >&2
+	exit 1
+fi
 
 # An exception here means the *test* is malformed (an illegal encoding),
 # not that the DUT is wrong -- worth saying out loud, since the resulting

@@ -69,6 +69,10 @@ struct ExtensionConfig {
 	bool SVINVAL = true;
 	bool SVNAPOT = true;
 	bool SVPBMT = true;
+	// Pointer masking. One flag covers Ssnpm, Smnpm and Sspm: they are the
+	// same mechanism named for which envcfg holds the PMM field, and no
+	// guest would sensibly have one without the others.
+	bool SSNPM = true;
 
 	// Base ISA width, not an optional extension. Registers/Memory always
 	// store values in 64-bit containers regardless of this flag: RV32

@@ -12,6 +12,7 @@ void parse_march(const std::string &march)
 	Extensions.ZICBOZ = Extensions.ZAWRS = Extensions.ZFA = false;
 	Extensions.ZFHMIN = false;
 	Extensions.SVINVAL = Extensions.SVNAPOT = Extensions.SVPBMT = false;
+	Extensions.SSNPM = false;
 
 	size_t pos = 0;
 	if (march.rfind("rv64", 0) == 0) { Extensions.XLEN64 = true; pos = 4; }
@@ -55,6 +56,8 @@ void parse_march(const std::string &march)
 	if (march.find("svinval") != std::string::npos) Extensions.SVINVAL = true;
 	if (march.find("svnapot") != std::string::npos) Extensions.SVNAPOT = true;
 	if (march.find("svpbmt") != std::string::npos) Extensions.SVPBMT = true;
+	if (march.find("ssnpm") != std::string::npos || march.find("smnpm") != std::string::npos
+	    || march.find("sspm") != std::string::npos) Extensions.SSNPM = true;
 	// "b" is the umbrella name for Zba+Zbb+Zbs (the ratified B extension).
 	for (char c : base) if (c == 'b') { Extensions.ZBA = Extensions.ZBB = Extensions.ZBS = true; }
 
