@@ -1,0 +1,193 @@
+# Cross-compiles doomgeneric for DoomV's RV64IMAC_Zicsr target (or RV32,
+# see XLEN below).
+# Needs riscv-none-elf-gcc on PATH (xPack GNU RISC-V Embedded GCC).
+#
+# Usage: make free           (shareware, DOOM1.WAD -- default)
+#        make doom           (Ultimate Doom, DOOM.WAD)
+#        make doom2          (DOOM2.WAD)
+#        make finaldoom      (Final Doom, TNT.WAD)
+#        make all            (all four)
+#        make free XLEN=32   (build for RV32IMAC_Zicsr instead of RV64 --
+#                              must match src/extensions.hpp's XLEN64 flag
+#                              on the host, and needs its own host rebuild)
+
+CC = riscv-none-elf-gcc
+
+XLEN ?= 64
+# -mcmodel=medany: the default medlow model addresses symbols with a single
+# 32-bit signed HI20/LO12 pair, reachable only from the low or (sign-extended)
+# high 2GiB. RAM_BASE=0x80000000 (see riscv.lds) sits just past the low 2GiB
+# and isn't sign-extension-compatible with the high range either, so every
+# absolute symbol reference overflowed ("relocation truncated to fit")
+# once RAM moved there for Stage 3. medany uses AUIPC-relative addressing
+# instead, reachable from anywhere.
+ifeq ($(XLEN),64)
+	ARCHFLAGS = -march=rv64imac_zicsr -mabi=lp64 -mcmodel=medany
+else ifeq ($(XLEN),32)
+	ARCHFLAGS = -march=rv32imac_zicsr -mabi=ilp32 -mcmodel=medany
+else
+	$(error Unknown XLEN '$(XLEN)', expected 32 or 64)
+endif
+
+# -nostartfiles (not -nostdlib) + -specs=nosys.specs: drop the toolchain's
+# own crt0 (we have our own _start in start.S) but keep newlib's real
+# libc.a/libnosys.a -- gets memcpy/strlen/printf/malloc/etc "for free"
+# instead of hand-writing ~50 functions, at the cost of only needing to
+# stub the small syscall surface nosys.specs doesn't already cover
+# (currently just mkdir, see libc_shim.c). _sbrk works via the `end`
+# symbol PROVIDE'd in riscv.lds.
+# DOOMGENERIC_RESX/RESY as global -D flags, not a header #define -- every
+# translation unit must agree (doomgeneric.c allocates DG_ScreenBuffer at
+# this size, i_video.c writes into it assuming this stride). See
+# doomv_mmio.h's comment for what happens if they disagree.
+RESFLAGS = -DDOOMGENERIC_RESX=320 -DDOOMGENERIC_RESY=200
+CFLAGS  = $(ARCHFLAGS) -nostartfiles -specs=nosys.specs -O2 $(RESFLAGS) -I. -I$(DOOMGENERIC_DIR)
+# -nostartfiles/-specs already live in CFLAGS -- this is a single compile
+# +link invocation ($(CC) $(CFLAGS) ... $(LDFLAGS)), so repeating them here
+# used to pass -specs=nosys.specs twice on one command line. Harmless on
+# some gcc versions, but this toolchain's spec-file %rename directives
+# aren't idempotent and it hard-errors the second time ("attempt to rename
+# spec ... already defined").
+LDFLAGS = -T riscv.lds
+
+DOOMGENERIC_DIR = doomgeneric/doomgeneric
+
+# doomgeneric's own engine sources, minus the platform files we replace
+# (w_file.c/w_file_stdc.c -> w_file_doomv.c, doomgeneric_xlib.c -> doomgeneric_doomv.c).
+# i_video.c/i_input.c stay -- despite the file headers, they're the
+# generic I_*-to-DG_* bridge (I_FinishUpdate calls DG_DrawFrame,
+# I_GetEvent calls DG_GetKey), not X11-specific.
+ENGINE_SRCS = \
+	$(DOOMGENERIC_DIR)/dummy.c \
+	$(DOOMGENERIC_DIR)/am_map.c \
+	$(DOOMGENERIC_DIR)/doomdef.c \
+	$(DOOMGENERIC_DIR)/doomstat.c \
+	$(DOOMGENERIC_DIR)/dstrings.c \
+	$(DOOMGENERIC_DIR)/d_event.c \
+	$(DOOMGENERIC_DIR)/d_items.c \
+	$(DOOMGENERIC_DIR)/d_iwad.c \
+	$(DOOMGENERIC_DIR)/d_loop.c \
+	$(DOOMGENERIC_DIR)/d_main.c \
+	$(DOOMGENERIC_DIR)/d_mode.c \
+	$(DOOMGENERIC_DIR)/d_net.c \
+	$(DOOMGENERIC_DIR)/f_finale.c \
+	$(DOOMGENERIC_DIR)/f_wipe.c \
+	$(DOOMGENERIC_DIR)/g_game.c \
+	$(DOOMGENERIC_DIR)/hu_lib.c \
+	$(DOOMGENERIC_DIR)/hu_stuff.c \
+	$(DOOMGENERIC_DIR)/info.c \
+	$(DOOMGENERIC_DIR)/i_cdmus.c \
+	$(DOOMGENERIC_DIR)/i_endoom.c \
+	$(DOOMGENERIC_DIR)/i_joystick.c \
+	$(DOOMGENERIC_DIR)/i_scale.c \
+	$(DOOMGENERIC_DIR)/i_sound.c \
+	$(DOOMGENERIC_DIR)/i_system.c \
+	$(DOOMGENERIC_DIR)/i_timer.c \
+	$(DOOMGENERIC_DIR)/memio.c \
+	$(DOOMGENERIC_DIR)/m_argv.c \
+	$(DOOMGENERIC_DIR)/m_bbox.c \
+	$(DOOMGENERIC_DIR)/m_cheat.c \
+	$(DOOMGENERIC_DIR)/m_config.c \
+	$(DOOMGENERIC_DIR)/m_controls.c \
+	$(DOOMGENERIC_DIR)/m_fixed.c \
+	$(DOOMGENERIC_DIR)/m_menu.c \
+	$(DOOMGENERIC_DIR)/m_misc.c \
+	$(DOOMGENERIC_DIR)/m_random.c \
+	$(DOOMGENERIC_DIR)/p_ceilng.c \
+	$(DOOMGENERIC_DIR)/p_doors.c \
+	$(DOOMGENERIC_DIR)/p_enemy.c \
+	$(DOOMGENERIC_DIR)/p_floor.c \
+	$(DOOMGENERIC_DIR)/p_inter.c \
+	$(DOOMGENERIC_DIR)/p_lights.c \
+	$(DOOMGENERIC_DIR)/p_map.c \
+	$(DOOMGENERIC_DIR)/p_maputl.c \
+	$(DOOMGENERIC_DIR)/p_mobj.c \
+	$(DOOMGENERIC_DIR)/p_plats.c \
+	$(DOOMGENERIC_DIR)/p_pspr.c \
+	$(DOOMGENERIC_DIR)/p_saveg.c \
+	$(DOOMGENERIC_DIR)/p_setup.c \
+	$(DOOMGENERIC_DIR)/p_sight.c \
+	$(DOOMGENERIC_DIR)/p_spec.c \
+	$(DOOMGENERIC_DIR)/p_switch.c \
+	$(DOOMGENERIC_DIR)/p_telept.c \
+	$(DOOMGENERIC_DIR)/p_tick.c \
+	$(DOOMGENERIC_DIR)/p_user.c \
+	$(DOOMGENERIC_DIR)/r_bsp.c \
+	$(DOOMGENERIC_DIR)/r_data.c \
+	$(DOOMGENERIC_DIR)/r_draw.c \
+	$(DOOMGENERIC_DIR)/r_main.c \
+	$(DOOMGENERIC_DIR)/r_plane.c \
+	$(DOOMGENERIC_DIR)/r_segs.c \
+	$(DOOMGENERIC_DIR)/r_sky.c \
+	$(DOOMGENERIC_DIR)/r_things.c \
+	$(DOOMGENERIC_DIR)/sha1.c \
+	$(DOOMGENERIC_DIR)/sounds.c \
+	$(DOOMGENERIC_DIR)/statdump.c \
+	$(DOOMGENERIC_DIR)/st_lib.c \
+	$(DOOMGENERIC_DIR)/st_stuff.c \
+	$(DOOMGENERIC_DIR)/s_sound.c \
+	$(DOOMGENERIC_DIR)/tables.c \
+	$(DOOMGENERIC_DIR)/v_video.c \
+	$(DOOMGENERIC_DIR)/wi_stuff.c \
+	$(DOOMGENERIC_DIR)/w_checksum.c \
+	$(DOOMGENERIC_DIR)/w_main.c \
+	$(DOOMGENERIC_DIR)/w_wad.c \
+	$(DOOMGENERIC_DIR)/z_zone.c \
+	$(DOOMGENERIC_DIR)/i_input.c \
+	$(DOOMGENERIC_DIR)/i_video.c \
+	$(DOOMGENERIC_DIR)/doomgeneric.c
+
+PLATFORM_SRCS = doomgeneric_doomv.c w_file_doomv.c libc_shim.c
+ASM_SRCS      = start.S
+
+# WAD target: which real IWAD this build's WAD_LENGTH matches. The guest
+# binary doesn't embed the WAD itself -- the host loader places the real
+# file's bytes at WAD_BASE at runtime -- so WAD_FILE here is just the
+# reference for which one to actually hand the loader for a given build.
+WAD ?= free
+
+ifeq ($(WAD),free)
+	WAD_FILE   = DOOM1.WAD
+	WAD_LENGTH = 4196020
+else ifeq ($(WAD),doom)
+	WAD_FILE   = DOOM.WAD
+	WAD_LENGTH = 12408292
+else ifeq ($(WAD),doom2)
+	WAD_FILE   = DOOM2.WAD
+	WAD_LENGTH = 14604584
+else ifeq ($(WAD),finaldoom)
+	WAD_FILE   = TNT.WAD
+	WAD_LENGTH = 18195736
+else
+	$(error Unknown WAD target '$(WAD)', expected free, doom, doom2, or finaldoom)
+endif
+
+OUT = doomv-$(WAD).elf
+
+all: free doom doom2 finaldoom
+
+free doom doom2 finaldoom:
+	$(MAKE) $(OUT) WAD=$@
+
+$(OUT): $(ASM_SRCS) $(PLATFORM_SRCS) $(ENGINE_SRCS)
+	$(CC) $(CFLAGS) -DWAD_LENGTH=$(WAD_LENGTH) $(LDFLAGS) -o $@ $^
+
+# Portable file deletion. GNU Make's built-in $(RM) is hardcoded to `rm -f`,
+# which cmd does not have -- so `make clean` used to fail depending on which
+# shell you launched it from. Make picks sh.exe when one is on PATH (Git Bash,
+# MSYS) and silently falls back to cmd otherwise, so probe for the same sh it
+# would have selected and pick the matching deleter.
+ifeq ($(OS),Windows_NT)
+  ifeq ($(findstring ok,$(shell sh -c "echo ok" 2>&1)),ok)
+    RMF = rm -f
+  else
+    RMF = del /Q /F
+  endif
+else
+  RMF = rm -f
+endif
+
+clean:
+	-$(RMF) doomv-free.elf doomv-doom.elf doomv-doom2.elf doomv-finaldoom.elf
+
+.PHONY: all free doom doom2 finaldoom clean
