@@ -50,6 +50,8 @@ static const char *csr_name(uint16_t addr)
 	case 0x142: return "scause";
 	case 0x143: return "stval";
 	case 0x144: return "sip";
+	case 0x106: return "scounteren"; // Zicntr/Zihpm gating (phase 2)
+	case 0x10A: return "senvcfg";    // Ssnpm's PMM lives here (phase 7)
 	case 0x14D: return "stimecmp"; // Sstc (Stage 2)
 	case 0x150: return "siselect"; // AIA indirect (Stage 2)
 	case 0x151: return "sireg";
@@ -62,6 +64,7 @@ static const char *csr_name(uint16_t addr)
 	case 0x303: return "mideleg";
 	case 0x304: return "mie";
 	case 0x305: return "mtvec";
+	case 0x306: return "mcounteren";
 	case 0x30A: return "menvcfg";
 	case 0x340: return "mscratch";
 	case 0x341: return "mepc";
@@ -71,11 +74,46 @@ static const char *csr_name(uint16_t addr)
 	case 0x350: return "miselect"; // AIA indirect (Stage 2)
 	case 0x351: return "mireg";
 	case 0x35C: return "mtopei";
-	case 0xC01: return "time"; // unprivileged read-only mtime alias (Stage 4)
+	case 0xC00: return "cycle";   // Zicntr (phase 2) -- all three read the
+	case 0xC01: return "time";    // same retired-instruction counter here,
+	case 0xC02: return "instret"; // see ext_zicntr.cpp
+	case 0xDB0: return "stopi";   // Ssaia top-interrupt
+	case 0xFB0: return "mtopi";   // Smaia top-interrupt
 	case 0xF11: return "mvendorid";
 	case 0xF12: return "marchid";
 	case 0xF13: return "mimpid";
 	case 0xF14: return "mhartid";
+	// Hypervisor (H). Two groups that are easy to confuse in a dashboard,
+	// which is exactly why they are named rather than left as raw
+	// addresses: the h* registers belong to the hypervisor running in
+	// HS-mode, while the vs* registers are the guest's *shadow* copies of
+	// the S-mode registers. When the hart is in VS-mode a guest's write to
+	// "stvec" lands in vstvec, so seeing both here side by side is what
+	// makes a two-stage trap legible at all.
+	case 0x600: return "hstatus";
+	case 0x602: return "hedeleg";
+	case 0x603: return "hideleg";
+	case 0x604: return "hie";
+	case 0x605: return "htimedelta";
+	case 0x606: return "hcounteren";
+	case 0x607: return "hgeie";
+	case 0x643: return "htval";
+	case 0x644: return "hip";
+	case 0x645: return "hvip";
+	case 0x64A: return "htinst";
+	case 0x60A: return "henvcfg";
+	case 0x680: return "hgatp";
+	case 0xE12: return "hgeip";
+	// The VS-mode shadows of the S-mode registers.
+	case 0x200: return "vsstatus";
+	case 0x204: return "vsie";
+	case 0x205: return "vstvec";
+	case 0x240: return "vsscratch";
+	case 0x241: return "vsepc";
+	case 0x242: return "vscause";
+	case 0x243: return "vstval";
+	case 0x244: return "vsip";
+	case 0x280: return "vsatp";
 	default: return nullptr;
 	}
 }
@@ -400,6 +438,18 @@ void Gui::render(const Snapshot &snap)
 	// and pushing CSRs toward the box is what actually moves them left
 	// (working from hud_x just trades box-gap for register-gap, it
 	// can't shift the block itself).
+	// 46 design units is nine glyphs at REG_SCALE_X, which was the longest
+	// name in this table when it was written ("mvendorid", "siselect").
+	// The hypervisor set breaks that assumption -- "hcounteren" and
+	// "mcounteren" are ten -- and the corridor between the game box and
+	// the register file has only about seven units of slack, so widening
+	// the whole column is not available without undoing the deliberate
+	// 6/7 gap balance below.
+	//
+	// So the offset is a floor rather than a fixed position: every name
+	// that fits stays aligned at 46 exactly as before, and a longer one
+	// pushes only its own value across. Misaligning one row is a much
+	// smaller cost than drawing a name over the top of its own value.
 	const int CSR_VALUE_OFFSET = 46;
 	// box->CSRS and CSRS->REGISTER FILE gaps are now equal (6/7, as close
 	// as the corridor's odd total slack allows) -- was 2/11, which read as
@@ -418,9 +468,12 @@ void Gui::render(const Snapshot &snap)
 		char name_buf[16];
 		if (!name) { sprintf(name_buf, "0x%03x", c.addr); name = name_buf; }
 		sprintf(buf, "%s:", name);
+		int value_x = CSR_VALUE_OFFSET;
+		int label_w = text_w(buf, REG_SCALE_X) + glyph_adv(REG_SCALE_X); // one glyph of gap
+		if (label_w > value_x) value_x = label_w;
 		draw_shadow_text(csr_x, cy, buf, pal_red, REG_SCALE_X, REG_SCALE_Y);
 		sprintf(buf, "%016llX", (unsigned long long)c.value);
-		draw_shadow_text(csr_x + CSR_VALUE_OFFSET, cy, buf, pal_white, REG_SCALE_X, REG_SCALE_Y);
+		draw_shadow_text(csr_x + value_x, cy, buf, pal_white, REG_SCALE_X, REG_SCALE_Y);
 	}
 
 	// REGISTER FILE
