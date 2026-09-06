@@ -52,6 +52,9 @@ opt-in since it's not needed to boot Doom itself.
 | Zfa (additional FP) | ✅ |
 | Zfhmin (half-precision converts) | ✅ |
 | Zvfhmin (vector half converts) | ✅ |
+| Svinval (fine-grained TLB invalidation) | ✅ (no TLB — see below) |
+| Svnapot (64KB contiguous PTEs) | ✅ |
+| Svpbmt (page-based memory types) | ✅ |
 
 The bitmanip families and `Zicond` are on by default despite Doom never
 emitting them: every modern riscv64 Linux userspace assumes them, so
@@ -118,6 +121,23 @@ this toolchain goes through x87, so the flag was dropped. It is now
 decided from the values — a conversion is inexact exactly when its
 result converts back to something different — which holds for every
 rounding mode and does not depend on the host.
+
+`Svnapot` and `Svpbmt` add no instructions — they give meaning to page
+table entry bits that were previously ignored, so the only way to exercise
+them is an actual page-table walk. `Svnapot`'s N bit makes the low four
+bits of the physical page number come from the *virtual* address, so one
+entry covers 64KB; an implementation that ignores it still translates, it
+just aliases every address in the range onto the same page. `Svpbmt`'s
+memory types are genuinely unobservable here — with no caches, PMA, NC and
+IO behave alike — so what makes it real is what must *fault*: the reserved
+type 3, and any nonzero type while `menvcfg.PBMTE` is clear, which is how
+an OS probes for the extension. Bits 60:54 of a PTE are now checked as
+reserved too; without that the other two would be meaningless.
+
+`Svinval`'s three instructions retire without effect for the same reason
+`fence.i` does: `mmu_translate` walks the page table in guest memory on
+every access, so a translation can never be stale and there is nothing to
+invalidate.
 
 CSR accesses are privilege-checked: writing a read-only CSR, or touching
 one above the current privilege level, raises an illegal instruction, and

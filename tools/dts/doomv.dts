@@ -84,7 +84,7 @@
 			// vectors to a kernel booted without them produces illegal
 			// instructions in the kernel's own routines rather than a
 			// clean refusal.
-			riscv,isa = "rv64imafdc_zicbom_zicbop_zicboz_zicntr_zicond_zicsr_zifencei_zihintntl_zihintpause_zihpm_zimop_zawrs_zfa_zfhmin_zba_zbb_zbs_zcmop_smaia_ssaia_sstc";
+			riscv,isa = "rv64imafdc_zicbom_zicbop_zicboz_zicntr_zicond_zicsr_zifencei_zihintntl_zihintpause_zihpm_zimop_zawrs_zfa_zfhmin_zba_zbb_zbs_zcmop_smaia_ssaia_sstc_svinval_svnapot_svpbmt";
 			// riscv,isa is deprecated; 6.12 prefers this pair and only
 			// falls back to parsing the string above. Both are kept so the
 			// same DTB works either way.
@@ -95,7 +95,8 @@
 					       "zihintpause", "zihpm", "zimop", "zawrs",
 					       "zfa", "zfhmin",
 					       "zba", "zbb", "zbs", "zcmop",
-					       "smaia", "ssaia", "sstc";
+					       "smaia", "ssaia", "sstc",
+					       "svinval", "svnapot", "svpbmt";
 			// Zicbom/Zicbop are architecturally required to state their
 			// block size here -- Linux refuses to use the cbo instructions
 			// without it. 64 bytes is also what Zic64b names, and DoomV has

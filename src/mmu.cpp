@@ -1,6 +1,7 @@
 #include "mmu.hpp"
 #include "registers.hpp"
 #include "memory.hpp"
+#include "extensions.hpp"
 
 namespace {
 constexpr uint16_t CSR_SATP    = 0x180;
@@ -20,6 +21,20 @@ constexpr uint64_t PTE_X = 1ull << 3;
 constexpr uint64_t PTE_U = 1ull << 4;
 constexpr uint64_t PTE_A = 1ull << 6;
 constexpr uint64_t PTE_D = 1ull << 7;
+// Svnapot's N bit and Svpbmt's two-bit memory type live in the top of the
+// PTE, above the PPN. Bits 60:54 remain reserved and must be zero.
+constexpr uint64_t PTE_N        = 1ull << 63;
+constexpr uint64_t PTE_PBMT     = 3ull << 61;
+constexpr int      PTE_PBMT_SHIFT = 61;
+constexpr uint64_t PTE_RESERVED = 0x7Full << 54; // bits 60:54
+
+// menvcfg bits that gate the two extensions for S-mode. Without these set,
+// the corresponding PTE bits are not merely ignored -- they must read as
+// reserved, i.e. a nonzero value is a page fault. That is what lets an OS
+// discover whether the hardware supports them.
+constexpr uint16_t CSR_MENVCFG    = 0x30A;
+constexpr uint64_t MENVCFG_PBMTE  = 1ull << 62;
+constexpr uint64_t MENVCFG_ADUE   = 1ull << 61;
 
 constexpr uint64_t CAUSE_INSTR_PAGE_FAULT = 12;
 constexpr uint64_t CAUSE_LOAD_PAGE_FAULT  = 13;
@@ -147,7 +162,63 @@ bool mmu_translate(Registers &regs, Memory &mem, uint64_t vaddr, AccessType type
 		return false;
 	}
 
+	// Svpbmt: bits 62:61 select a memory type. This machine has no caches
+	// and no distinction between cacheable and IO memory, so PMA (0), NC (1)
+	// and IO (2) all behave identically -- there is nothing for the type to
+	// change. Value 3 is reserved and must fault, and so must any nonzero
+	// value at all when menvcfg.PBMTE is clear: an OS probes for Svpbmt by
+	// setting the bits and seeing whether the access faults, so silently
+	// accepting them would report support this hart does not have.
+	{
+		uint64_t pbmt = (pte & PTE_PBMT) >> PTE_PBMT_SHIFT;
+		// Two separate gates, and both have to hold: the hart must
+		// implement Svpbmt at all, and M-mode must have enabled it for
+		// S-mode. Without the extension the field is simply reserved.
+		bool pbmt_enabled = Extensions.SVPBMT
+		                 && (regs.read_csr(CSR_MENVCFG) & MENVCFG_PBMTE) != 0;
+		if (pbmt == 3 || (pbmt != 0 && !pbmt_enabled)) {
+			cause = fault_cause(type);
+			tval = vaddr;
+			return false;
+		}
+	}
+
+	// Bits 60:54 are reserved in every Sv mode and must be zero. Checking
+	// this is what makes the Svnapot and Svpbmt bits above meaningful --
+	// without it, a PTE with anything set up there would translate happily
+	// and an OS probing for those extensions would get the wrong answer.
+	if (pte & PTE_RESERVED) {
+		cause = fault_cause(type);
+		tval = vaddr;
+		return false;
+	}
+
 	uint64_t ppn_full = pte_ppn(pte);
+
+	// Svnapot: the N bit marks this leaf as one of a naturally-aligned
+	// power-of-two contiguous range that share a single translation. Sv39
+	// defines exactly one encoding, 64KB (eight 4KB pages), signalled by
+	// ppn[3:0] == 0b1000; every other value of those bits with N set is
+	// reserved.
+	//
+	// The effect is that the low bits of the PPN come from the virtual
+	// address rather than the PTE, which is the opposite of the superpage
+	// rule below -- so it has to be applied here, before the page offset is
+	// composed, and only to a leaf at level 0.
+	if (pte & PTE_N) {
+		// Without Svnapot the N bit is reserved, so a PTE that sets it
+		// must fault rather than translate as though the bit were absent.
+		// That is what lets an OS discover the extension is missing.
+		if (!Extensions.SVNAPOT || level != 0 || (ppn_full & 0xF) != 0x8) {
+			cause = fault_cause(type);
+			tval = vaddr;
+			return false;
+		}
+		// A 64KB NAPOT region: take the top of the PPN from the PTE and
+		// bits 15:12 of the address from the VA.
+		ppn_full = (ppn_full & ~0xFull) | ((vaddr >> 12) & 0xF);
+	}
+
 	if (level > 0) {
 		// Superpage: the PTE's own PPN must be zero in the bits a finer
 		// table would otherwise have supplied -- anything else is a

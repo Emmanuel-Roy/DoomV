@@ -474,6 +474,34 @@ LAYOUT_ZVFH = [
     (2, "fflags after vfwcvt.f.f.v v8, v1, v0.t"),
 ]
 
+# The supervisor translation extensions. Svnapot and Svpbmt add no
+# instructions -- they give meaning to PTE bits -- so every entry here is
+# the observable consequence of a page-table walk rather than an
+# instruction result.
+#
+# The fault counts carry the weight. Svpbmt's memory types have no effect
+# on a machine with no caches, so the only way to tell a real
+# implementation from one that ignores the field is that the reserved
+# value, and any value at all while menvcfg.PBMTE is clear, must fault.
+LAYOUT_SV = [(2, n) for n in [
+    "Svnapot: first page of the 64KB range",
+    "Svnapot: last page of the range (must not alias the first)",
+    "Svnapot: middle page",
+    "Svnapot: first page still intact after the others",
+    "Svinval: mapping unchanged after the invalidation sequence",
+    "Svinval: fault count (must be 0)",
+    "Svpbmt NC: value read back",
+    "Svpbmt NC: fault count (must be 0)",
+    "Svpbmt reserved type 3: fault count (must be 1)",
+    "Svpbmt reserved type 3: scause (13 = load page fault)",
+    "Svpbmt with PBMTE clear: fault count (must be 1)",
+    "Svpbmt with PBMTE clear: scause",
+    "PTE reserved bit 54: fault count (must be 1)",
+    "PTE reserved bit 54: scause",
+    "Svnapot bad size encoding: fault count (must be 1)",
+    "Svnapot bad size encoding: scause",
+]]
+
 LAYOUTS = {
     "vtest_v": LAYOUT_V,
     "vtest_zb": LAYOUT_ZB,
@@ -487,6 +515,7 @@ LAYOUTS = {
     "vtest_zfa": LAYOUT_ZFA,
     "vtest_zfh": LAYOUT_ZFH,
     "vtest_zvfh": LAYOUT_ZVFH,
+    "vtest_sv": LAYOUT_SV,
 }
 
 

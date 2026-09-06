@@ -45,6 +45,9 @@ DecodedInstruction Decoder::decode_zicsr(uint32_t raw_instr) const
 		else if (raw_instr == 0x00D00073) { instr.mnemonic = "WRS.NTO"; instr.ext = Extension::ZAWRS; }
 		else if (raw_instr == 0x01D00073) { instr.mnemonic = "WRS.STO"; instr.ext = Extension::ZAWRS; }
 		else if (funct7 == 0b0001001 && rd == 0) instr.mnemonic = "SFENCE.VMA";
+		else if (funct7 == 0b0001011 && rd == 0) { instr.mnemonic = "SINVAL.VMA"; instr.ext = Extension::SVINVAL; }
+		else if (funct7 == 0b0001100 && rd == 0 && rs1 == 0 && rs2 == 0) { instr.mnemonic = "SFENCE.W.INVAL"; instr.ext = Extension::SVINVAL; }
+		else if (funct7 == 0b0001100 && rd == 0 && rs1 == 0 && rs2 == 1) { instr.mnemonic = "SFENCE.INVAL.IR"; instr.ext = Extension::SVINVAL; }
 		// else: genuinely unrecognized SYSTEM encoding -- mnemonic stays
 		// "???", exec_32ZICSR's default case no-ops it the same as before.
 	} else {

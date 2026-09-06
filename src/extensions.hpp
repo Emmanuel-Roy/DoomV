@@ -63,6 +63,12 @@ struct ExtensionConfig {
 	// arithmetic an expansion option. Software is expected to widen to
 	// single, compute, and narrow back.
 	bool ZFHMIN = true;
+	// Svinval's three instructions, and the two Sv* page-table features
+	// (Svnapot's N bit, Svpbmt's memory-type field), which add no
+	// instructions and are handled in mmu.cpp.
+	bool SVINVAL = true;
+	bool SVNAPOT = true;
+	bool SVPBMT = true;
 
 	// Base ISA width, not an optional extension. Registers/Memory always
 	// store values in 64-bit containers regardless of this flag: RV32

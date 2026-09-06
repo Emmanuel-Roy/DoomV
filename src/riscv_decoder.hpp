@@ -26,6 +26,7 @@ enum class Extension {
 	ZAWRS,
 	ZFA,
 	ZFHMIN,
+	SVINVAL,
 	ILLEGAL,
 };
 

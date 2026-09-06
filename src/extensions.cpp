@@ -11,6 +11,7 @@ void parse_march(const std::string &march)
 	Extensions.ZICBOM = Extensions.ZICBOP = false;
 	Extensions.ZICBOZ = Extensions.ZAWRS = Extensions.ZFA = false;
 	Extensions.ZFHMIN = false;
+	Extensions.SVINVAL = Extensions.SVNAPOT = Extensions.SVPBMT = false;
 
 	size_t pos = 0;
 	if (march.rfind("rv64", 0) == 0) { Extensions.XLEN64 = true; pos = 4; }
@@ -51,6 +52,9 @@ void parse_march(const std::string &march)
 	// "zfh" also matches inside "zfhmin"; both imply the minimal set, and
 	// full Zfh arithmetic is not implemented (see extensions.hpp).
 	if (march.find("zfh") != std::string::npos) Extensions.ZFHMIN = true;
+	if (march.find("svinval") != std::string::npos) Extensions.SVINVAL = true;
+	if (march.find("svnapot") != std::string::npos) Extensions.SVNAPOT = true;
+	if (march.find("svpbmt") != std::string::npos) Extensions.SVPBMT = true;
 	// "b" is the umbrella name for Zba+Zbb+Zbs (the ratified B extension).
 	for (char c : base) if (c == 'b') { Extensions.ZBA = Extensions.ZBB = Extensions.ZBS = true; }
 

@@ -160,6 +160,14 @@ Extension Decoder::classify(uint32_t raw_instr) const
 		// to some other meaning.
 		if (funct3 == 0b000 && (raw_instr == 0x00D00073u || raw_instr == 0x01D00073u))
 			return Extensions.ZAWRS ? Extension::ZAWRS : Extension::ILLEGAL;
+		// Svinval sits next to SFENCE.VMA (funct7 0x09) at 0x0B and 0x0C.
+		if (funct3 == 0b000 && ((raw_instr >> 7) & 0x1F) == 0) {
+			uint8_t f7 = (raw_instr >> 25) & 0x7F;
+			uint8_t rs2 = (raw_instr >> 20) & 0x1F;
+			if (f7 == 0x0B) return Extensions.SVINVAL ? Extension::SVINVAL : Extension::ILLEGAL;
+			if (f7 == 0x0C && ((raw_instr >> 15) & 0x1F) == 0 && (rs2 == 0 || rs2 == 1))
+				return Extensions.SVINVAL ? Extension::SVINVAL : Extension::ILLEGAL;
+		}
 		return Extension::ZICSR;
 	}
 	case 0b0000111: { // LOAD-FP: FLW (F) / FLD (D) / vector loads (V) -- share this opcode with no real
@@ -331,7 +339,8 @@ DispatchResult Decoder::decode_and_dispatch(uint64_t pc, uint32_t raw_word)
 		       || (instr.ext == Extension::ZICBOZ && Extensions.ZICBOZ)
 		       || (instr.ext == Extension::ZAWRS && Extensions.ZAWRS)
 		       || (instr.ext == Extension::ZFA && Extensions.ZFA)
-		       || (instr.ext == Extension::ZFHMIN && Extensions.ZFHMIN);
+		       || (instr.ext == Extension::ZFHMIN && Extensions.ZFHMIN)
+		       || (instr.ext == Extension::SVINVAL && Extensions.SVINVAL);
 
 		entry = {true, pc, tag, instr, enabled};
 	}
@@ -416,6 +425,9 @@ DispatchResult Decoder::decode_and_dispatch(uint64_t pc, uint32_t raw_word)
 		break;
 	case Extension::ZFHMIN:
 		core.exec_ZFHMIN(instr, regs, mem);
+		break;
+	case Extension::SVINVAL:
+		core.exec_SVINVAL(instr, regs, mem);
 		break;
 	case Extension::V:
 		core.exec_V(instr, regs, mem);
