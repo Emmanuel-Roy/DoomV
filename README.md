@@ -41,7 +41,7 @@ opt-in since it's not needed to boot Doom itself.
 | Zba / Zbb / Zbs (bitmanip) | ✅ |
 | Zcb (compressed bitmanip/mem) | ✅ |
 | Zicond (conditional move) | ✅ |
-| Zvbb (vector bitmanip) | ✅ (`vandn` only) |
+| Zvbb (vector bitmanip) | ✅ |
 | Zihintpause / Zihintntl | ✅ (hints — retire without effect) |
 | Zimop / Zcmop | ✅ (write zero to `rd`) |
 | Zicbom / Zicbop | ✅ (no cache to manage — see below) |

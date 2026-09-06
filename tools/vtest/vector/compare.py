@@ -168,6 +168,51 @@ LAYOUT_CSR = [(2, n) for n in [
     "write to read-only cycle: trap count (1)",
 ]]
 
+# Zvbb. Every entry is a whole vector register (4 words), same as
+# LAYOUT_V. The e8 repeats of the counting and rotate families are not
+# redundant: both are defined over SEW, and the natural wrong
+# implementation -- reaching for a 64-bit host operation -- gives the
+# right answer at e64 and a wrong one at every narrower width.
+LAYOUT_ZVBB = [(4, n) for n in [
+    "vandn.vv (e32)",
+    "vandn.vx (e32)",
+    "vbrev.v (e32)",
+    "vbrev8.v (e32)",
+    "vrev8.v (e32)",
+    "vbrev.v (e8)",
+    "vbrev8.v (e8)",
+    "vrev8.v (e8)",
+    "vclz.v (e8)",
+    "vctz.v (e8)",
+    "vcpop.v (e8)",
+    "vclz.v (e32)",
+    "vclz.v (e32, all-zero -> 32)",
+    "vctz.v (e32)",
+    "vctz.v (e32, all-zero -> 32)",
+    "vcpop.v (e32)",
+    "vrol.vv (e32)",
+    "vrol.vx (e32)",
+    "vror.vv (e32)",
+    "vror.vx (e32)",
+    "vror.vi 7 (e32, imm[5]=0)",
+    "vror.vi 31 (e32)",
+    "vrol.vv (e8)",
+    "vrol.vx (e8)",
+    "vror.vv (e8)",
+    "vror.vx (e8)",
+    "vrol.vx 11 (e8, amount mod SEW)",
+    "vror.vi 40 (e64, imm[5]=1 -> funct6 0x15)",
+    "vror.vi 63 (e64)",
+    "vwsll.vv -> v8",
+    "vwsll.vv -> v9",
+    "vwsll.vx -> v8",
+    "vwsll.vx -> v9",
+    "vwsll.vi -> v8",
+    "vwsll.vi -> v9",
+    "vandn.vv masked (v0.t)",
+    "vrol.vv masked (v0.t)",
+]]
+
 LAYOUTS = {
     "vtest_v": LAYOUT_V,
     "vtest_zb": LAYOUT_ZB,
@@ -177,6 +222,7 @@ LAYOUTS = {
     "vtest_fd": LAYOUT_FD,
     "vtest_hints": LAYOUT_HINTS,
     "vtest_csr": LAYOUT_CSR,
+    "vtest_zvbb": LAYOUT_ZVBB,
 }
 
 

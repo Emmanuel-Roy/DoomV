@@ -238,7 +238,8 @@ void exec_v_config(const DecodedInstruction &instr, Registers &regs);
 // then overwrite it by advancing pc normally).
 bool exec_v_ldst(const DecodedInstruction &instr, Registers &regs, Memory &mem, RiscvCore &core);
 void exec_v_int(const DecodedInstruction &instr, Registers &regs);
-void exec_zvbb(const DecodedInstruction &instr, Registers &regs); // Zvbb, ext_zvbb.cpp
+void exec_zvbb(const DecodedInstruction &instr, Registers &regs);       // Zvbb, ext_zvbb.cpp
+void exec_zvbb_unary(const DecodedInstruction &instr, Registers &regs); // Zvbb's OPMVV funct6=0x12 group
 void exec_v_muldiv(const DecodedInstruction &instr, Registers &regs);
 void exec_v_mask(const DecodedInstruction &instr, Registers &regs);
 void exec_v_perm(const DecodedInstruction &instr, Registers &regs);
