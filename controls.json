@@ -1,0 +1,6 @@
+{
+    "forward": "W",
+    "backward": "S",
+    "turn_left": "A",
+    "turn_right": "D"
+}
