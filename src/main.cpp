@@ -1,0 +1,278 @@
+#include "doom_system.hpp"
+#include "extensions.hpp"
+#include <cstdint>
+#include <iostream>
+#include <cstdio>
+#include <cstdlib>
+#include <string>
+#include <vector>
+
+// -ram=<size>: bytes, or a K/M/G/T suffix. Any value, rounded up to a page,
+// not just the round ones.
+//
+// Two limits, and both of them are about something real rather than taste.
+// It has to be at least enough for what a boot loads before the guest runs --
+// OpenSBI puts the device tree 34MB in and the initrd above that -- and DOOM
+// additionally needs the WAD to stay addressable: the guest asks where it is
+// through a 32-bit MMIO register (Memory::MMIO_WAD_BASE), and the WAD sits
+// directly above RAM, so RAM_BASE + size + WAD_SIZE has to stay under 4GB.
+// Linux and Ubuntu have no such ceiling; nothing but DOOM reads the WAD.
+static bool parse_ram_size(const std::string &text, bool linux_boot)
+{
+	size_t consumed = 0;
+	unsigned long long value = 0;
+	try {
+		value = std::stoull(text, &consumed, 0);
+	} catch (const std::exception &) {
+		std::cerr << "-ram=: not a number: " << text << "\n";
+		return false;
+	}
+	uint64_t bytes = value;
+	std::string suffix = text.substr(consumed);
+	if (suffix.size() == 1 || (suffix.size() == 2 && (suffix[1] == 'B' || suffix[1] == 'b'))) {
+		switch (suffix[0]) {
+		case 'k': case 'K': bytes = value * 1024ull; break;
+		case 'm': case 'M': bytes = value * 1024ull * 1024; break;
+		case 'g': case 'G': bytes = value * 1024ull * 1024 * 1024; break;
+		case 't': case 'T': bytes = value * 1024ull * 1024 * 1024 * 1024; break;
+		default:
+			std::cerr << "-ram=: unknown suffix '" << suffix << "' (use K, M, G or T)\n";
+			return false;
+		}
+	} else if (!suffix.empty()) {
+		std::cerr << "-ram=: unknown suffix '" << suffix << "' (use K, M, G or T)\n";
+		return false;
+	}
+
+	bytes = (bytes + 0xFFF) & ~0xFFFull;
+	// 64MB is below anything that boots, and well below where a mistake like
+	// -ram=64 (bytes) would otherwise turn into a confusing crash much later.
+	const uint64_t floor = 64ull * 1024 * 1024;
+	if (bytes < floor) {
+		std::cerr << "-ram=" << text << " is too small; the minimum is 64M\n";
+		return false;
+	}
+	if (!linux_boot) {
+		const uint64_t ceiling = 0x100000000ull - Memory::RAM_BASE - Memory::WAD_SIZE;
+		if (bytes > ceiling) {
+			std::cerr << "-ram=" << text << " is too large for a DOOM run: the WAD sits just above\n"
+			          << "RAM and the guest reads its address from a 32-bit register, so RAM has to\n"
+			          << "end below 4GB. The limit here is " << (ceiling / (1024 * 1024)) << "M."
+			          << " A Linux boot has no such limit.\n";
+			return false;
+		}
+	}
+	Memory::set_ram_size(bytes);
+	return true;
+}
+
+int main(int argc, char *argv[])
+{
+	std::vector<std::string> positional;
+	std::string march;
+	uint64_t breakpoint = 0;
+	bool have_breakpoint = false;
+	uint64_t sig_begin = 0, sig_end = 0;
+	bool have_sig = false;
+	std::string fb_dump_path;
+	std::string expect_text;
+	std::string input_script;
+	std::string gui_dump_path;
+	std::string opensbi_path, kernel_path, dtb_path, initrd_path, ram_arg;
+	uint64_t tohost_addr = 0;
+	std::string disk_path;
+	// Where storage drive images are looked for on a Linux boot. Relative
+	// to the working directory, which is the repository root for every
+	// script in scripts/. Empty turns the scan off.
+	std::string drives_dir = "drives";
+	// The host folder the guest can mount directly. Same conventions.
+	std::string shared_dir = "shared";
+	bool headless = false;
+	uint64_t stop_at = 0;
+	std::string record_path, replay_path;
+	std::string trace_path, lockstep_path;
+	bool lockstep_strict = false;
+	for (int i = 1; i < argc; i++) {
+		std::string arg = argv[i];
+		if (arg.rfind("-march=", 0) == 0) {
+			march = arg.substr(7);
+		} else if (arg.rfind("-break=", 0) == 0) {
+			breakpoint = std::stoull(arg.substr(7), nullptr, 16);
+			have_breakpoint = true;
+		} else if (arg.rfind("-sig=", 0) == 0) {
+			std::string range = arg.substr(5);
+			size_t colon = range.find(':');
+			sig_begin = std::stoull(range.substr(0, colon), nullptr, 16);
+			sig_end = std::stoull(range.substr(colon + 1), nullptr, 16);
+			have_sig = true;
+		} else if (arg == "-ng" || arg == "-nogui" || arg == "-headless" || arg == "--headless") {
+			// No SDL window, and the process exits when the guest stops
+			// instead of sitting in a render loop. -ng is the short form
+			// the suites use; the longer spellings are kept because they
+			// are what the flag is called in the harnesses and the docs.
+			headless = true;
+		} else if (arg.rfind("-tohost=", 0) == 0) {
+			// Stop when the guest stores nonzero to this address. Every
+			// bare-metal RISC-V test suite ends that way.
+			tohost_addr = std::stoull(arg.substr(8), nullptr, 16);
+		} else if (arg.rfind("-ram=", 0) == 0) {
+			ram_arg = arg.substr(5);
+		} else if (arg.rfind("-opensbi=", 0) == 0) {
+			opensbi_path = arg.substr(9);
+		} else if (arg.rfind("-kernel=", 0) == 0) {
+			kernel_path = arg.substr(8);
+		} else if (arg.rfind("-dtb=", 0) == 0) {
+			dtb_path = arg.substr(5);
+		} else if (arg.rfind("-initrd=", 0) == 0) {
+			initrd_path = arg.substr(8);
+		} else if (arg.rfind("-fbdump=", 0) == 0) {
+			// Write the Linux framebuffer to this file when the run stops.
+			// See DoomSystem::set_fb_dump for why screenshots would not do.
+			fb_dump_path = arg.substr(8);
+		} else if (arg.rfind("-expect=", 0) == 0) {
+			// Hold the headless stdin feed until the guest prints this.
+			// Anything typed at a guest before its tty exists is dropped,
+			// so a pipe needs a prompt to wait for -- see
+			// DoomSystem::console_stdin_loop and Uart::expect.
+			expect_text = arg.substr(8);
+		} else if (arg.rfind("-guidump=", 0) == 0) {
+			// The composed window as a PPM -- the dashboard included, not
+			// just the guest's display. See Gui::set_canvas_dump.
+			gui_dump_path = arg.substr(9);
+		} else if (arg.rfind("-input=", 0) == 0) {
+			// Replay a script of keyboard and mouse events. The only way
+			// to exercise the input devices without a window -- see
+			// DoomSystem::replay_input_script.
+			input_script = arg.substr(7);
+		} else if (arg.rfind("-shared=", 0) == 0) {
+			// A host folder served to the guest over virtio-9p, mount tag
+			// "shared". -shared= with nothing turns it off.
+			shared_dir = arg.substr(8);
+		} else if (arg.rfind("-drives=", 0) == 0) {
+			// A folder of raw *.img files to attach as extra virtio disks,
+			// after the root disk. -drives= with nothing turns it off.
+			drives_dir = arg.substr(8);
+		} else if (arg.rfind("-trace=", 0) == 0) {
+			// A commit log of every instruction and trap, in Spike's format.
+			trace_path = arg.substr(7);
+		} else if (arg == "-lockstep-strict") {
+			lockstep_strict = true;
+		} else if (arg.rfind("-lockstep=", 0) == 0) {
+			// Run against a reference commit log; halt at the first mismatch.
+			lockstep_path = arg.substr(10);
+		} else if (arg.rfind("-record=", 0) == 0) {
+			// Log every input the guest receives, with the instruction it
+			// arrived at, so the run can be reproduced with -replay.
+			record_path = arg.substr(8);
+		} else if (arg.rfind("-replay=", 0) == 0) {
+			// Deliver a -record log's input at exactly its instructions, and
+			// nothing else.
+			replay_path = arg.substr(8);
+		} else if (arg.rfind("-stopat=", 0) == 0) {
+			// Stop after exactly this many instructions and write the
+			// machine state to crash.log. Decimal, or hex with 0x.
+			stop_at = std::stoull(arg.substr(8), nullptr, 0);
+		} else if (arg.rfind("-disk=", 0) == 0) {
+			// A raw disk image, attached as virtio-blk. This is what lets a
+			// real distribution root filesystem be mounted rather than
+			// unpacked into RAM as an initramfs.
+			disk_path = arg.substr(6);
+		} else {
+			positional.push_back(arg);
+		}
+	}
+
+	// No -march= given -> Extensions keeps ExtensionConfig's defaults
+	// (rv64imafdc_zicsr-equivalent). parse_march() resets everything, so
+	// only call it when the flag was actually passed.
+	if (!march.empty()) parse_march(march);
+
+	bool linux_boot = !opensbi_path.empty() || !kernel_path.empty() || !dtb_path.empty() || !initrd_path.empty();
+
+	// -ram=<size>, before anything constructs Memory. Plain bytes, or a K/M/G
+	// suffix; any value is allowed, not just the round ones, and the device
+	// tree is corrected to match it (see DoomSystem::init_linux_boot).
+	if (!ram_arg.empty()) {
+		if (!parse_ram_size(ram_arg, linux_boot)) return 1;
+	}
+
+	// A Linux boot with no -march gets the RVA23S64 profile rather than the
+	// bare rv64imafdc default. The device tree is a static file that
+	// describes this machine, and it advertises the profile -- so the two
+	// have to agree. When they did not, Linux enabled vector for userspace
+	// on the device tree's word, busybox issued a vsetivli, and a hart with
+	// V switched off correctly called it illegal. The kernel turned that
+	// into SIGILL and killed init.
+	//
+	// -march is still an override, which is what the differential and
+	// conformance harnesses use to test one extension at a time.
+	if (linux_boot && march.empty()) {
+		parse_march("rv64imafdcv_zicsr_zifencei_zba_zbb_zbs_zicond"
+		            "_zicbom_zicbop_zicboz_zicntr_zihintpause_zihintntl"
+		            "_zimop_zcmop_zawrs_zfa_zfh_svinval_svnapot_svpbmt"
+		            "_sscofpmf_ssstateen_ssnpm_smnpm");
+	}
+	// An initramfs is no longer required: with -disk= the kernel can mount a
+	// real root filesystem instead, which is the whole point of having a
+	// block device. The other three are still mandatory -- there is no
+	// booting without firmware, a kernel and a device tree.
+	if (linux_boot && (opensbi_path.empty() || kernel_path.empty() || dtb_path.empty())) {
+		std::cout << "Usage: " << argv[0] << " -opensbi=<path> -kernel=<path> -dtb=<path> -initrd=<path> [-march=...] [-break=<hex_pc>] [-ng] [-disk=<img>] [-drives=<dir>] [-shared=<dir>] [-fbdump=<ppm>] [-expect=<text>]\n";
+		return -1;
+	}
+
+	SupportedExtensions = Extensions;
+	DoomSystem system;
+	// Before init: init is what opens the window.
+	if (headless) system.set_headless();
+	// Storage drives only mean something to a guest with a device tree that
+	// declares their slots, which is a Linux boot.
+	if (linux_boot && !drives_dir.empty()) system.attach_drives(drives_dir, disk_path);
+	if (linux_boot && !shared_dir.empty()) system.attach_shared(shared_dir);
+	if (!disk_path.empty() && !system.attach_disk(disk_path)) {
+		std::cout << "cannot open disk image: " << disk_path << "\n";
+		return -1;
+	}
+	if (linux_boot) {
+		if (!system.init_linux_boot(opensbi_path.c_str(), kernel_path.c_str(), dtb_path.c_str(), initrd_path.c_str())) {
+			return -1;
+		}
+	} else {
+		if (positional.size() < 2) {
+			std::cout << "Usage: " << argv[0] << " <wad_path> <elf_path> [-march=rv64imafdc_zicsr] [-break=<hex_pc>] [-sig=<hex_begin>:<hex_end>] [-ng] [-disk=<img>]\n"
+			          << "   or: " << argv[0] << " -opensbi=<path> -kernel=<path> -dtb=<path> -initrd=<path> [-march=...] [-break=<hex_pc>] [-ng] [-disk=<img>]\n";
+			return -1;
+		}
+		if (!system.init(positional[0].c_str(), positional[1].c_str())) {
+			return -1;
+		}
+	}
+	if (have_breakpoint) system.add_breakpoint(breakpoint);
+	if (have_sig) system.set_signature_range(sig_begin, sig_end, "signature.log");
+	if (!fb_dump_path.empty()) system.set_fb_dump(fb_dump_path.c_str());
+	if (!expect_text.empty()) system.set_console_expect(expect_text.c_str());
+	if (!input_script.empty()) system.set_input_script(input_script.c_str());
+	if (!gui_dump_path.empty()) system.set_canvas_dump(gui_dump_path.c_str());
+	if (tohost_addr) system.watch_tohost(tohost_addr);
+	if (stop_at) system.set_stop_at(stop_at);
+	if (!replay_path.empty() && !system.set_input_replay(replay_path.c_str())) {
+		std::cout << "cannot read input log: " << replay_path << "\n";
+		return -1;
+	}
+	if (!record_path.empty() && !system.set_input_record(record_path.c_str())) {
+		std::cout << "cannot write input log: " << record_path << "\n";
+		return -1;
+	}
+	if (!trace_path.empty() && !system.set_trace(trace_path.c_str())) {
+		std::cout << "cannot write commit log: " << trace_path << "\n";
+		return -1;
+	}
+	if (lockstep_strict) system.set_lockstep_strict();
+	if (!lockstep_path.empty() && !system.set_lockstep(lockstep_path.c_str())) {
+		std::cout << "cannot read reference commit log: " << lockstep_path << "\n";
+		return -1;
+	}
+
+	system.run();
+	return 0;
+}
