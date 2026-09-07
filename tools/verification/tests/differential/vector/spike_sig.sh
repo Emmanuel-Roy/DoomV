@@ -18,57 +18,13 @@ TEST="${1:-vtest_v}"
 DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$DIR"
 
-CC=riscv64-linux-gnu-gcc
 NM=riscv64-linux-gnu-nm
 SPIKE="${SPIKE:-/root/build/spike-build/spike}"
 
-# Each test needs its own extension set on both sides. VLEN is pinned to 128
-# for the vector test because DoomV is fixed there (Registers::VLEN_BITS),
-# and nothing is comparable unless the two agree.
-case "$TEST" in
-  vtest_v)  MARCH=rv64gcv_zvbb
-            ISA=rv64gcv_zvbb_zvl128b_zicsr_zifencei ;;
-  vtest_zvfh) MARCH=rv64gcv_zvfhmin
-            ISA=rv64gcv_zvfhmin_zvl128b_zicsr_zifencei ;;
-  vtest_zvbb) MARCH=rv64gcv_zvbb
-            ISA=rv64gcv_zvbb_zvl128b_zicsr_zifencei ;;
-  vtest_restart) MARCH=rv64gcv
-            ISA=rv64gcv_zvl128b_zicsr_zifencei ;;
-  vtest_trap) MARCH=rv64gcv
-            ISA=rv64gcv_zvl128b_zicsr_zifencei ;;
-  vtest_stateen) MARCH=rv64gch_smstateen_sscofpmf
-            ISA=rv64gch_smstateen_sscofpmf_zicsr_zifencei ;;
-  vtest_hdeleg) MARCH=rv64gch
-            ISA=rv64gch_zicsr_zifencei ;;
-  vtest_hgatp) MARCH=rv64gch
-            ISA=rv64gch_zicsr_zifencei ;;
-  vtest_hlv) MARCH=rv64gch
-            ISA=rv64gch_zicsr_zifencei ;;
-  vtest_h) MARCH=rv64gch
-            ISA=rv64gch_zicsr_zifencei ;;
-  vtest_pm) MARCH=rv64gc
-            ISA=rv64gc_ssnpm_smnpm_zicsr_zifencei ;;
-  vtest_sv) MARCH=rv64gc_svinval
-            ISA=rv64gc_svinval_svnapot_svpbmt_zicsr_zifencei ;;
-  vtest_mmu) MARCH=rv64gcv
-            ISA=rv64gcv_zvl128b_zicsr_zifencei ;;
-  vtest_zfh) MARCH=rv64gc_zfhmin
-            ISA=rv64gc_zfhmin_zicsr_zifencei ;;
-  vtest_zfa) MARCH=rv64gc_zfa
-            ISA=rv64gc_zfa_zicsr_zifencei ;;
-  vtest_fd) MARCH=rv64gc
-            ISA=rv64gc_zicsr_zifencei ;;
-  vtest_hints) MARCH=rv64gc_zihintpause_zihintntl_zimop_zcmop_zicbom_zicbop
-            ISA=rv64gc_zihintpause_zihintntl_zimop_zcmop_zicbom_zicbop_zicsr_zifencei ;;
-  vtest_csr) MARCH=rv64gc_zicboz_zawrs
-            ISA=rv64gc_zicboz_zawrs_zicntr_zihpm_zicsr_zifencei ;;
-  vtest_zb) MARCH=rv64gc_zba_zbb_zbs_zicond_zcb
-            ISA=rv64gc_zba_zbb_zbs_zicond_zcb_zicsr_zifencei ;;
-  *) echo "unknown test: $TEST" >&2; exit 1 ;;
-esac
-
-$CC -march="$MARCH" -mabi=lp64d -static -mcmodel=medany -nostdlib -nostartfiles \
-    -T vtest_v.lds -o "$TEST.elf" "$TEST.S" 2>&1 | grep -v RWX || true
+# The ELF build and the per-test extension sets live in build_elf.sh, so a
+# Sail run does not have to invoke spike just to get an ELF. Sourcing it
+# here yields MARCH/ISA and builds the ELF.
+. "$DIR/build_elf.sh" "$TEST"
 
 sym() { $NM "$TEST.elf" | awk -v s="$1" '$3==s {print $1}'; }
 HALT=$(sym sig_done)

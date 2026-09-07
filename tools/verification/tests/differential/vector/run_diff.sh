@@ -6,16 +6,27 @@
 # .exe while the cross-compiler and both references live in WSL, so this
 # drives across the boundary.
 #
-#   ./run_diff.sh                      # every test, against spike
-#   ./run_diff.sh vtest_zb             # one test
-#   ./run_diff.sh --ref sail           # every test, against the Sail model
-#   ./run_diff.sh --ref sail vtest_zb  # one test, against Sail
+#   ./run_diff.sh                       # every test, against Sail
+#   ./run_diff.sh vtest_zb              # one test
+#   ./run_diff.sh --ref spike           # every test, against spike
+#   ./run_diff.sh --ref spike vtest_zb  # one test, against spike
 #
-# Two references, and they are not interchangeable in authority. spike is an
-# independent implementation; Sail is the formal specification, generated
-# from the same source the architecture is defined in. Where they disagree,
-# Sail is the stronger claim -- and it is the only one with RVA23 profile
-# configurations.
+# Two references, and they are not interchangeable in authority.
+#
+# Sail is the golden reference for RVA23S64, and is the default here. It is
+# the formal specification -- generated from the same source the
+# architecture is defined in -- rather than an independent reimplementation,
+# and it is the only one riscv-arch-test ships an RVA23S64 configuration
+# for. At profile level spike is not a second opinion so much as an absence
+# of one.
+#
+# spike remains available behind --ref spike, and is still worth running: an
+# independent implementation disagreeing is a signal even when it is the one
+# that turns out to be wrong. But it does not decide anything. Where the two
+# disagree, Sail is right unless the difference is a configuration or an
+# open architectural choice -- and those must not be diffed at all. A place
+# where spike departs from the architecture belongs in KNOWN_DIVERGENCES in
+# compare.py, not in a change to DoomV.
 #
 # Running both is worth the time. Sail is what caught these tests depending
 # on spike's permissive PMP default, which spike could not have revealed
@@ -32,9 +43,9 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/../../../../.." && pwd)"
 DISTRO="${DISTRO:-Ubuntu}"
 
-REF=spike
+REF=sail
 if [ "${1:-}" = "--ref" ]; then
-	REF="${2:-spike}"; shift 2
+	REF="${2:-sail}"; shift 2
 fi
 case "$REF" in
 spike|sail) ;;
@@ -89,13 +100,15 @@ for t in "${TESTS[@]}"; do
 	echo "  $t"
 	echo "=============================================================="
 
-	# The Sail path still needs spike_sig.sh to have built the ELF, since
-	# that is where the per-test -march mapping lives. Build via spike_sig
-	# either way, then dump the signature with whichever reference was
-	# asked for.
-	wsl_run bash "$HERE_WSL/spike_sig.sh" "$t" || { echo "spike side failed"; fail=1; continue; }
+	# Build the ELF first, then dump the signature with whichever reference
+	# was asked for. These are separate steps so that a Sail run -- the
+	# default, and the golden reference for RVA23S64 -- never requires spike
+	# to be installed at all.
+	wsl_run bash "$HERE_WSL/build_elf.sh" "$t" || { echo "build failed"; fail=1; continue; }
 	if [ "$REF" = sail ]; then
 		wsl_run bash "$HERE_WSL/sail_sig.sh" "$t" || { echo "sail side failed"; fail=1; continue; }
+	else
+		wsl_run bash "$HERE_WSL/spike_sig.sh" "$t" || { echo "spike side failed"; fail=1; continue; }
 	fi
 
 	# grep/cut rather than awk: an awk program full of $1/$3 has to survive

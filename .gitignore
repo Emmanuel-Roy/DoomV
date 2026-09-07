@@ -49,3 +49,12 @@ signature.log
 tools/verification/simulators/sail/src/build/
 tools/verification/simulators/sail/rva23s64.json
 *.sail.sig
+
+# riscv-arch-test working tree: compiled ELFs plus the Sail reference
+# signature for each. Regenerate with
+# tools/verification/tests/archtest/gen_reference.sh -- it is a build
+# product of the submodule's tests, not a source of truth, and it is large.
+tools/verification/tests/archtest/work/
+tools/verification/tests/archtest/out/
+
+__pycache__/
