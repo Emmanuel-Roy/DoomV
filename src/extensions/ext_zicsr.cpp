@@ -12,6 +12,7 @@
 #include "extensions.hpp"
 #include "timer.hpp"
 #include "pmp.hpp"
+#include "ext_xstate.hpp"
 #include "imsic.hpp"
 
 DecodedInstruction Decoder::decode_zicsr(uint32_t raw_instr) const
@@ -327,7 +328,9 @@ void write_satp(Registers &regs, uint64_t value)
 
 uint64_t read_sstatus(Registers &regs)
 {
-	return regs.read_csr(CSR_MSTATUS) & SSTATUS_MASK;
+	// SD is part of sstatus's view too, and is derived rather than stored
+	// -- see vcommon::with_sd.
+	return vcommon::with_sd(regs.read_csr(CSR_MSTATUS)) & SSTATUS_MASK;
 }
 
 void write_sstatus(Registers &regs, uint64_t value)
@@ -405,6 +408,7 @@ uint64_t RiscvCore::read_csr_effective(Registers &regs, Memory &mem, uint16_t cs
 {
 	// PMP entries past the implemented count read as zero rather than as
 	// whatever was last written to an unimplemented register.
+	if (csr == CSR_MSTATUS) return vcommon::with_sd(regs.read_csr(CSR_MSTATUS));
 	if (pmp::is_pmpcfg(csr)) return pmp::read_cfg(regs, csr);
 	if (pmp::is_pmpaddr(csr)) return pmp::read_addr(regs, csr);
 	if (csr == 0x100) return read_sstatus(regs);

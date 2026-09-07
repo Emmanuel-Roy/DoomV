@@ -20,6 +20,7 @@
 #include "riscv_core.hpp"
 #include "registers.hpp"
 #include "memory.hpp"
+#include "mmu.hpp"
 #include <cstdint>
 
 DecodedInstruction Decoder::decode_zicbom(uint32_t raw_instr) const
@@ -41,8 +42,32 @@ DecodedInstruction Decoder::decode_zicbom(uint32_t raw_instr) const
 	return instr;
 }
 
+// The block these operate on, matching Zicboz and what the device tree
+// advertises. The address in rs1 may point anywhere inside the block; the
+// block is the unit that gets checked.
+constexpr uint64_t CBOM_BLOCK_SIZE = 64;
+
 void RiscvCore::exec_ZICBOM(const DecodedInstruction &instr, Registers &regs, Memory &mem)
 {
+	// Having no cache makes the *effect* of these instructions trivial, and
+	// that is what the original implementation modelled: retire, do nothing.
+	// It is not what makes them observable. A cache-block operation still
+	// translates its address and still checks permissions, so an unmapped or
+	// protected block faults exactly as a load or store would -- and that is
+	// visible to software whether or not a cache exists behind it.
+	//
+	// All three take the same permission: read *or* write suffices, and a
+	// read-only mapping may be cleaned, flushed and invalidated alike. The
+	// obvious guess -- that CBO.INVAL demands write because it can discard
+	// data -- is wrong, and the suite checks exactly that case.
+	//
+	// Nor is the D bit involved, since nothing is written. But a failure is
+	// still reported as a *store* fault. AccessType::CacheBlock carries all
+	// three of those rules; see its definition in mmu.hpp.
+	uint64_t base = regs.read_x(instr.rs1) & ~(CBOM_BLOCK_SIZE - 1);
+	uint64_t paddr;
+	if (!translate_or_trap(regs, mem, base, AccessType::CacheBlock, paddr)) return;
+
 	(void)mem;
 	regs.set_pc(regs.get_pc() + instr.length);
 }

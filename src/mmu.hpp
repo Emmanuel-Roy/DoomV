@@ -12,6 +12,19 @@ enum class AccessType : uint8_t {
 	Load,
 	Store,
 	Amo,
+	// A cache-block operation (Zicbom's cbo.clean/flush/inval) is none of
+	// the above, and the differences are not cosmetic:
+	//
+	//   * read *or* write permission suffices, for all three -- a
+	//     read-only mapping may be cleaned, flushed and invalidated.
+	//   * the D bit is neither required nor set, because nothing is
+	//     written.
+	//   * a failure is reported as a *store* page or access fault anyway,
+	//     whichever permission was the one missing.
+	//
+	// Modelling it as a Store demands write permission and the D bit;
+	// modelling it as a Load reports the wrong cause. Hence its own tag.
+	CacheBlock,
 };
 
 // Sv39 address translation. Stateless on purpose (no TLB) -- every call

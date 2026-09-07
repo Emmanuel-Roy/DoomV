@@ -58,6 +58,8 @@ uint64_t fault_cause(AccessType type)
 	switch (type) {
 	case AccessType::Fetch: return CAUSE_INSTR_PAGE_FAULT;
 	case AccessType::Load:  return CAUSE_LOAD_PAGE_FAULT;
+	// A cache-block operation reports a store fault whichever permission it
+	// was missing.
 	default:                return CAUSE_STORE_PAGE_FAULT; // Store, Amo
 	}
 }
@@ -167,6 +169,7 @@ bool gstage_translate(Registers &regs, Memory &mem, uint64_t gpa, AccessType typ
 	case AccessType::Fetch: perm_ok = (pte & PTE_X) != 0; break;
 	case AccessType::Load:  perm_ok = (pte & PTE_R) != 0; break;
 	case AccessType::Store: perm_ok = (pte & PTE_W) != 0; break;
+	case AccessType::CacheBlock: perm_ok = (pte & PTE_R) || (pte & PTE_W); break;
 	default:                perm_ok = (pte & PTE_R) && (pte & PTE_W); break;
 	}
 	// A walk of the guest's page tables is a *read* of memory whatever the
@@ -380,6 +383,7 @@ bool mmu_translate(Registers &regs, Memory &mem, uint64_t vaddr, AccessType type
 	case AccessType::Load:  perm_ok = (pte & PTE_R) || (mxr && (pte & PTE_X)); break;
 	case AccessType::Store: perm_ok = (pte & PTE_W); break;
 	case AccessType::Amo:   perm_ok = (pte & PTE_R) && (pte & PTE_W); break;
+	case AccessType::CacheBlock: perm_ok = (pte & PTE_R) || (pte & PTE_W); break;
 	default:                perm_ok = false; break;
 	}
 	if (!perm_ok) {
@@ -414,6 +418,8 @@ bool mmu_translate(Registers &regs, Memory &mem, uint64_t vaddr, AccessType type
 	// needing hardware update. Implementing Svadu later would mean setting
 	// the bits atomically with respect to the walk, not just assigning them.
 	if (!(pte & PTE_A)) { cause = fault_cause(type); tval = vaddr; return false; }
+	// CacheBlock is deliberately absent: it writes nothing, so it neither
+	// requires nor sets D. It does still require A, checked just above.
 	if ((type == AccessType::Store || type == AccessType::Amo) && !(pte & PTE_D)) {
 		cause = fault_cause(type);
 		tval = vaddr;

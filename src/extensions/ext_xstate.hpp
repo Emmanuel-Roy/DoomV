@@ -53,4 +53,21 @@ inline void mark_vector_dirty(Registers &regs)
 	regs.write_csr(CSR_MSTATUS_X, regs.read_csr(CSR_MSTATUS_X) | MSTATUS_VS_DIRTY);
 }
 
+// SD (bit 63) summarises the above: it reads as one whenever FS or VS is
+// Dirty. It is read-only and derived, never stored -- storing it would let
+// a write to mstatus set a summary that contradicts the fields it
+// summarises.
+//
+// It exists so a context switch can test a single sign bit instead of
+// extracting two fields, which is exactly what supervisors do, so a hart
+// that leaves it clear tells every one of them that no extension state is
+// live. DoomV tracked FS and VS correctly and then never published the
+// summary, which riscv-arch-test's mstatus tests caught immediately.
+inline uint64_t with_sd(uint64_t mstatus)
+{
+	bool dirty = (mstatus & MSTATUS_FS_MASK) == MSTATUS_FS_DIRTY
+	          || (mstatus & MSTATUS_VS_MASK) == MSTATUS_VS_DIRTY;
+	return dirty ? (mstatus | (1ull << 63)) : (mstatus & ~(1ull << 63));
+}
+
 } // namespace vcommon
