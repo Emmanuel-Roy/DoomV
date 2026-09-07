@@ -216,10 +216,16 @@ bool gstage_translate(Registers &regs, Memory &mem, uint64_t gpa, AccessType typ
 // Instruction fetch is never masked, and neither are the addresses the page
 // table walk itself produces -- masking applies to the effective address a
 // load or store computed, and nothing further down.
-int pointer_mask_len(Registers &regs)
+int pointer_mask_len(Registers &regs, bool as_guest)
 {
 	uint64_t pmm;
-	switch (regs.get_priv()) {
+	// An hlv/hsv is not masked by the field that governs the mode issuing
+	// it. It reaches into the guest, so hstatus.HUPMM -- the hypervisor's
+	// own control over the addresses it hands to those instructions --
+	// selects the length instead. Using menvcfg here would have let the
+	// hypervisor's S-mode masking silently rewrite guest pointers.
+	if (as_guest) pmm = (regs.read_csr(CSR_HSTATUS) >> 48) & 0x3;
+	else switch (regs.get_priv()) {
 	case PrivMode::U: pmm = (regs.read_csr(CSR_SENVCFG) >> 32) & 0x3; break;
 	case PrivMode::S: pmm = (regs.read_csr(CSR_MENVCFG) >> 32) & 0x3; break;
 	default: return 0; // M-mode masking is Smmpm, which RVA23 does not mandate
@@ -231,11 +237,11 @@ int pointer_mask_len(Registers &regs)
 	}
 }
 
-uint64_t apply_pointer_mask(Registers &regs, uint64_t vaddr, AccessType type)
+uint64_t apply_pointer_mask(Registers &regs, uint64_t vaddr, AccessType type, bool as_guest)
 {
 	if (type == AccessType::Fetch) return vaddr;
 	if (!Extensions.SSNPM) return vaddr;
-	int pmlen = pointer_mask_len(regs);
+	int pmlen = pointer_mask_len(regs, as_guest);
 	if (pmlen == 0) return vaddr;
 	// Sign-extend from the highest bit that survives, discarding the top
 	// pmlen bits.
@@ -251,7 +257,7 @@ bool mmu_translate(Registers &regs, Memory &mem, uint64_t vaddr, AccessType type
 	// Masking happens before anything else, including the bare-mode path
 	// below: it transforms the effective address itself, not the
 	// translation of one, so it applies whether or not paging is on.
-	vaddr = apply_pointer_mask(regs, vaddr, type);
+	vaddr = apply_pointer_mask(regs, vaddr, type, as_guest);
 
 	// A guest access reads the guest's own satp and runs at the guest's own
 	// privilege, which is what makes hlv/hsv reach exactly the memory the

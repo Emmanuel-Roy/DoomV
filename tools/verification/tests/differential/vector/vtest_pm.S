@@ -198,11 +198,30 @@ s_wide:
 	ecall
 
 #---------------------------------------------------------------------
-# Stage 5: PMM = 1 is reserved and must behave as masking off.
+# Stage 5: PMM = 1 is reserved, and PMM is WARL.
+#
+# The first version of this stage asserted that a reserved PMM "behaves
+# as masking off" -- which quietly assumed the reserved value gets
+# stored. It does not: WARL means the field must read back a value the
+# hart implements, so a write of 1 leaves the previous legal setting
+# alone. Stage 4 left PMM=3, so masking stays at PMLEN=16 here.
+#
+# What this stage now checks is the WARL property itself -- the read-back
+# field is not 1 -- and then the behaviour that follows from whatever
+# legal value survived. The read-back is signatured as a boolean rather
+# than a raw field: *which* legal value a hart retains is its own
+# business, and diffing the raw value would compare a choice the spec
+# leaves open.
 m_reserved:
 	li	t0, 1
 	slli	t0, t0, 32
 	csrw	menvcfg, t0
+	csrr	s5, menvcfg
+	srli	s5, s5, 32
+	andi	s5, s5, 3		# s5 = the field that actually survived
+	addi	t1, s5, -1
+	snez	t1, t1			# 1 = read-back is a legal value (not 1)
+	SIGX	t1
 	li	s4, 5
 	la	t0, s_res
 	j	enter_smode
@@ -212,7 +231,20 @@ s_res:
 	li	t2, 0xfeedfeedfeedfeed
 	sd	t2, 0(s3)
 	ld	t2, 0(s1)
-	SIGX	t2			# sentinel intact: reserved behaves as off
+	# Which legal value a hart substitutes is its own choice, and the two
+	# reference models make different ones: one writes 0 (masking off, so
+	# the sentinel survives) and the other retains stage 4's PMLEN=16 (so
+	# the tagged store aliased onto it). Signaturing the loaded word would
+	# diff that choice. What is *not* open is that the two must agree:
+	# whatever PMM reads back is the length actually in force. So this
+	# checks the agreement instead, and reads 1 on any conforming hart.
+	li	t3, 0x0123456789abcdef
+	xor	t3, t2, t3
+	seqz	t3, t3			# 1 = sentinel intact (no masking happened)
+	seqz	t4, s5			# 1 = PMM reads back as off
+	xor	t3, t3, t4
+	seqz	t3, t3			# 1 = behaviour matches the readable field
+	SIGX	t3
 	ecall
 
 #---------------------------------------------------------------------

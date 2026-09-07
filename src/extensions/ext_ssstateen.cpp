@@ -30,24 +30,44 @@
 
 namespace stateen {
 
-// Which bits are writable depends on which state actually exists, and it
-// differs per register. These masks were corrected against a reference
-// after a first guess got all four wrong in different ways:
+// Which bits are writable depends on which state actually exists on this
+// hart -- these fields are WARL, and each bit names a specific extension's
+// state. That makes the mask a statement about DoomV, not something to be
+// copied from a reference.
 //
-//   mstateen0   63 SE0, 62 ENVCFG, 60 JVT (Zcmt), 0 custom state
-//   mstateen1-3 63 SE0 only -- the remaining bits name nothing yet
-//   sstateen0-3 nothing. sstateen has no SE0 at all: U-mode has no
-//               state-enable register, so there is no lower level to
-//               aggregate, and the state its other bits would gate does
-//               not exist here.
-//   hstateen0-3 nothing, for the same reason as sstateen on this hart.
+// It was copied from a reference, initially, and that was the error: spike
+// allows bits 60 (Zcmt's JVT) and 0 (custom state), which DoomV does not
+// implement, and Sail allows bit 55 (CSRIND), which it does not either.
+// The two references disagree with each other here precisely because they
+// implement different things, and matching either one would have claimed
+// state this machine does not have.
 //
-// Reporting an honest zero is the point. Software reads these to discover
-// what it must save across a context switch, so a bit that reads back set
-// claims state the machine does not have -- and a hypervisor would then
-// save and restore nothing, believing it had done its job.
-constexpr uint64_t STATEEN0_M_WMASK = (1ull << 63) | (1ull << 62) | (1ull << 60) | 1ull;
-constexpr uint64_t STATEEN_M_WMASK  = (1ull << 63);
+// What DoomV actually has:
+//
+//   63 SE0     the aggregate gate for the next lower level. Required, and
+//              what the whole hierarchy below depends on.
+//   62 ENVCFG  menvcfg/senvcfg exist here -- Svpbmt, Sstc and pointer
+//              masking all read them.
+//
+// Everything else is read-only zero: no Zcmt jump table, no Zfinx, no
+// Sdtrig context registers, no custom state. Reporting that honestly is
+// the point of the register -- software reads it to discover what it must
+// save across a context switch, and a bit that reads back set would have a
+// hypervisor saving and restoring nothing.
+//
+// sstateen has no SE0 at all: U-mode has no state-enable register, so
+// there is no lower level to aggregate. hstateen0's SE0 would gate a
+// guest's access to sstateen, but with sstateen itself empty here there is
+// nothing for it to gate.
+//
+// mstateen1-3 are read-only zero for the same reason, SE0 included. Their
+// SE0 gates sstateen1-3, which are empty on this hart, so a writable gate
+// would advertise control over nothing. The references split on this --
+// spike keeps SE0 writable, Sail hardwires it -- which is itself the
+// evidence that it is implementation-defined rather than specified, and
+// the honest answer for DoomV is the one that matches what it has.
+constexpr uint64_t STATEEN0_M_WMASK = (1ull << 63) | (1ull << 62);
+constexpr uint64_t STATEEN_M_WMASK  = 0;
 constexpr uint64_t STATEEN_SH_WMASK = 0;
 
 uint64_t wmask_for(uint16_t csr)

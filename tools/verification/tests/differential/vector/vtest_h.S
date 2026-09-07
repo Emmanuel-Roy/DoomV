@@ -70,9 +70,20 @@ _start:
 	#---- and the reserved bits must read back as zero rather than as
 	#---- whatever was written. A hypervisor probes its own capabilities
 	#---- this way, so a register that echoes writes tells it lies.
+	#---- VGEIN (bits 17:12) is excluded from the comparison. Its width is
+	#---- GEILEN, the number of guest external interrupts the platform
+	#---- wires up -- a configuration choice, not an architectural one.
+	#---- DoomV has no guest interrupt file at all, so GEILEN is 0 and the
+	#---- field is correctly read-only zero; a reference model configured
+	#---- with guest interrupts holds a nonzero value there and is equally
+	#---- correct. Diffing it would compare the two platforms, not the two
+	#---- implementations of the architecture.
 	li	t0, -1
 	csrw	hstatus, t0
 	csrr	t1, hstatus
+	li	t2, 0x3F << 12
+	not	t2, t2
+	and	t1, t1, t2
 	SIGX	t1
 	csrw	hstatus, x0
 	csrr	t1, hstatus

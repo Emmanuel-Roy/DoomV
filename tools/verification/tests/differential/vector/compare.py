@@ -519,7 +519,8 @@ LAYOUT_PM = [(2, n) for n in [
     "U-mode (Ssnpm): fault count (0)",
     "PMLEN=16: value read back",
     "PMLEN=16: fault count (0)",
-    "PMM=1 reserved behaves as off: sentinel intact",
+    "PMM=1 write is WARL: read-back is a legal value",
+    "PMM=1: masking behaviour agrees with the readable field",
 ]]
 
 # The hypervisor extension's CSR file and privilege plumbing -- H's first
@@ -674,19 +675,15 @@ LAYOUT_HDELEG = [(2, n) for n in [
 # in the same step. A latched edge would stay asserted after its cause was
 # gone.
 LAYOUT_STATEEN = [(2, n) for n in [
-    "mstateen0 after writing all-ones (WARL)",
-    "mstateen0 after clearing (0)",
-    "mstateen1 after all-ones",
-    "mstateen2 after all-ones",
-    "sstateen0 after all-ones",
-    "hstateen0 after all-ones",
-    "mstateen0 still zero: the three are distinct storage",
+    "mstateen0 SE0 writable (1)",
+    "mstateen0 SE0 clearable (0)",
+    "sstateen0/hstateen0 are distinct storage: mstateen0 still 0",
     "mhpmevent3 with OF set",
     "scountovf reflects mhpmevent3.OF (bit 3)",
     "scountovf with two counters overflowed (bits 3 and 5)",
     "mip.LCOFI pending (1)",
     "scountovf after clearing OF (0)",
-    "mip.LCOFI after clearing OF (0 -- derived, not latched)",
+    "mip.LCOFI after clearing OF",
     "mhpmevent4 with the mode-inhibit bits",
     "write to read-only scountovf: trap count (1)",
     "write to read-only scountovf: cause (2)",
@@ -718,6 +715,29 @@ LAYOUTS = {
 }
 
 
+# Known divergences: places where a *reference* is the one that departs from
+# the architecture, keyed by (test, reference, label).
+#
+# This table exists so a reference's gap stays visible instead of being
+# hidden by weakening the test. Every entry has to name what the reference
+# does and why the architecture says otherwise -- "spike disagrees" alone is
+# never a reason to add one, and an entry that cannot be justified in a
+# sentence is a bug in DoomV wearing a disguise.
+#
+# An entry does NOT belong here when the two references merely make
+# different legal choices about something the spec leaves open (a WARL
+# substitution, a configuration parameter like GEILEN or VLEN). Those are
+# not divergences at all, and the fix is to stop diffing the open choice --
+# see the PMM=1 stage in vtest_pm.S for what that looks like.
+KNOWN_DIVERGENCES = {
+    ("vtest_h", "spike", "hstatus after writing all-ones (WARL: reserved bits read zero)"):
+        "spike leaves hstatus.HUPMM (bits 49:48) read-only zero. Ssnpm gives"
+        " the hypervisor its own pointer-masking control over the addresses"
+        " hlv/hlvx/hsv compute, and RVA23S64 mandates both H and Ssnpm, so a"
+        " hart with the pair owes the field. Sail implements it and DoomV"
+        " follows Sail; this suite matches Sail on all 22 tests.",
+}
+
 def load(path):
     with open(path) as f:
         return [line.strip().lower() for line in f if line.strip()]
@@ -730,7 +750,13 @@ def main():
         return 2
     layout = LAYOUTS[test]
 
-    spike = load(os.path.join(HERE, test + ".spike.sig"))
+    # Which reference to diff against. spike is an independent
+    # implementation; sail is the formal model. The rest of this function
+    # does not care which -- a mismatch means the same thing either way,
+    # and naming it in the output is what tells the reader whose authority
+    # is being invoked.
+    ref = sys.argv[2] if len(sys.argv) > 2 else "spike"
+    spike = load(os.path.join(HERE, "%s.%s.sig" % (test, ref)))
     doomv = load(os.path.join(HERE, test + ".doomv.sig"))
 
     # An empty side means the run never produced a signature at all -- most
@@ -739,12 +765,12 @@ def main():
     # zero words otherwise reports a cheerful MATCH, which is the single most
     # misleading thing this script could do.
     if not spike or not doomv:
-        print("NO DATA: spike=%d words, doomv=%d words -- the run produced no"
-              " signature, so nothing was compared" % (len(spike), len(doomv)))
+        print("NO DATA: %s=%d words, doomv=%d words -- the run produced no"
+              " signature, so nothing was compared" % (ref, len(spike), len(doomv)))
         return 2
     if len(spike) != len(doomv):
-        print("LENGTH MISMATCH: spike=%d doomv=%d -- comparing the common"
-              " prefix only" % (len(spike), len(doomv)))
+        print("LENGTH MISMATCH: %s=%d doomv=%d -- comparing the common"
+              " prefix only" % (ref, len(spike), len(doomv)))
 
     n = min(len(spike), len(doomv))
     bad = []
@@ -763,12 +789,36 @@ def main():
         if extra:
             bad.append(("(past end of layout table)", idx, n - idx, extra))
 
+    # Split off the differences already understood as the reference's own
+    # departure from the architecture. They are reported, but they do not
+    # fail the run -- what would fail it is one of them silently going away,
+    # so a stale entry is listed too.
+    known = [b for b in bad if (test, ref, b[0]) in KNOWN_DIVERGENCES]
+    bad = [b for b in bad if (test, ref, b[0]) not in KNOWN_DIVERGENCES]
+    for label, start, words, diffs in known:
+        print("KNOWN DIVERGENCE (%s): %s" % (ref, label))
+        print("    %s" % KNOWN_DIVERGENCES[(test, ref, label)])
+        print("")
+    stale = [k for k in KNOWN_DIVERGENCES
+             if k[0] == test and k[1] == ref
+             and k[2] not in [b[0] for b in known]]
+    for k in stale:
+        print("STALE KNOWN DIVERGENCE: %s no longer differs -- drop the entry" % (k[2],))
+        print("")
+
     if not bad:
         if len(spike) != len(doomv):
-            print("%s: common prefix of %d words matches, but the two dumps are"
-                  " different lengths" % (test, n))
+            print("%s vs %s: common prefix of %d words matches, but the two"
+                  " dumps are different lengths" % (test, ref, n))
             return 1
-        print("MATCH: %s -- all %d words identical (%d tests)" % (test, n, len(layout)))
+        if known:
+            # Not "identical" -- saying so with a divergence outstanding is
+            # exactly the kind of quietly-wrong pass this harness exists to
+            # catch.
+            print("MATCH: %s vs %s -- %d tests, %d known divergence(s) above"
+                  % (test, ref, len(layout), len(known)))
+        else:
+            print("MATCH: %s vs %s -- all %d words identical (%d tests)" % (test, ref, n, len(layout)))
         return 0
 
     print("MISMATCH in %d of %d tests:\n" % (len(bad), len(layout)))
@@ -776,7 +826,7 @@ def main():
         print("  %s  (words %d..%d)" % (label, start, start + words - 1))
         for i in range(start, min(start + words, n)):
             mark = "  <-- DIFF" if i in diffs else ""
-            print("      [%3d] spike=%s doomv=%s%s" % (i, spike[i], doomv[i], mark))
+            print("      [%3d] %s=%s doomv=%s%s" % (i, ref, spike[i], doomv[i], mark))
         print("")
     return 1
 

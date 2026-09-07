@@ -111,6 +111,17 @@ def main():
         else:
             unknown.append(name)
 
+    # VLEN must match the device under test. DoomV is fixed at 128 bits
+    # (Registers::VLEN_BITS) and Sail defaults to 256, which makes every
+    # vector test disagree for a reason that has nothing to do with
+    # correctness -- the two machines are simply different widths. ELEN is
+    # 64 on both, so only vlen_exp needs setting.
+    #
+    # This is a property of the device under test rather than of RVA23: the
+    # profile mandates Zvl128b, a *minimum* of 128, and both 128 and 256
+    # satisfy it.
+    cfg["extensions"]["V"]["vlen_exp"] = 7   # 2**7 = 128 bits
+
     # PMP is deliberately left at the model's default rather than disabled.
     #
     # Sail implements it faithfully: with entries present but none

@@ -1,14 +1,27 @@
 #!/usr/bin/env bash
-# End-to-end differential test: builds each test, runs it under spike
-# (reference) and DoomV (device under test), and diffs the signature dumps.
+# End-to-end differential test: builds each test, runs it under a reference
+# and under DoomV (the device under test), and diffs the signature dumps.
 #
 # Run from a POSIX shell on the Windows side (Git Bash). DoomV is a native
-# .exe while the cross-compiler and spike live in WSL, so this drives both.
+# .exe while the cross-compiler and both references live in WSL, so this
+# drives across the boundary.
 #
-#   ./run_diff.sh            # all tests
-#   ./run_diff.sh vtest_zb   # just one
+#   ./run_diff.sh                      # every test, against spike
+#   ./run_diff.sh vtest_zb             # one test
+#   ./run_diff.sh --ref sail           # every test, against the Sail model
+#   ./run_diff.sh --ref sail vtest_zb  # one test, against Sail
 #
-# Env: DISTRO (default Ubuntu), SPIKE (passed through to spike_sig.sh).
+# Two references, and they are not interchangeable in authority. spike is an
+# independent implementation; Sail is the formal specification, generated
+# from the same source the architecture is defined in. Where they disagree,
+# Sail is the stronger claim -- and it is the only one with RVA23 profile
+# configurations.
+#
+# Running both is worth the time. Sail is what caught these tests depending
+# on spike's permissive PMP default, which spike could not have revealed
+# because it was the thing being depended on.
+#
+# Env: DISTRO (default Ubuntu), SPIKE / SAIL / SAIL_CONFIG (passed through).
 set -u
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -18,6 +31,16 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 # a missing signature.
 ROOT="$(cd "$HERE/../../../../.." && pwd)"
 DISTRO="${DISTRO:-Ubuntu}"
+
+REF=spike
+if [ "${1:-}" = "--ref" ]; then
+	REF="${2:-spike}"; shift 2
+fi
+case "$REF" in
+spike|sail) ;;
+*) echo "unknown reference '$REF' (expected spike or sail)" >&2; exit 2 ;;
+esac
+
 TESTS=("${@:-vtest_v vtest_zb}")
 [ $# -gt 0 ] && TESTS=("$@") || TESTS=(vtest_v vtest_zb vtest_fd vtest_mmu vtest_trap vtest_restart vtest_hints vtest_csr vtest_zvbb vtest_zfa vtest_zfh vtest_zvfh vtest_sv vtest_pm vtest_h vtest_hlv vtest_hgatp vtest_hdeleg vtest_stateen)
 
@@ -52,7 +75,7 @@ march_for() {
 	vtest_zvfh) echo "rv64imafdcv_zicsr_zifencei" ;;
 	vtest_sv) echo "rv64imafdc_zicsr_zifencei_svinval_svnapot_svpbmt" ;;
 	vtest_pm) echo "rv64imafdc_zicsr_zifencei_ssnpm_smnpm" ;;
-	vtest_h) echo "rv64imafdch_zicsr_zifencei" ;;
+	vtest_h) echo "rv64imafdch_zicsr_zifencei_ssnpm_smnpm" ;;
 	vtest_hlv) echo "rv64imafdch_zicsr_zifencei" ;;
 	vtest_hgatp) echo "rv64imafdch_zicsr_zifencei" ;;
 	vtest_hdeleg) echo "rv64imafdch_zicsr_zifencei" ;;
@@ -66,7 +89,14 @@ for t in "${TESTS[@]}"; do
 	echo "  $t"
 	echo "=============================================================="
 
+	# The Sail path still needs spike_sig.sh to have built the ELF, since
+	# that is where the per-test -march mapping lives. Build via spike_sig
+	# either way, then dump the signature with whichever reference was
+	# asked for.
 	wsl_run bash "$HERE_WSL/spike_sig.sh" "$t" || { echo "spike side failed"; fail=1; continue; }
+	if [ "$REF" = sail ]; then
+		wsl_run bash "$HERE_WSL/sail_sig.sh" "$t" || { echo "sail side failed"; fail=1; continue; }
+	fi
 
 	# grep/cut rather than awk: an awk program full of $1/$3 has to survive
 	# two levels of shell quoting on the way to WSL, and loses.
@@ -100,7 +130,7 @@ for t in "${TESTS[@]}"; do
 		echo "DoomV produced no signature.log"; fail=1; continue
 	fi
 
-	python "$HERE/compare.py" "$t" || fail=1
+	python "$HERE/compare.py" "$t" "$REF" || fail=1
 	echo ""
 done
 

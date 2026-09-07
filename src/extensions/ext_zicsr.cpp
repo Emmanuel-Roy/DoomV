@@ -780,6 +780,19 @@ void RiscvCore::exec_32ZICSR(const DecodedInstruction &instr, Registers &regs, M
 	// -- the guest's write arrives here as 0x205, not 0x105.
 	if (csr == CSR_STVEC || csr == CSR_MTVEC || csr == 0x205) updated &= ~0x3ull;
 
+	// The PMM field of menvcfg/senvcfg/henvcfg (bits 33:32) selects the
+	// pointer-masking length: 0 is off, 2 is PMLEN=7, 3 is PMLEN=16. Value
+	// 1 is reserved, and WARL means a reserved value must never be readable
+	// back -- software probes this field precisely by writing a value and
+	// seeing what it gets, so storing 1 and privately treating it as "off"
+	// tells the prober this hart implements a length it does not. Retaining
+	// the previous legal field is the ordinary WARL response.
+	if (Extensions.SSNPM && (csr == CSR_MENVCFG || csr == 0x10A
+	                         || (Extensions.H && csr == 0x60A))) {
+		constexpr uint64_t PMM = 3ull << 32;
+		if (((updated >> 32) & 0x3) == 1) updated = (updated & ~PMM) | (old & PMM);
+	}
+
 	// hedeleg has read-only-zero bits, and they are not an arbitrary
 	// restriction -- each one names a trap the hypervisor must keep.
 	//

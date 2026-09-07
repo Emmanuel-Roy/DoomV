@@ -88,9 +88,20 @@ constexpr uint64_t HSTATUS_VSXL_64 = 2ull << 32;
 //   VGEIN -- selects which guest external interrupt is visible. GEILEN is
 //            zero here: there is no guest external interrupt controller at
 //            all, so any nonzero VGEIN would name something absent.
-constexpr uint64_t HSTATUS_WMASK = HSTATUS_GVA | HSTATUS_SPV | HSTATUS_SPVP
-                                 | HSTATUS_HU | HSTATUS_VTVM | HSTATUS_VTW
-                                 | HSTATUS_VTSR;
+//
+// HUPMM is present, but conditionally: it is the hypervisor's half of
+// pointer masking (Ssnpm), selecting the PMLEN applied to the addresses
+// hlv/hlvx/hsv compute. It is writable only when this hart implements
+// pointer masking at all -- advertising a masking control on a machine
+// that cannot mask would be the same lie VSBE would be.
+constexpr uint64_t HSTATUS_HUPMM = 3ull << 48;
+constexpr uint64_t HSTATUS_WMASK_BASE = HSTATUS_GVA | HSTATUS_SPV | HSTATUS_SPVP
+                                      | HSTATUS_HU | HSTATUS_VTVM | HSTATUS_VTW
+                                      | HSTATUS_VTSR;
+inline uint64_t hstatus_wmask()
+{
+	return HSTATUS_WMASK_BASE | (Extensions.SSNPM ? HSTATUS_HUPMM : 0);
+}
 
 // mstatus's virtualisation fields, both above bit 32 and so RV64-only.
 constexpr uint64_t MSTATUS_GVA = 1ull << 38;
@@ -161,12 +172,19 @@ bool is_virtual_instruction_csr(Registers &regs, uint16_t csr)
 uint64_t read_hstatus(Registers &regs)
 {
 	// VSXL is read-only: this hart's VS mode is always 64-bit.
-	return (regs.read_csr(CSR_HSTATUS) & HSTATUS_WMASK) | HSTATUS_VSXL_64;
+	return (regs.read_csr(CSR_HSTATUS) & hstatus_wmask()) | HSTATUS_VSXL_64;
 }
 
 void write_hstatus(Registers &regs, uint64_t value)
 {
-	regs.write_csr(CSR_HSTATUS, value & HSTATUS_WMASK);
+	uint64_t updated = value & hstatus_wmask();
+	// HUPMM is WARL on the same terms as the envcfg PMM fields: 0 off, 2
+	// PMLEN=7, 3 PMLEN=16, and 1 reserved. A reserved value must not read
+	// back, so an attempt to write it keeps the field it had.
+	if ((((updated >> 48) & 0x3) == 1))
+		updated = (updated & ~HSTATUS_HUPMM)
+		        | (regs.read_csr(CSR_HSTATUS) & HSTATUS_HUPMM);
+	regs.write_csr(CSR_HSTATUS, updated);
 }
 
 } // namespace hyp

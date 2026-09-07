@@ -21,6 +21,15 @@
 # faulting, which is why "does it work" cannot answer this and only the
 # value can.
 #
+# Every table edit below is followed by both sfence.vma and hfence.gvma.
+# That is not belt-and-braces: sfence.vma orders the VS-stage and S-stage
+# translations only, and has no effect on G-stage entries -- those need
+# hfence.gvma. DoomV re-walks the tables on every access and has no
+# translation cache, so it sees an edit immediately either way and the
+# distinction is invisible on it. Sail caches, correctly requires the right
+# fence, and reported no fault where one was expected. The test was wrong,
+# not the model.
+#
 # The other half is where a fault comes from. The guest's tables being happy
 # while the G-stage refuses is the case the distinct guest-page-fault causes
 # (20/21/23) exist to report -- it means the hypervisor has not backed that
@@ -224,6 +233,7 @@ _start:
 	or	t4, t4, t5
 	csrw	hgatp, t4
 	sfence.vma
+	hfence.gvma		# G-stage tables are not covered by
 
 	li	t0, 1 << 8		# SPVP = 1: guest accesses run as VS
 	csrw	hstatus, t0
@@ -267,6 +277,7 @@ hs_body:
 	addi	t5, t3, 0x11 * 8
 	sd	x0, 0(t5)
 	sfence.vma
+	hfence.gvma		# G-stage tables are not covered by
 	li	s2, 0
 	li	s3, 0
 	hlv.d	t2, (s1)
@@ -287,6 +298,7 @@ hs_body:
 	ori	t4, t4, 0xdf
 	sd	t4, 0(t5)
 	sfence.vma
+	hfence.gvma		# G-stage tables are not covered by
 	li	s2, 0
 	hlv.d	t2, (s1)
 	SIGX	s2			# 0
@@ -300,6 +312,7 @@ hs_body:
 	ori	t4, t4, 0xcf		# D A X W R V -- no U
 	sd	t4, 0(t5)
 	sfence.vma
+	hfence.gvma		# G-stage tables are not covered by
 	li	s2, 0
 	li	s3, 0
 	hlv.d	t2, (s1)
@@ -312,12 +325,14 @@ hs_body:
 	ori	t4, t4, 0xdf
 	sd	t4, 0(t5)
 	sfence.vma
+	hfence.gvma		# G-stage tables are not covered by
 
 	#---- With the guest's own paging off, its addresses ARE guest physical
 	#---- ones and only the G-stage applies. 0x80211000 must then relocate
 	#---- to the 0x3333 page via the same G-stage entry.
 	csrw	vsatp, x0
 	sfence.vma
+	hfence.gvma		# G-stage tables are not covered by
 	li	t0, 0x80211000
 	li	s2, 0
 	hlv.d	t2, (t0)

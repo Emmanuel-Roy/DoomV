@@ -57,37 +57,44 @@ _start:
 	addi	s0, s0, 8
 .endm
 
-	#---- Ssstateen: writable bits read back, the rest read zero. Writing
-	#---- all-ones and reading is how software discovers which state this
-	#---- machine actually has.
+	#---- Ssstateen. Only SE0 (bit 63) is compared, not the whole mask.
+	#----
+	#---- The rest of the mask is implementation-defined: each bit names a
+	#---- specific extension's state, so a hart advertises exactly what it
+	#---- has. spike and Sail disagree here for that reason -- spike allows
+	#---- Zcmt's JVT and custom state, Sail allows CSRIND, and DoomV has
+	#---- none of the three. Diffing the raw value would be comparing three
+	#---- different machines' feature sets and calling the differences bugs.
+	#----
+	#---- SE0 is the part that is architecturally required and that the
+	#---- gating hierarchy below actually depends on.
 	li	t0, -1
 	csrw	mstateen0, t0
 	csrr	t1, mstateen0
-	SIGX	t1
+	srli	t1, t1, 63
+	SIGX	t1			# SE0 writable: 1
 	csrw	mstateen0, x0
 	csrr	t1, mstateen0
-	SIGX	t1			# zero after clearing
+	srli	t1, t1, 63
+	SIGX	t1			# and clearable: 0
 
-	#---- the other three indices behave the same way
-	li	t0, -1
-	csrw	mstateen1, t0
-	csrr	t1, mstateen1
-	SIGX	t1
-	csrw	mstateen2, t0
-	csrr	t1, mstateen2
-	SIGX	t1
+	#---- mstateen1-3 are deliberately not compared. Their SE0 gates
+	#---- sstateen1-3, which are empty on every machine here, so whether
+	#---- the gate itself is writable is implementation-defined: spike
+	#---- keeps it, Sail hardwires it to zero. Asserting either would be
+	#---- asserting one reference's choices rather than the architecture.
 
 	#---- sstateen and hstateen are separate storage, not aliases
+	#---- sstateen and hstateen are separate storage, not aliases of
+	#---- mstateen. Checked by writing them and confirming mstateen0 is
+	#---- unchanged, rather than by comparing their own values, which are
+	#---- implementation-defined for the same reason as above.
 	li	t0, -1
 	csrw	sstateen0, t0
-	csrr	t1, sstateen0
-	SIGX	t1
 	li	t0, -1
 	csrw	hstateen0, t0
-	csrr	t1, hstateen0
-	SIGX	t1
 	csrr	t1, mstateen0
-	SIGX	t1			# mstateen0 still zero: they are distinct
+	SIGX	t1			# still zero: they are distinct storage
 
 	#---- Sscofpmf: mhpmevent's OF bit and mode-inhibit bits are writable
 	li	t0, 1
