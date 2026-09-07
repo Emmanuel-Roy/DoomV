@@ -68,3 +68,7 @@ tools/verification/tests/suites/*
 
 # SoftFloat object files (built from the spike submodule sources).
 build/
+
+# Sail instruction traces, generated on demand when diffing execution
+# against DoomV to locate a divergence. Large and reproducible.
+tools/verification/tests/archtest/sail_trace*.txt
