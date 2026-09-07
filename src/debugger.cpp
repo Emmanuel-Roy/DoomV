@@ -40,7 +40,23 @@ void Debugger::dump_signature(Memory &mem, uint64_t begin, uint64_t end, const c
 
 bool Debugger::should_halt(uint64_t pc, bool instr_was_illegal)
 {
-	if (instr_was_illegal) {
+	// An illegal instruction used to halt here unconditionally, on the
+	// reasoning -- true when it was written -- that nothing in this project
+	// had an illegal-instruction handler, so raising the trap would spin
+	// re-trapping instead of surfacing a crash log.
+	//
+	// That premise expired. OpenSBI installs a handler, Linux installs one
+	// and turns it into SIGILL, and every riscv-arch-test image installs one
+	// and *deliberately executes an illegal instruction* to check the trap.
+	// Halting instead of trapping stops the guest dead at the exact moment
+	// it was testing that it could recover -- which is how one arch-test
+	// family stopped after 743 instructions with the emulator behaving
+	// "correctly" by its own lights.
+	//
+	// The halt survives as an opt-in (break_on_illegal), because during
+	// bare-metal bring-up, before any handler exists, a crash log really is
+	// more useful than a silent loop.
+	if (instr_was_illegal && break_on_illegal) {
 		halted = true;
 		return true;
 	}

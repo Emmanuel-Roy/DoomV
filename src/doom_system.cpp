@@ -225,6 +225,17 @@ void DoomSystem::step()
 		}
 		debugger.dump_log(regs, memory, "crash.log");
 		if (has_sig_range) debugger.dump_signature(memory, sig_begin, sig_end, sig_path.c_str());
+	} else if (result.illegal) {
+		// Not halting, so the guest gets its trap. This is the ordinary
+		// path now: a guest with a handler is entitled to take the
+		// exception and carry on, and the conformance suite depends on it
+		// -- several tests execute an illegal instruction on purpose.
+		//
+		// tval is the encoding as fetched, masked to 16 bits for a
+		// compressed one, which is what the spec asks for.
+		core.raise_illegal_instruction(regs, recorded_instr);
+		memory.step_instructions(1);
+		return;
 	}
 
 	memory.step_instructions(1);

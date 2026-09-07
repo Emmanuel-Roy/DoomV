@@ -22,6 +22,9 @@ public:
 	void dump_signature(Memory &mem, uint64_t begin, uint64_t end, const char *path);
 
 	bool halted;
+	// Halt on an illegal instruction instead of letting it trap. Off by
+	// default: a guest with a handler must be allowed to take the trap.
+	bool break_on_illegal = false;
 
 	// Clears `halted` and arms a one-shot skip for `pc`. Without the skip a
 	// breakpoint could never be resumed past: pc still sits on it, so the
