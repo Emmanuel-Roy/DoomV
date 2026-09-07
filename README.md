@@ -175,7 +175,7 @@ implement in the first place. F/D passes the applicable suite as well. V
 has no formal arch-test suite upstream yet, so it's cross-checked by hand
 instead — breakpoint, full register/memory dump, compare against spike.
 
-The harness lives in `tools/vtest/` if you want to see how any of that
+The harness lives in `tools/verification/tests/differential/` if you want to see how any of that
 works or run it yourself.
 
 ## Code layout
@@ -203,12 +203,12 @@ switch statement that also handles six other things.
 
 ```
 make
-./riscv_doom.exe tools/doombuild/DOOM1.WAD tools/doombuild/doomv-free.elf
+./riscv_doom.exe tools/doom/doombuild/DOOM1.WAD tools/doom/doombuild/doomv-free.elf
 ```
 
 `DOOM1.WAD` (the shareware IWAD) is the only WAD checked into this repo —
 it's free to redistribute. Point it at your own `DOOM.WAD`/`DOOM2.WAD` if
-you own a copy, and rebuild the guest ELF from `tools/doombuild/` to match.
+you own a copy, and rebuild the guest ELF from `tools/doom/doombuild/` to match.
 
 Useful flags:
 - `-march=rv64imafdc_zicsr_zifencei` — override the enabled extension set
@@ -219,7 +219,7 @@ Useful flags:
 Key bindings live in `controls.json` if you want to remap them.
 
 The guest side — the actual Doom binary that runs *on* this CPU — is built
-separately in `tools/doombuild/`: a cross-compiled `doomgeneric` with a
+separately in `tools/doom/doombuild/`: a cross-compiled `doomgeneric` with a
 small platform layer (`doomgeneric_doomv.c`, `w_file_doomv.c`, a libc
 shim) that talks to DoomV's MMIO instead of a real OS.
 

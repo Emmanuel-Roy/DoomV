@@ -28,7 +28,7 @@ public:
 
 	// RAM_BASE moved from the original 0x10041000 for Stage 3: OpenSBI's
 	// `generic` platform build hardcodes its own load/entry address
-	// (FW_TEXT_START, see tools/opensbi/build.sh) to 0x80000000 and
+	// (FW_TEXT_START, see tools/linux/opensbi/build.sh) to 0x80000000 and
 	// requires it 2MB-aligned -- 0x10041000 wasn't, and rather than
 	// override+rebuild OpenSBI to match some other aligned address,
 	// matching OpenSBI's own already-built default is strictly simpler

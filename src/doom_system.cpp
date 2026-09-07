@@ -39,7 +39,7 @@ bool DoomSystem::init_linux_boot(const char *sbi_path, const char *kernel_path, 
 	linux_mode = true;
 
 	// fw_jump.elf's own build-time FW_TEXT_START already is RAM_BASE (see
-	// tools/opensbi/build.sh) -- load_elf places it there unmodified, same
+	// tools/linux/opensbi/build.sh) -- load_elf places it there unmodified, same
 	// as Doom's own guest ELF above.
 	if (!memory.load_elf(sbi_path)) return false;
 
@@ -48,7 +48,7 @@ bool DoomSystem::init_linux_boot(const char *sbi_path, const char *kernel_path, 
 	// The initrd offset (+0x2300000) is DoomV's own choice, not something
 	// fw_jump.elf cares about -- it just needs to sit past the DTB with
 	// headroom and match the DTB's own linux,initrd-start (see
-	// tools/rootfs/README.md).
+	// tools/linux/rootfs/README.md).
 	if (!memory.load_blob(kernel_path, Memory::RAM_BASE + 0x200000)) return false;
 	if (!memory.load_blob(dtb_path, Memory::RAM_BASE + 0x2200000)) return false;
 	if (!memory.load_blob(initrd_path, Memory::RAM_BASE + 0x2300000)) return false;
@@ -66,7 +66,7 @@ uint8_t DoomSystem::translate_key(uint32_t sdl_keysym) const
 	if (mapped != 0) return mapped;
 
 	// Numeric values match doomkeys.h exactly (KEY_RIGHTARROW etc) -- see
-	// tools/doombuild/doomgeneric/doomgeneric/doomkeys.h. Arrow keys stay
+	// tools/doom/doombuild/doomgeneric/doomgeneric/doomkeys.h. Arrow keys stay
 	// here too (not in controls.json) so they keep working alongside WASD.
 	switch (sdl_keysym) {
 	case SDLK_RIGHT:     return 0xae;

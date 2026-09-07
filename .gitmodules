@@ -1,20 +1,31 @@
-[submodule "tools/doombuild/doomgeneric"]
-	path = tools/doombuild/doomgeneric
+[submodule "tools/doom/doombuild/doomgeneric"]
+	path = tools/doom/doombuild/doomgeneric
 	url = https://github.com/ozkl/doomgeneric.git
-[submodule "tools/opensbi/src"]
-	path = tools/opensbi/src
+[submodule "tools/linux/opensbi/src"]
+	path = tools/linux/opensbi/src
 	url = https://github.com/riscv-software-src/opensbi.git
-[submodule "tools/linux/src"]
-	path = tools/linux/src
+[submodule "tools/linux/linux/src"]
+	path = tools/linux/linux/src
 	url = https://github.com/torvalds/linux.git
 	shallow = true
-[submodule "tools/spike/src"]
-	path = tools/spike/src
+[submodule "tools/verification/simulators/spike/src"]
+	path = tools/verification/simulators/spike/src
 	url = https://github.com/riscv-software-src/riscv-isa-sim.git
-[submodule "tools/vtest/arch-test-src"]
-	path = tools/vtest/arch-test-src
+[submodule "tools/verification/tests/arch-test"]
+	path = tools/verification/tests/arch-test
 	url = https://github.com/riscv-non-isa/riscv-arch-test.git
-	branch = old-framework-3.x
-[submodule "tools/rootfs/src"]
-	path = tools/rootfs/src
+	branch = main
+[submodule "tools/linux/rootfs/src"]
+	path = tools/linux/rootfs/src
 	url = https://github.com/mirror/busybox.git
+[submodule "tools/verification/simulators/sail/src"]
+	path = tools/verification/simulators/sail/src
+	url = https://github.com/riscv/sail-riscv.git
+[submodule "tools/verification/simulators/veer-iss/src"]
+	path = tools/verification/simulators/veer-iss/src
+	url = https://github.com/chipsalliance/VeeR-ISS.git
+	branch = main
+[submodule "tools/verification/simulators/whisper/src"]
+	path = tools/verification/simulators/whisper/src
+	url = https://github.com/tenstorrent/whisper.git
+	branch = master

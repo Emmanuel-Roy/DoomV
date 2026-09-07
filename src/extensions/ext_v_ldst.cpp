@@ -8,7 +8,7 @@
 // trapping. This needs to know a fault is *about to* happen without taking
 // it, which translate_or_trap cannot express -- mmu_translate reports the
 // fault instead of entering it, and that is the distinction the FOF path
-// uses. Only the non-faulting case is covered by tools/vtest/vector, since
+// uses. Only the non-faulting case is covered by tools/verification/tests/differential/vector, since
 // making an access fault on purpose needs Sv39 paging set up inside the
 // test; the faulting path is exercised in practice by glibc's strlen,
 // which is the reason the encoding exists.

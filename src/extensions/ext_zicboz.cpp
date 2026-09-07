@@ -16,7 +16,7 @@
 //     permission -- not read. Translating it as a load would let a
 //     read-only page be silently zeroed.
 //
-// The block size is CBOZ_BLOCK_SIZE below, and is what tools/dts/doomv.dts
+// The block size is CBOZ_BLOCK_SIZE below, and is what tools/linux/dts/doomv.dts
 // advertises as riscv,cboz-block-size. The two have to agree: Linux reads
 // the DT value and issues exactly that many bytes' worth of cbo.zero per
 // page, so a mismatch would leave part of each page uncleared.

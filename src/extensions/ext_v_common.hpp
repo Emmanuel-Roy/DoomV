@@ -127,7 +127,7 @@ inline bool mask_bit(const Registers &regs, uint64_t idx)
 // other register left its real destination untouched and silently
 // clobbered the active mask instead -- `vmsne.vv v9, v1, v2` produced an
 // all-zero v9, which then made vmor.mm and vfirst.m wrong downstream.
-// Caught by the spike differential test in tools/vtest/vector/.
+// Caught by the spike differential test in tools/verification/tests/differential/vector/.
 inline void set_mask_bit(Registers &regs, int vd, uint64_t idx, bool bit)
 {
 	uint8_t *v = regs.write_v(vd);
@@ -161,7 +161,7 @@ inline bool ldst_mew(uint8_t funct7) { return (funct7 >> 3) & 1; }
 // used as an index vector, and indexed-unordered (01) became unit-stride
 // (00), ignoring the index vector entirely. Unit-stride and
 // indexed-ordered happened to survive the mangling, which is why this went
-// unnoticed. Caught by tools/vtest/vector's spike diff.
+// unnoticed. Caught by tools/verification/tests/differential/vector's spike diff.
 inline uint8_t ldst_mop(uint8_t funct7) { return (funct7 >> 1) & 0x3; }
 inline bool ldst_vm(uint8_t funct7) { return funct7 & 1; }
 

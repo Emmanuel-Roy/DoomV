@@ -23,8 +23,8 @@ public:
 	// FW_TEXT_START -- see src/memory.hpp), the kernel Image, the
 	// initramfs, and the compiled DTB via load_blob at the offsets
 	// fw_jump.elf/the DTB itself were built expecting (FW_JUMP_ADDR /
-	// FW_JUMP_FDT_ADDR, see tools/opensbi/build.sh, and
-	// tools/rootfs/README.md for the initrd offset), then sets up the
+	// FW_JUMP_FDT_ADDR, see tools/linux/opensbi/build.sh, and
+	// tools/linux/rootfs/README.md for the initrd offset), then sets up the
 	// M-mode entry state the RISC-V SBI/Linux boot protocol requires: pc
 	// at RAM_BASE, a0=hart id, a1=DTB pointer.
 	bool init_linux_boot(const char *sbi_path, const char *kernel_path, const char *dtb_path, const char *initrd_path);

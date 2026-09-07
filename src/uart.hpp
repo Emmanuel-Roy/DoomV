@@ -3,7 +3,7 @@
 #include <mutex>
 
 // Minimal 8250/16550-compatible UART -- just enough register behavior for
-// OpenSBI's own driver (tools/opensbi/src/lib/utils/serial/uart8250.c) to
+// OpenSBI's own driver (tools/linux/opensbi/src/lib/utils/serial/uart8250.c) to
 // treat it as a real console. Register offsets/defaults (reg-shift=0,
 // reg-io-width=1, reg-offset=0 -- confirmed against fdt_helper.c's
 // DEFAULT_UART_REG_* constants) mean this needs no DTS overrides.
