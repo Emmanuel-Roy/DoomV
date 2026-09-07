@@ -14,6 +14,7 @@ void parse_march(const std::string &march)
 	Extensions.SVINVAL = Extensions.SVNAPOT = Extensions.SVPBMT = false;
 	Extensions.SSNPM = false;
 	Extensions.H = false;
+	Extensions.SSCOFPMF = Extensions.SSSTATEEN = false;
 
 	size_t pos = 0;
 	if (march.rfind("rv64", 0) == 0) { Extensions.XLEN64 = true; pos = 4; }
@@ -58,6 +59,8 @@ void parse_march(const std::string &march)
 	if (march.find("svinval") != std::string::npos) Extensions.SVINVAL = true;
 	if (march.find("svnapot") != std::string::npos) Extensions.SVNAPOT = true;
 	if (march.find("svpbmt") != std::string::npos) Extensions.SVPBMT = true;
+	if (march.find("sscofpmf") != std::string::npos) Extensions.SSCOFPMF = true;
+	if (march.find("ssstateen") != std::string::npos) Extensions.SSSTATEEN = true;
 	if (march.find("ssnpm") != std::string::npos || march.find("smnpm") != std::string::npos
 	    || march.find("sspm") != std::string::npos) Extensions.SSNPM = true;
 	// "h" as a single letter, the way misa spells it. Checked against the

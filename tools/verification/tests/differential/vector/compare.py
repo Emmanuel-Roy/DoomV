@@ -658,6 +658,43 @@ LAYOUT_HDELEG = [(2, n) for n in [
     "ebreak undelegated: guest handler never ran (0)",
 ]]
 
+# Ssstateen and Sscofpmf -- the two RVA23 mandatory extensions a
+# hand-written phase plan missed, both being CSRs and an interrupt with no
+# instructions of their own.
+#
+# The stateen entries check honest WARL reporting: software reads these to
+# discover what state it must save across a context switch, so a bit that
+# reads back set claims state the machine does not have. The last three
+# check the hierarchy -- mstateen0.SE0 clear must deny S-mode the register
+# entirely, which is what lets a hypervisor withhold state it cannot
+# context-switch.
+#
+# The LCOFI pair is the Sscofpmf design point: the interrupt is derived
+# from the OF bits rather than latched, so clearing OF clears the interrupt
+# in the same step. A latched edge would stay asserted after its cause was
+# gone.
+LAYOUT_STATEEN = [(2, n) for n in [
+    "mstateen0 after writing all-ones (WARL)",
+    "mstateen0 after clearing (0)",
+    "mstateen1 after all-ones",
+    "mstateen2 after all-ones",
+    "sstateen0 after all-ones",
+    "hstateen0 after all-ones",
+    "mstateen0 still zero: the three are distinct storage",
+    "mhpmevent3 with OF set",
+    "scountovf reflects mhpmevent3.OF (bit 3)",
+    "scountovf with two counters overflowed (bits 3 and 5)",
+    "mip.LCOFI pending (1)",
+    "scountovf after clearing OF (0)",
+    "mip.LCOFI after clearing OF (0 -- derived, not latched)",
+    "mhpmevent4 with the mode-inhibit bits",
+    "write to read-only scountovf: trap count (1)",
+    "write to read-only scountovf: cause (2)",
+    "mstateen0.SE0 clear: S-mode denied sstateen0 (1)",
+    "mstateen0.SE0 clear: cause (2)",
+    "mstateen0.SE0 set: same access permitted (0)",
+]]
+
 LAYOUTS = {
     "vtest_v": LAYOUT_V,
     "vtest_zb": LAYOUT_ZB,
@@ -677,6 +714,7 @@ LAYOUTS = {
     "vtest_hlv": LAYOUT_HLV,
     "vtest_hgatp": LAYOUT_HGATP,
     "vtest_hdeleg": LAYOUT_HDELEG,
+    "vtest_stateen": LAYOUT_STATEEN,
 }
 
 

@@ -78,6 +78,12 @@ struct ExtensionConfig {
 	// redirection), so a guest that never asked for virtualisation should
 	// not have to pay for it.
 	bool H = false;
+	// Both are RVA23 mandatory, and both are CSR-and-interrupt extensions
+	// with no instructions of their own -- which is exactly why they were
+	// missed until DoomV was audited against the profile's own machine-
+	// readable extension list rather than against a hand-written plan.
+	bool SSCOFPMF = true;
+	bool SSSTATEEN = true;
 
 	// Base ISA width, not an optional extension. Registers/Memory always
 	// store values in 64-bit containers regardless of this flag: RV32

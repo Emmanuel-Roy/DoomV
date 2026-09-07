@@ -2,6 +2,8 @@
 // write. Also owns the M-mode trap-entry sequence (enter_trap), since ECALL/
 // EBREAK are the only things in this project that ever trigger one.
 #include "ext_h.hpp"
+#include "ext_sscofpmf.hpp"
+#include "ext_ssstateen.hpp"
 #include "ext_zicntr.hpp"
 #include "riscv_decoder.hpp"
 #include "riscv_core.hpp"
@@ -133,7 +135,17 @@ constexpr uint64_t MIP_MEIP = 1ull << 11;
 // all -- purely timer-derived and purely IMSIC-M-derived respectively,
 // matching real hardware where M-mode's own sources are never
 // software-injectable.
-constexpr uint64_t MIP_SHADOW_MASK = MIP_SSIP | MIP_MSIP | MIP_SEIP | MIP_STIP;
+// Sscofpmf's LCOFI joins the software-settable shadow bits rather than
+// being computed from the mhpmevent OF bits.
+//
+// That was worth getting wrong once to learn: the two are related but not
+// the same signal. Hardware raises LCOFI at the *moment* a counter
+// overflows, and it then stays pending until software clears it -- exactly
+// like a device interrupt. Deriving it from OF instead would make it
+// impossible for a handler to clear the interrupt without also clearing the
+// overflow record it was about to read.
+constexpr uint64_t MIP_LCOFIP = 1ull << 13;
+constexpr uint64_t MIP_SHADOW_MASK = MIP_SSIP | MIP_MSIP | MIP_SEIP | MIP_STIP | MIP_LCOFIP;
 
 constexpr uint64_t MENVCFG_STCE = 1ull << 63;
 
@@ -164,6 +176,7 @@ uint64_t compute_mip(Registers &regs, Memory &mem)
 {
 	uint64_t raw = regs.read_csr(CSR_MIP) & MIP_SHADOW_MASK;
 	uint64_t mip = raw & (MIP_MSIP | MIP_SSIP);
+
 	if (mem.get_timer().mtip_pending()) mip |= MIP_MTIP;
 	if ((raw & MIP_STIP) || stip_from_sstc(regs, mem)) mip |= MIP_STIP;
 	if (mem.get_imsic_m().aggregate_pending()) mip |= MIP_MEIP;
@@ -371,6 +384,16 @@ bool RiscvCore::csr_access_permitted(Registers &regs, uint16_t csr, bool writing
 	if (counters::is_counter_csr(csr) && !counters::counter_permitted(regs, csr))
 		return false;
 
+	// The stateen registers gate each other down the privilege hierarchy:
+	// mstateen's SE0 bit controls whether sstateen and hstateen are
+	// reachable at all from below M, and hstateen's controls whether a
+	// guest may reach sstateen. Denying at the top denies all the way
+	// down, which is what lets a hypervisor withhold state it does not
+	// understand well enough to context-switch.
+	if (Extensions.SSSTATEEN && stateen::is_stateen_csr(csr)
+	    && !stateen::stateen_access_permitted(regs, csr))
+		return false;
+
 	return true;
 }
 
@@ -392,6 +415,10 @@ uint64_t RiscvCore::read_csr_effective(Registers &regs, Memory &mem, uint16_t cs
 	// here as an mtime alias; the other two read the same counter for the
 	// reason ext_zicntr.cpp explains.
 	if (counters::is_counter_csr(csr)) return counters::read_counter(regs, mem, csr);
+	// scountovf has no storage of its own -- it is assembled from the OF
+	// bits of every mhpmevent, so the two cannot drift apart.
+	if (Extensions.SSCOFPMF && csr == sscofpmf::CSR_SCOUNTOVF) return sscofpmf::read_scountovf(regs);
+	if (Extensions.SSSTATEEN && stateen::is_stateen_csr(csr)) return stateen::read_stateen(regs, csr);
 	if (csr == 0x001) return regs.get_fflags();
 	if (csr == 0x002) return regs.get_frm();
 	if (csr == 0x003) return ((uint64_t)regs.get_frm() << 5) | regs.get_fflags();
@@ -785,6 +812,9 @@ void RiscvCore::exec_32ZICSR(const DecodedInstruction &instr, Registers &regs, M
 
 	if (csr == 0x100) write_sstatus(regs, updated);
 	else if (Extensions.H && csr == hyp::CSR_HSTATUS_ADDR) hyp::write_hstatus(regs, updated);
+	else if (Extensions.SSCOFPMF && sscofpmf::is_mhpmevent(csr))
+		regs.write_csr(csr, updated & sscofpmf::mhpmevent_wmask());
+	else if (Extensions.SSSTATEEN && stateen::is_stateen_csr(csr)) stateen::write_stateen(regs, csr, updated);
 	else if (csr == CSR_SATP) write_satp(regs, updated);
 	// vsatp is satp as far as a guest is concerned -- same MODE field,
 	// same WARL rule, reached through the same name. It needs the same

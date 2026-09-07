@@ -12,10 +12,14 @@
 set -u
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
+# Five levels up, not three: this suite moved from tools/vtest/vector to
+# tools/verification/tests/differential/vector. Getting this wrong does not
+# fail loudly -- ROOT would point inside tools/ and every run would report
+# a missing signature.
 ROOT="$(cd "$HERE/../../../../.." && pwd)"
 DISTRO="${DISTRO:-Ubuntu}"
 TESTS=("${@:-vtest_v vtest_zb}")
-[ $# -gt 0 ] && TESTS=("$@") || TESTS=(vtest_v vtest_zb vtest_fd vtest_mmu vtest_trap vtest_restart vtest_hints vtest_csr vtest_zvbb vtest_zfa vtest_zfh vtest_zvfh vtest_sv vtest_pm vtest_h vtest_hlv vtest_hgatp vtest_hdeleg)
+[ $# -gt 0 ] && TESTS=("$@") || TESTS=(vtest_v vtest_zb vtest_fd vtest_mmu vtest_trap vtest_restart vtest_hints vtest_csr vtest_zvbb vtest_zfa vtest_zfh vtest_zvfh vtest_sv vtest_pm vtest_h vtest_hlv vtest_hgatp vtest_hdeleg vtest_stateen)
 
 # Windows path -> WSL mount point (Z:\Code\... -> /mnt/z/Code/...).
 win_to_wsl() {
@@ -52,6 +56,7 @@ march_for() {
 	vtest_hlv) echo "rv64imafdch_zicsr_zifencei" ;;
 	vtest_hgatp) echo "rv64imafdch_zicsr_zifencei" ;;
 	vtest_hdeleg) echo "rv64imafdch_zicsr_zifencei" ;;
+	vtest_stateen) echo "rv64imafdch_zicsr_zifencei_sscofpmf_ssstateen" ;;
 	esac
 }
 
@@ -85,7 +90,7 @@ for t in "${TESTS[@]}"; do
 
 	( cd "$ROOT" && rm -f signature.log crash.log &&
 	  timeout 180 ./riscv_doom.exe tools/doom/doombuild/DOOM1.WAD \
-		"tools/vtest/vector/$t.elf" -march="$(march_for "$t")" \
+		"tools/verification/tests/differential/vector/$t.elf" -march="$(march_for "$t")" \
 		-sig="$BEG:$END" -break="0x$HALT" >/dev/null 2>&1 )
 
 	if [ -f "$ROOT/signature.log" ]; then cp "$ROOT/signature.log" "$HERE/$t.doomv.sig"; fi
