@@ -456,7 +456,7 @@ uint64_t RiscvCore::read_csr_effective(Registers &regs, Memory &mem, uint16_t cs
 	return regs.read_csr(csr);
 }
 
-bool RiscvCore::translate_or_trap(Registers &regs, Memory &mem, uint64_t vaddr, AccessType type, uint64_t &paddr)
+bool RiscvCore::translate_or_trap(Registers &regs, Memory &mem, uint64_t vaddr, AccessType type, uint64_t &paddr, unsigned size)
 {
 	uint64_t cause, tval;
 	if (!mmu_translate(regs, mem, vaddr, type, paddr, cause, tval)) {
@@ -485,7 +485,7 @@ bool RiscvCore::translate_or_trap(Registers &regs, Memory &mem, uint64_t vaddr, 
 
 	// Physical memory attributes come first: an address nothing answers is
 	// an access fault regardless of what PMP would have said about it.
-	if (!mem.is_backed(paddr, 1)) {
+	if (!mem.is_backed(paddr, size)) {
 		enter_trap(regs, access_cause(type), vaddr);
 		return false;
 	}
@@ -499,7 +499,7 @@ bool RiscvCore::translate_or_trap(Registers &regs, Memory &mem, uint64_t vaddr, 
 		int acc = (type == AccessType::Fetch) ? pmp::ACC_FETCH
 		        : (type == AccessType::Load)  ? pmp::ACC_LOAD
 		                                      : pmp::ACC_STORE;
-		if (!pmp::check(regs, paddr, 1, acc, priv)) {
+		if (!pmp::check(regs, paddr, size, acc, priv)) {
 			uint64_t c = access_cause(type);
 			// tval is the faulting *virtual* address, as for a page fault.
 			enter_trap(regs, c, vaddr);

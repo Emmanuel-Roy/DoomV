@@ -69,8 +69,27 @@ void RiscvCore::exec_32A(const DecodedInstruction &instr, Registers &regs, Memor
 	AccessType amo_access = (amo_op == 0b00010) ? AccessType::Load
 	                       : (amo_op == 0b00011) ? AccessType::Store
 	                                              : AccessType::Amo;
+	// Every A-extension access must be naturally aligned, and unlike an
+	// ordinary load or store this is not softened by Zicclsm: an atomic
+	// spanning two naturally-aligned units is not something hardware can
+	// perform, so the architecture requires the exception rather than
+	// emulating it. DoomV checked nothing here and quietly did the access.
+	//
+	// The order matters and is not the obvious one. Translation, and with
+	// it the physical-memory and PMP checks, happens *first*: an atomic to
+	// an unreachable address reports the access fault even when the address
+	// is also misaligned. Checking alignment first reports cause 6 where
+	// the reference reports 7.
+	unsigned width = is64 ? 8 : 4;
 	uint64_t paddr;
-	if (!translate_or_trap(regs, mem, addr, amo_access, paddr)) return;
+	if (!translate_or_trap(regs, mem, addr, amo_access, paddr, width)) return;
+	if (addr & (width - 1)) {
+		constexpr uint64_t CAUSE_STORE_MISALIGNED = 6;
+		constexpr uint64_t CAUSE_LOAD_MISALIGNED  = 4;
+		enter_trap(regs, (amo_op == 0b00010) ? CAUSE_LOAD_MISALIGNED
+		                                     : CAUSE_STORE_MISALIGNED, addr);
+		return;
+	}
 
 	if (amo_op == 0b00011) { // SC.W/SC.D
 		if (reservation_valid && reservation_addr == addr) {

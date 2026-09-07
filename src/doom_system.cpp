@@ -182,14 +182,32 @@ void DoomSystem::step()
 		return;
 	}
 
+	// Fetch a halfword at a time, because that is the unit the
+	// architecture checks. A four-byte instruction may sit across a page
+	// boundary or across the edge of a PMP region, with the two halves
+	// answering differently -- and with C, an instruction can start on any
+	// even address, so this is ordinary rather than exotic. Translating
+	// once at pc and reading four bytes gets the second half from whatever
+	// happened to follow the first page, silently.
+	//
+	// The length is in the low two bits of the first halfword, so the
+	// second fetch only happens when there really is a second halfword.
 	uint64_t fetch_paddr;
-	if (!core.translate_or_trap(regs, memory, pc, AccessType::Fetch, fetch_paddr)) {
+	if (!core.translate_or_trap(regs, memory, pc, AccessType::Fetch, fetch_paddr, 2)) {
 		// A page fault redirected pc into the trap handler already --
 		// nothing more to do for this step.
 		memory.step_instructions(1);
 		return;
 	}
-	uint32_t instr = memory.read32(fetch_paddr);
+	uint32_t instr = memory.read16(fetch_paddr);
+	if ((instr & 0x3) == 0x3) {
+		uint64_t hi_paddr;
+		if (!core.translate_or_trap(regs, memory, pc + 2, AccessType::Fetch, hi_paddr, 2)) {
+			memory.step_instructions(1);
+			return;
+		}
+		instr |= (uint32_t)memory.read16(hi_paddr) << 16;
+	}
 	DispatchResult result = decoder.decode_and_dispatch(pc, instr);
 	// A compressed instruction's raw fetch also contains the next
 	// instruction's bytes in its upper half -- mask those off so the

@@ -49,7 +49,12 @@ public:
 	// On a page fault this enters a trap itself (same as enter_trap below)
 	// and returns false -- the caller should just abort the instruction
 	// without touching Memory, since pc has already been redirected.
-	bool translate_or_trap(Registers &regs, Memory &mem, uint64_t vaddr, AccessType type, uint64_t &paddr);
+	// `size` is the number of bytes the access covers, and it matters:
+	// PMP denies an access that straddles the edge of a region even when
+	// both sides would permit it, and physical memory attributes likewise
+	// apply to the whole access. Passing 1 for a wider access silently
+	// skips both checks.
+	bool translate_or_trap(Registers &regs, Memory &mem, uint64_t vaddr, AccessType type, uint64_t &paddr, unsigned size = 1);
 
 	// Called once per DoomSystem::step(), before fetch. Computes the
 	// effective mip & mie, picks the highest-priority pending+enabled+
