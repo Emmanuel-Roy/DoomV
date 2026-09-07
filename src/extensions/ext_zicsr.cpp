@@ -496,10 +496,23 @@ bool RiscvCore::translate_or_trap(Registers &regs, Memory &mem, uint64_t vaddr, 
 			uint64_t st = regs.read_csr(CSR_MSTATUS);
 			if (st & MSTATUS_MPRV) priv = (uint8_t)((st >> 11) & 3);
 		}
-		int acc = (type == AccessType::Fetch) ? pmp::ACC_FETCH
-		        : (type == AccessType::Load)  ? pmp::ACC_LOAD
-		                                      : pmp::ACC_STORE;
-		if (!pmp::check(regs, paddr, size, acc, priv)) {
+		// A cache-block operation is permitted by PMP on read *or* write,
+		// the same rule its page permissions follow. Funnelling it into the
+		// store check demanded write and faulted on a legitimately
+		// read-only region -- over-faulting, which is just as wrong as
+		// letting an access through and harder to notice, since a spurious
+		// trap looks like the feature working.
+		bool ok;
+		if (type == AccessType::CacheBlock) {
+			ok = pmp::check(regs, paddr, size, pmp::ACC_LOAD, priv)
+			  || pmp::check(regs, paddr, size, pmp::ACC_STORE, priv);
+		} else {
+			int acc = (type == AccessType::Fetch) ? pmp::ACC_FETCH
+			        : (type == AccessType::Load)  ? pmp::ACC_LOAD
+			                                      : pmp::ACC_STORE;
+			ok = pmp::check(regs, paddr, size, acc, priv);
+		}
+		if (!ok) {
 			uint64_t c = access_cause(type);
 			// tval is the faulting *virtual* address, as for a page fault.
 			enter_trap(regs, c, vaddr);
