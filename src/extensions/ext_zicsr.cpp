@@ -267,7 +267,34 @@ constexpr uint64_t MSTATUS_TVM = 1ull << 20;
 // sstatus is architecturally just the bits of mstatus a lower-privileged
 // mode is allowed to see/touch -- SUM/MXR are read-write pass-through,
 // SIE/SPIE/SPP alias the same-named mstatus bits directly.
-constexpr uint64_t SSTATUS_MASK = MSTATUS_SIE | MSTATUS_SPIE | MSTATUS_SPP | (1ull << 18) | (1ull << 19);
+// sstatus is a *view* of mstatus, and the view is wider than the
+// interrupt-and-privilege bits it started as. It also carries:
+//
+//   FS  (14:13) and VS (10:9) -- the floating-point and vector state.
+//       A supervisor decides whether to save those register files on a
+//       context switch by reading them *here*; it has no access to
+//       mstatus. Masking them out told every supervisor that no
+//       extension state was ever live.
+//   UXL (33:32) -- the XLEN U-mode runs at, read-only 2 (64-bit) here.
+//   SD  (63)    -- the summary of FS/VS, supplied by vcommon::with_sd.
+//
+// Found by tracing: an arch-test trap handler reads sstatus and extracts
+// bits 16:0 to rebuild a PTE. Sail read 0x...6600 (FS=3, VS=3), DoomV
+// read 0, and the handler stored a PTE with its physical page number
+// zeroed -- a difference that looked like a page-table bug and was a CSR
+// masking bug three steps upstream.
+constexpr uint64_t SSTATUS_FS  = 3ull << 13;
+constexpr uint64_t SSTATUS_VS  = 3ull << 9;
+constexpr uint64_t SSTATUS_UXL = 3ull << 32;
+constexpr uint64_t SSTATUS_SD  = 1ull << 63;
+constexpr uint64_t SSTATUS_MASK = MSTATUS_SIE | MSTATUS_SPIE | MSTATUS_SPP
+                                | (1ull << 18) | (1ull << 19)   // SUM, MXR
+                                | SSTATUS_FS | SSTATUS_VS | SSTATUS_UXL | SSTATUS_SD;
+
+// UXL and SD are read-only through this view: UXL because this hart has no
+// 32-bit U-mode to switch to, SD because it is derived. A write must not
+// reach either.
+constexpr uint64_t SSTATUS_WMASK = SSTATUS_MASK & ~(SSTATUS_UXL | SSTATUS_SD);
 
 // misa isn't plain csr[] storage -- it's computed fresh from Extensions on
 // every read (WARL/hardwired: a write still lands in the generic array via
@@ -334,13 +361,15 @@ uint64_t read_sstatus(Registers &regs)
 {
 	// SD is part of sstatus's view too, and is derived rather than stored
 	// -- see vcommon::with_sd.
-	return vcommon::with_sd(regs.read_csr(CSR_MSTATUS)) & SSTATUS_MASK;
+	// UXL is read-only 2: this hart's U-mode is always 64-bit.
+	return (vcommon::with_sd(regs.read_csr(CSR_MSTATUS)) & SSTATUS_MASK)
+	     | (2ull << 32);
 }
 
 void write_sstatus(Registers &regs, uint64_t value)
 {
 	uint64_t mstatus = regs.read_csr(CSR_MSTATUS);
-	mstatus = (mstatus & ~SSTATUS_MASK) | (value & SSTATUS_MASK);
+	mstatus = (mstatus & ~SSTATUS_WMASK) | (value & SSTATUS_WMASK);
 	regs.write_csr(CSR_MSTATUS, mstatus);
 }
 }
