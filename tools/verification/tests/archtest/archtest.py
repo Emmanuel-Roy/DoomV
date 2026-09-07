@@ -142,18 +142,39 @@ def run_one(elf: Path, sail_sig: Path, outdir: Path, keep: bool, timeout: int) -
     try:
         if siglog.exists():
             siglog.unlink()
-        # A timeout is the normal ending here, not a failure. DoomV writes
-        # the signature when it reaches the -break address and then keeps its
-        # SDL window alive rather than exiting, so the process always has to
-        # be killed. What decides the outcome is whether signature.log
-        # appeared -- exactly as run_diff.sh does next door. Treating the
-        # timeout itself as the verdict reported every passing test as
-        # "timed out", which is how this looked at first.
+        # DoomV writes the signature when it reaches the -break address and
+        # then keeps its SDL window open rather than exiting, so it always
+        # has to be killed and the exit status never means anything. What
+        # decides the outcome is whether signature.log appeared.
+        #
+        # It is therefore not enough to run with a timeout and wait: every
+        # test, passing or not, would burn the entire budget, and 663 of
+        # them at even 150s each is over a day. So poll for the file and
+        # kill DoomV as soon as it has finished writing it. The timeout
+        # stays as the backstop for a test that never reaches the halt
+        # address at all.
+        proc = subprocess.Popen(cmd, cwd=str(ROOT),
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        deadline = time.time() + timeout
+        stable_size = -1
         try:
-            subprocess.run(cmd, cwd=str(ROOT), timeout=timeout,
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        except subprocess.TimeoutExpired:
-            pass
+            while time.time() < deadline:
+                if proc.poll() is not None:
+                    break
+                if siglog.exists():
+                    # Wait for the size to stop changing before killing, or a
+                    # large signature gets truncated mid-write and the diff
+                    # blames DoomV for a harness race.
+                    size = siglog.stat().st_size
+                    if size > 0 and size == stable_size:
+                        break
+                    stable_size = size
+                time.sleep(0.25)
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait(timeout=30)
+
         if not siglog.exists():
             return "nosig", "no signature.log (never reached the halt address)"
         # Claim the file while still holding the lock. Releasing first would

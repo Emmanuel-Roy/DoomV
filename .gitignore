@@ -58,3 +58,13 @@ tools/verification/tests/archtest/work/
 tools/verification/tests/archtest/out/
 
 __pycache__/
+
+# Precompiled third-party test suites (riscv-tests, damo-rv-priv-ats
+# hypervisor tests, riscv-vector-tests). Fetched by
+# tools/verification/tests/suites/fetch.sh from the sail-riscv-tests
+# releases the Sail model's own test tree uses -- binaries, not sources.
+tools/verification/tests/suites/*
+!tools/verification/tests/suites/fetch.sh
+
+# SoftFloat object files (built from the spike submodule sources).
+build/

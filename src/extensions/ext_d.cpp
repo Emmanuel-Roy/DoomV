@@ -251,8 +251,19 @@ void RiscvCore::exec_D(const DecodedInstruction &instr, Registers &regs, Memory 
 		write_f32_reg(regs, instr.rd, rv);
 		break;
 	}
-	case 0b0100001: { // FCVT.D.S -- widen single to double (exact: always representable, no rounding)
+	case 0b0100001: { // FCVT.D.S -- widen single to double
+		// Every float is exactly representable as a double, so this never
+		// rounds and never raises inexact. That was the whole of what this
+		// did, and it was the wrong whole: a *signalling* NaN input still
+		// raises invalid, because quieting a signalling NaN is precisely
+		// the event NV exists to report. Canonicalising it silently, as
+		// this did, loses the only observable evidence the operation ever
+		// saw one.
+		//
+		// Found by riscv-arch-test D-fcvt.d.s-00 against Sail; the
+		// hand-written suites never fed this instruction a signalling NaN.
 		float a = read_f32_reg(regs, instr.rs1);
+		if (is_snan(a)) regs.or_fflags(0x10); // NV
 		double result = std::isnan(a) ? canonical_nan<double>() : (double)a;
 		regs.write_f(instr.rd, result);
 		break;

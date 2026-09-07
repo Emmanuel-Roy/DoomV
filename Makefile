@@ -1,9 +1,19 @@
 # Compiler settings
 CXX = g++
+CC = gcc
 CXXFLAGS = -std=c++2a -O3 -pthread -frounding-math -static-libgcc -static-libstdc++ -Wl,-Bstatic,--whole-archive -lwinpthread -Wl,--no-whole-archive,-Bdynamic
 
 # Include and Library paths
-INCLUDES = -Isrc/include -Isrc
+#
+# Berkeley SoftFloat comes from the spike submodule rather than a separate
+# checkout -- it is the same library spike itself uses for F/D, and vendoring
+# a second copy would invite the two drifting apart.
+SOFTFLOAT_DIR = tools/verification/simulators/spike/src/softfloat
+SOFTFLOAT_OBJDIR = build/softfloat
+SOFTFLOAT_SRCS = $(wildcard $(SOFTFLOAT_DIR)/*.c)
+SOFTFLOAT_OBJS = $(patsubst $(SOFTFLOAT_DIR)/%.c,$(SOFTFLOAT_OBJDIR)/%.o,$(SOFTFLOAT_SRCS))
+
+INCLUDES = -Isrc/include -Isrc -Isrc/softfloat -I$(SOFTFLOAT_DIR)
 LIBS = -Lsrc/lib -lmingw32 -lSDL2main -lSDL2
 
 # Source files
@@ -31,8 +41,16 @@ SRCS = src/main.cpp src/doom_system.cpp src/memory.cpp src/registers.cpp \
        src/extensions/ext_v_perm.cpp src/extensions/ext_v_reduce.cpp src/extensions/ext_v_fp.cpp
 OUT = riscv_doom.exe
 
-all:
-	$(CXX) $(CXXFLAGS) $(INCLUDES) -o $(OUT) $(SRCS) $(LIBS)
+all: $(OUT)
+
+# SoftFloat is C, not C++, and is compiled as such: building it with g++
+# is not merely stylistic, several of its files are not valid C++.
+$(SOFTFLOAT_OBJDIR)/%.o: $(SOFTFLOAT_DIR)/%.c
+	@mkdir -p $(SOFTFLOAT_OBJDIR)
+	$(CC) -O2 -Isrc/softfloat -I$(SOFTFLOAT_DIR) -c $< -o $@
+
+$(OUT): $(SOFTFLOAT_OBJS)
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -o $(OUT) $(SRCS) $(SOFTFLOAT_OBJS) $(LIBS)
 
 # Portable file deletion. GNU Make's built-in $(RM) is hardcoded to `rm -f`,
 # which cmd does not have -- so `make clean` used to fail depending on which
