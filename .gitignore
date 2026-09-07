@@ -43,3 +43,9 @@ signature.log
 # Lock directory the vector differential runner uses to serialise DoomV
 # invocations (they all write signature.log to the repo root).
 .signature.lock/
+
+# Sail model build output and generated config (regenerate with
+# tools/verification/simulators/sail/{build.sh,mkconfig.py}).
+tools/verification/simulators/sail/src/build/
+tools/verification/simulators/sail/rva23s64.json
+*.sail.sig
