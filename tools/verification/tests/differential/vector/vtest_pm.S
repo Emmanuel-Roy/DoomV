@@ -37,6 +37,23 @@
 .global _start
 _start:
 	la	sp, __stacktop
+
+	# Permit-all PMP entry, installed before any drop to S-mode.
+	#
+	# With PMP implemented and no entry configured, the spec denies S and U
+	# mode access outright -- so a test that drops privilege takes a fetch
+	# access fault before its first instruction there. spike happens to
+	# default permissively and these tests silently relied on that for a
+	# long time; Sail implements it faithfully and refused, which is how the
+	# dependency was found. Setting it up here is what real software does and
+	# makes the suite independent of any reference's defaults.
+	#
+	# pmpaddr0 all-ones with A=NAPOT covers the whole address space; 0x1F is
+	# NAPOT plus R, W and X.
+	li	t0, -1
+	csrw	pmpaddr0, t0
+	li	t0, 0x1F
+	csrw	pmpcfg0, t0
 	la	s0, begin_signature
 	la	t0, trap_handler
 	csrw	mtvec, t0

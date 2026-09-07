@@ -111,17 +111,16 @@ def main():
         else:
             unknown.append(name)
 
-    # PMP off. Sail implements it faithfully: with entries present but none
-    # configured, the spec denies S/U access outright, so every test that
-    # drops to S-mode takes a fetch-access-fault before it starts. spike
-    # defaults permissively, which is why this never surfaced there.
+    # PMP is deliberately left at the model's default rather than disabled.
     #
-    # This is a workaround for a gap in the tests rather than a property of
-    # the profile -- they should install a permit-all entry themselves, as
-    # real software does. Until they do, this keeps the two references
-    # comparable.
-    cfg["memory"]["pmp"]["count"] = 0
-    cfg["memory"]["pmp"]["usable_count"] = 0
+    # Sail implements it faithfully: with entries present but none
+    # configured, the spec denies S and U mode access outright. That is what
+    # revealed the differential tests had been depending on spike's
+    # permissive default -- every suite that drops privilege took a fetch
+    # access fault before its first instruction there. The tests now install
+    # a permit-all entry themselves, as real software does, so no
+    # accommodation is needed here and the two references run the same
+    # configuration.
 
     json.dump(cfg, open(OUT, "w"), indent=2)
     print("\nenabled %d extensions; wrote %s" % (len(enabled), OUT))

@@ -55,11 +55,11 @@ timeout 300 "$SAIL" --config "$CONFIG" --test-signature "$TEST.sail.sig"     --i
 if ! grep -q "SUCCESS" /tmp/sail_raw.txt; then
 	echo "ERROR: sail did not reach the test's HTIF exit:" >&2
 	tail -4 /tmp/sail_raw.txt >&2
-	# The usual cause is PMP. Sail implements it; with entries configured
-	# but none set, the spec denies S/U access entirely, so any test that
-	# drops to S-mode takes a fetch-access-fault before it starts. The
-	# generated config sets pmp.count to 0 for that reason -- see
-	# ../../simulators/sail/mkconfig.py.
+	# A common cause is a test that drops to S-mode without installing a
+	# PMP entry: with PMP implemented and nothing configured, the spec
+	# denies S and U access outright, and the test faults before its first
+	# instruction there. Every suite here that drops privilege sets up a
+	# permit-all entry for that reason.
 	exit 1
 fi
 
