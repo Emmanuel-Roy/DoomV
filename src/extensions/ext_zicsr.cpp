@@ -706,6 +706,13 @@ void RiscvCore::exec_32ZICSR(const DecodedInstruction &instr, Registers &regs, M
 		// switch below. No TLB exists to flush yet, so this is a real,
 		// deliberate no-op rather than an unrecognized encoding.
 		if (instr.funct7 == 0b0001001 && instr.rd == 0) {
+			// SFENCE.VMA is a supervisor instruction: attempting it from
+			// U-mode is illegal regardless of TVM, and DoomV let it through.
+			if (regs.get_priv() == PrivMode::U) {
+				raise_illegal_instruction(regs, instr.raw);
+				return;
+			}
+
 			// mstatus.TVM makes SFENCE.VMA illegal in S-mode. The point is
 			// not the fence -- there is no TLB here to flush -- but that a
 			// hypervisor running a guest supervisor traps on it to know the

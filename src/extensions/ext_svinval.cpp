@@ -36,6 +36,16 @@ void RiscvCore::exec_SVINVAL(const DecodedInstruction &instr, Registers &regs, M
 {
 	(void)mem;
 
+	// All three are supervisor instructions. Executing one in U-mode is an
+	// illegal instruction, and DoomV enforced nothing -- a user program
+	// could invalidate translations. That the operations happen to be
+	// no-ops here is beside the point: what a lower privilege level is
+	// allowed to *attempt* is the observable part.
+	if (regs.get_priv() == PrivMode::U) {
+		raise_illegal_instruction(regs, instr.raw);
+		return;
+	}
+
 	// SINVAL.VMA is governed by mstatus.TVM exactly as SFENCE.VMA is: it
 	// invalidates translations, so a hypervisor watching a guest supervisor
 	// manage its page tables has to see it. Trapping SFENCE.VMA and letting
