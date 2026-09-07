@@ -84,7 +84,7 @@
 			// vectors to a kernel booted without them produces illegal
 			// instructions in the kernel's own routines rather than a
 			// clean refusal.
-			riscv,isa = "rv64imafdc_zicbom_zicbop_zicboz_zicntr_zicond_zicsr_zifencei_zihintntl_zihintpause_zihpm_zimop_zawrs_zfa_zfhmin_zba_zbb_zbs_zcmop_smaia_ssaia_sstc_svinval_svnapot_svpbmt";
+			riscv,isa = "rv64imafdcv_zicbom_zicbop_zicboz_zicntr_zicond_zicsr_zifencei_zihintntl_zihintpause_zihpm_zimop_zawrs_zfa_zfhmin_zvbb_zvfhmin_zba_zbb_zbs_zcmop_smaia_ssaia_sstc_svinval_svnapot_svpbmt";
 			// riscv,isa is deprecated; 6.12 prefers this pair and only
 			// falls back to parsing the string above. Both are kept so the
 			// same DTB works either way.
@@ -94,6 +94,14 @@
 					       "zicond", "zicsr", "zifencei", "zihintntl",
 					       "zihintpause", "zihpm", "zimop", "zawrs",
 					       "zfa", "zfhmin",
+					       // Vector. Its absence here did not disable
+					       // vector in the hart -- DoomV implements V
+					       // regardless -- it stopped Linux from ever
+					       // enabling mstatus.VS for a task, so the
+					       // first vector instruction in userspace was
+					       // a correct illegal-instruction trap that
+					       // became SIGILL and killed init.
+					       "v", "zvbb", "zvfhmin",
 					       "zba", "zbb", "zbs", "zcmop",
 					       "smaia", "ssaia", "sstc",
 					       "svinval", "svnapot", "svpbmt";

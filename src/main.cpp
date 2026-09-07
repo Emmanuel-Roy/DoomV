@@ -46,6 +46,23 @@ int main(int argc, char *argv[])
 	if (!march.empty()) parse_march(march);
 
 	bool linux_boot = !opensbi_path.empty() || !kernel_path.empty() || !dtb_path.empty() || !initrd_path.empty();
+
+	// A Linux boot with no -march gets the RVA23S64 profile rather than the
+	// bare rv64imafdc default. The device tree is a static file that
+	// describes this machine, and it advertises the profile -- so the two
+	// have to agree. When they did not, Linux enabled vector for userspace
+	// on the device tree's word, busybox issued a vsetivli, and a hart with
+	// V switched off correctly called it illegal. The kernel turned that
+	// into SIGILL and killed init.
+	//
+	// -march is still an override, which is what the differential and
+	// conformance harnesses use to test one extension at a time.
+	if (linux_boot && march.empty()) {
+		parse_march("rv64imafdcv_zicsr_zifencei_zba_zbb_zbs_zicond"
+		            "_zicbom_zicbop_zicboz_zicntr_zihintpause_zihintntl"
+		            "_zimop_zcmop_zawrs_zfa_zfh_svinval_svnapot_svpbmt"
+		            "_sscofpmf_ssstateen_ssnpm_smnpm");
+	}
 	if (linux_boot && (opensbi_path.empty() || kernel_path.empty() || dtb_path.empty() || initrd_path.empty())) {
 		std::cout << "Usage: " << argv[0] << " -opensbi=<path> -kernel=<path> -dtb=<path> -initrd=<path> [-march=...] [-break=<hex_pc>]\n";
 		return -1;
