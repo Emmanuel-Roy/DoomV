@@ -51,6 +51,21 @@ constexpr uint64_t CAUSE_INSTR_PAGE_FAULT = 12;
 constexpr uint64_t CAUSE_LOAD_PAGE_FAULT  = 13;
 constexpr uint64_t CAUSE_STORE_PAGE_FAULT = 15; // AMOs fault under this cause too, per spec
 
+// Access-fault causes, for the cases that are not page faults: an implicit
+// page-table read from an address nothing answers is an *access* fault, and
+// the distinction is visible to software. A walk that instead reads zeros
+// from the void sees an invalid PTE and reports a page fault, which tells
+// the supervisor to go fix a mapping that was never the problem.
+inline uint64_t access_fault_cause(AccessType type)
+{
+	switch (type) {
+	case AccessType::Fetch: return 1;
+	case AccessType::Load:  return 5;
+	default:                return 7; // Store, Amo, CacheBlock
+	}
+}
+
+
 uint64_t pte_ppn(uint64_t pte) { return (pte >> 10) & 0xFFFFFFFFFFFull; } // bits 53:10, 44 bits
 
 uint64_t fault_cause(AccessType type)
@@ -132,6 +147,15 @@ bool gstage_translate(Registers &regs, Memory &mem, uint64_t gpa, AccessType typ
 	int level = -1;
 	for (int i = 2; i >= 0; i--) {
 		uint64_t pte_addr = a + vpn[i] * PTESIZE;
+		// The walk's own reads are subject to physical memory attributes.
+		// Without this the read silently returns zero, the PTE looks
+		// invalid, and a page fault is reported where the architecture
+		// requires an access fault.
+		if (!mem.is_backed(pte_addr, PTESIZE)) {
+			cause = access_fault_cause(type);
+			tval = gpa;
+			return false;
+		}
 		pte = mem.read64(pte_addr);
 		if (!(pte & PTE_V) || (!(pte & PTE_R) && (pte & PTE_W))) {
 			cause = guest_fault_cause(type);
@@ -356,6 +380,17 @@ bool mmu_translate(Registers &regs, Memory &mem, uint64_t vaddr, AccessType type
 				return false;
 			}
 			pte_addr = pte_pa;
+		}
+		// A page-table read is an access like any other and is subject to
+		// physical memory attributes. Skipping this check does not merely
+		// miss a fault: the read returns zero, the zero looks like an
+		// invalid PTE, and the walk reports a *page* fault where the
+		// architecture requires an *access* fault -- sending the supervisor
+		// off to repair a mapping that was never the problem.
+		if (!mem.is_backed(pte_addr, PTESIZE)) {
+			cause = access_fault_cause(type);
+			tval = vaddr;
+			return false;
 		}
 		pte = mem.read64(pte_addr);
 		if (!(pte & PTE_V) || (!(pte & PTE_R) && (pte & PTE_W))) {

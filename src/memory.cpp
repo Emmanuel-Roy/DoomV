@@ -284,3 +284,36 @@ void Memory::step_instructions(uint32_t count)
 	}
 	timer.tick(count);
 }
+
+// See memory.hpp for why this exists. The list mirrors the decode in the
+// read/write paths above; a region added there and forgotten here becomes an
+// access fault on real hardware DoomV claims to model, so the two belong
+// next to each other in any future edit.
+bool Memory::is_backed(uint64_t addr, unsigned size) const
+{
+	if (size == 0) size = 1;
+	uint64_t last = addr + size - 1;
+	if (last < addr) return false;   // wrapped
+
+	auto in = [&](uint64_t base, uint64_t len) {
+		return addr >= base && last < base + len;
+	};
+
+	// RAM and the WAD window are contiguous and are treated as one region:
+	// they are one allocation, and Doom's WAD really is addressable memory.
+	if (in(RAM_BASE, RAM_SIZE + WAD_SIZE)) return true;
+
+	if (in(MMIO_FB, FB_SIZE)) return true;
+	if (in(UART_BASE, UART_SIZE)) return true;
+	if (in(CLINT_BASE, CLINT_SIZE)) return true;
+	if (in(APLIC_BASE, APLIC_SIZE)) return true;
+	if (in(IMSIC_M_BASE, IMSIC_SIZE)) return true;
+	if (in(IMSIC_S_BASE, IMSIC_SIZE)) return true;
+
+	// The three word-sized Doom control registers. Each is exactly four
+	// bytes; an eight-byte access spanning two of them is not a thing the
+	// hardware answers.
+	if (in(MMIO_INPUT, 4) || in(MMIO_TICK, 4) || in(MMIO_DEBUG, 4)) return true;
+
+	return false;
+}

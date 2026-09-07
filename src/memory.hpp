@@ -83,6 +83,22 @@ public:
 	// time race ~1000x too fast, leaving I_GetTime()-driven game logic
 	// stuck trying to process an enormous backlog of tics it thought had
 	// already elapsed -- see PLAN.md's debugging notes.
+	// Physical memory attributes: whether anything is actually there.
+	//
+	// An access to an address no device or RAM answers is an access fault,
+	// not a silent zero. Reads used to return zero and writes used to
+	// vanish, which is the most forgiving possible behaviour and hides
+	// exactly the bugs this matters for -- a wild pointer, or a page table
+	// pointing somewhere that does not exist, both simply appeared to work.
+	//
+	// riscv-arch-test probes this deliberately: RVMODEL_ACCESS_FAULT_ADDRESS
+	// is physical address 0, and a dozen tests map a valid, permissive PTE
+	// onto it and require a store access fault.
+	//
+	// The whole access has to be inside one region; an access straddling the
+	// end of RAM is a fault even though its first byte is fine.
+	bool is_backed(uint64_t addr, unsigned size) const;
+
 	static constexpr uint32_t INSTR_PER_MS = 1200;
 	void step_instructions(uint32_t count);
 

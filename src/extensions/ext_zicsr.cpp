@@ -462,6 +462,22 @@ bool RiscvCore::translate_or_trap(Registers &regs, Memory &mem, uint64_t vaddr, 
 	// a load or store, matching the translation the MMU just did. Checking
 	// at the current mode instead would let an M-mode MPRV access reach
 	// memory the effective privilege is denied.
+	static constexpr uint64_t CAUSE_INST_ACCESS_F  = 1;
+	static constexpr uint64_t CAUSE_LOAD_ACCESS_F  = 5;
+	static constexpr uint64_t CAUSE_STORE_ACCESS_F = 7;
+	auto access_cause = [&](AccessType t) {
+		if (t == AccessType::Fetch) return CAUSE_INST_ACCESS_F;
+		if (t == AccessType::Load)  return CAUSE_LOAD_ACCESS_F;
+		return CAUSE_STORE_ACCESS_F;   // Store, Amo, CacheBlock
+	};
+
+	// Physical memory attributes come first: an address nothing answers is
+	// an access fault regardless of what PMP would have said about it.
+	if (!mem.is_backed(paddr, 1)) {
+		enter_trap(regs, access_cause(type), vaddr);
+		return false;
+	}
+
 	if (Extensions.SMPMP) {
 		uint8_t priv = (uint8_t)regs.get_priv();
 		if (type != AccessType::Fetch) {
@@ -472,12 +488,7 @@ bool RiscvCore::translate_or_trap(Registers &regs, Memory &mem, uint64_t vaddr, 
 		        : (type == AccessType::Load)  ? pmp::ACC_LOAD
 		                                      : pmp::ACC_STORE;
 		if (!pmp::check(regs, paddr, 1, acc, priv)) {
-			static constexpr uint64_t CAUSE_INST_ACCESS  = 1;
-			static constexpr uint64_t CAUSE_LOAD_ACCESS  = 5;
-			static constexpr uint64_t CAUSE_STORE_ACCESS = 7;
-			uint64_t c = (type == AccessType::Fetch) ? CAUSE_INST_ACCESS
-			           : (type == AccessType::Load)  ? CAUSE_LOAD_ACCESS
-			                                         : CAUSE_STORE_ACCESS;
+			uint64_t c = access_cause(type);
 			// tval is the faulting *virtual* address, as for a page fault.
 			enter_trap(regs, c, vaddr);
 			return false;
