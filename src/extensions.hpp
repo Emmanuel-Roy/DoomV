@@ -72,6 +72,10 @@ struct ExtensionConfig {
 	// Pointer masking. One flag covers Ssnpm, Smnpm and Sspm: they are the
 	// same mechanism named for which envcfg holds the PMM field, and no
 	// guest would sensibly have one without the others.
+	// Smpmp: physical memory protection. Optional in RVA23S64, but the
+	// architectural tests assume it and, more to the point, without it
+	// S and U mode reach all of memory unchecked.
+	bool SMPMP = true;
 	bool SSNPM = true;
 	// H: the hypervisor extension. Off by default -- unlike the others
 	// here it changes how existing CSR numbers behave (the VS-mode

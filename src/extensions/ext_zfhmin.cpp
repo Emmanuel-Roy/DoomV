@@ -94,7 +94,13 @@ void RiscvCore::exec_ZFHMIN(const DecodedInstruction &instr, Registers &regs, Me
 		uint64_t addr = regs.read_x(instr.rs1) + (uint64_t)instr.imm;
 		uint64_t paddr;
 		if (!translate_or_trap(regs, mem, addr, AccessType::Store, paddr)) return;
-		uint16_t h = fp16::unbox_f16(bits_from_f64(regs.read_f(instr.rs2)));
+		// Raw bits, with no NaN-box check. A store transfers the low 16
+		// bits exactly as they sit in the register -- the spec is explicit
+		// that FSH does not modify what it transfers and does not
+		// canonicalise NaNs. The unbox rule belongs to instructions that
+		// *interpret* the value as a number; applying it here turned every
+		// improperly-boxed pattern into 0x7E00 on the way to memory.
+		uint16_t h = (uint16_t)bits_from_f64(regs.read_f(instr.rs2));
 		mem.write8(paddr, (uint8_t)h);
 		mem.write8(paddr + 1, (uint8_t)(h >> 8));
 		// A store writes no register, so it must not mark the FP state
@@ -106,7 +112,11 @@ void RiscvCore::exec_ZFHMIN(const DecodedInstruction &instr, Registers &regs, Me
 	default:
 		switch (instr.funct7) {
 		case 0x72: { // fmv.x.h -- raw bits, sign-extended to XLEN, no conversion
-			uint16_t h = fp16::unbox_f16(bits_from_f64(regs.read_f(instr.rs1)));
+			// "No conversion" includes no NaN-box check: this moves the low
+			// 16 bits of the register, whatever they are. Unboxing here made
+			// the instruction report the canonical NaN for every register
+			// that had not been written by a half-precision producer.
+			uint16_t h = (uint16_t)bits_from_f64(regs.read_f(instr.rs1));
 			regs.write_x(instr.rd, (uint64_t)(int64_t)(int16_t)h);
 			regs.set_pc(regs.get_pc() + instr.length);
 			return; // writes an x register, not an f one

@@ -11,6 +11,7 @@
 #include "memory.hpp"
 #include "extensions.hpp"
 #include "timer.hpp"
+#include "pmp.hpp"
 #include "imsic.hpp"
 
 DecodedInstruction Decoder::decode_zicsr(uint32_t raw_instr) const
@@ -254,6 +255,9 @@ constexpr uint64_t CAUSE_ECALL_FROM_S = 9;
 constexpr uint64_t CAUSE_ECALL_FROM_M = 11;
 constexpr uint64_t CAUSE_BREAKPOINT   = 3;
 constexpr uint64_t CAUSE_ILLEGAL_INSN = 2;
+// mstatus.MPRV: an M-mode load or store is performed as though at
+// mstatus.MPP, using that mode's translation and permissions.
+constexpr uint64_t MSTATUS_MPRV = 1ull << 17;
 
 // sstatus is architecturally just the bits of mstatus a lower-privileged
 // mode is allowed to see/touch -- SUM/MXR are read-write pass-through,
@@ -399,6 +403,10 @@ bool RiscvCore::csr_access_permitted(Registers &regs, uint16_t csr, bool writing
 
 uint64_t RiscvCore::read_csr_effective(Registers &regs, Memory &mem, uint16_t csr)
 {
+	// PMP entries past the implemented count read as zero rather than as
+	// whatever was last written to an unimplemented register.
+	if (pmp::is_pmpcfg(csr)) return pmp::read_cfg(regs, csr);
+	if (pmp::is_pmpaddr(csr)) return pmp::read_addr(regs, csr);
 	if (csr == 0x100) return read_sstatus(regs);
 	if (csr == CSR_MISA) return compute_misa();
 	if (Extensions.H && csr == hyp::CSR_HSTATUS_ADDR) return hyp::read_hstatus(regs);
@@ -435,9 +443,43 @@ uint64_t RiscvCore::read_csr_effective(Registers &regs, Memory &mem, uint16_t cs
 bool RiscvCore::translate_or_trap(Registers &regs, Memory &mem, uint64_t vaddr, AccessType type, uint64_t &paddr)
 {
 	uint64_t cause, tval;
-	if (mmu_translate(regs, mem, vaddr, type, paddr, cause, tval)) return true;
-	enter_trap(regs, cause, tval);
-	return false;
+	if (!mmu_translate(regs, mem, vaddr, type, paddr, cause, tval)) {
+		enter_trap(regs, cause, tval);
+		return false;
+	}
+
+	// PMP is checked on the *physical* address, after translation, and a
+	// denial is an access fault rather than a page fault. The difference
+	// is not cosmetic: a page fault tells the supervisor to fix a mapping
+	// and retry, while an access fault says this physical region is not
+	// reachable at this privilege however the tables are arranged.
+	//
+	// The privilege used is mstatus.MPP when MPRV is set and the access is
+	// a load or store, matching the translation the MMU just did. Checking
+	// at the current mode instead would let an M-mode MPRV access reach
+	// memory the effective privilege is denied.
+	if (Extensions.SMPMP) {
+		uint8_t priv = (uint8_t)regs.get_priv();
+		if (type != AccessType::Fetch) {
+			uint64_t st = regs.read_csr(CSR_MSTATUS);
+			if (st & MSTATUS_MPRV) priv = (uint8_t)((st >> 11) & 3);
+		}
+		int acc = (type == AccessType::Fetch) ? pmp::ACC_FETCH
+		        : (type == AccessType::Load)  ? pmp::ACC_LOAD
+		                                      : pmp::ACC_STORE;
+		if (!pmp::check(regs, paddr, 1, acc, priv)) {
+			static constexpr uint64_t CAUSE_INST_ACCESS  = 1;
+			static constexpr uint64_t CAUSE_LOAD_ACCESS  = 5;
+			static constexpr uint64_t CAUSE_STORE_ACCESS = 7;
+			uint64_t c = (type == AccessType::Fetch) ? CAUSE_INST_ACCESS
+			           : (type == AccessType::Load)  ? CAUSE_LOAD_ACCESS
+			                                         : CAUSE_STORE_ACCESS;
+			// tval is the faulting *virtual* address, as for a page fault.
+			enter_trap(regs, c, vaddr);
+			return false;
+		}
+	}
+	return true;
 }
 
 void RiscvCore::raise_illegal_instruction(Registers &regs, uint64_t tval)
@@ -823,7 +865,9 @@ void RiscvCore::exec_32ZICSR(const DecodedInstruction &instr, Registers &regs, M
 		updated &= HIDELEG_WMASK;
 	}
 
-	if (csr == 0x100) write_sstatus(regs, updated);
+	if (pmp::is_pmpcfg(csr)) pmp::write_cfg(regs, csr, updated);
+	else if (pmp::is_pmpaddr(csr)) pmp::write_addr(regs, csr, updated);
+	else if (csr == 0x100) write_sstatus(regs, updated);
 	else if (Extensions.H && csr == hyp::CSR_HSTATUS_ADDR) hyp::write_hstatus(regs, updated);
 	else if (Extensions.SSCOFPMF && sscofpmf::is_mhpmevent(csr))
 		regs.write_csr(csr, updated & sscofpmf::mhpmevent_wmask());

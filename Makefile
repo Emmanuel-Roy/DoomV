@@ -18,7 +18,7 @@ LIBS = -Lsrc/lib -lmingw32 -lSDL2main -lSDL2
 
 # Source files
 SRCS = src/main.cpp src/doom_system.cpp src/memory.cpp src/registers.cpp \
-       src/riscv_decoder.cpp src/mmu.cpp src/timer.cpp src/imsic.cpp src/aplic.cpp src/uart.cpp \
+       src/riscv_decoder.cpp src/mmu.cpp src/pmp.cpp src/timer.cpp src/imsic.cpp src/aplic.cpp src/uart.cpp \
        src/debugger.cpp src/gui.cpp \
        src/controls.cpp src/extensions.cpp \
        src/extensions/ext_i.cpp src/extensions/ext_m.cpp src/extensions/ext_a.cpp \
@@ -49,7 +49,14 @@ $(SOFTFLOAT_OBJDIR)/%.o: $(SOFTFLOAT_DIR)/%.c
 	@mkdir -p $(SOFTFLOAT_OBJDIR)
 	$(CC) -O2 -Isrc/softfloat -I$(SOFTFLOAT_DIR) -c $< -o $@
 
-$(OUT): $(SOFTFLOAT_OBJS)
+# The C++ sources and every header are prerequisites, not just the
+# SoftFloat objects. Listing only the objects made this target look
+# up-to-date after a source edit, so `make` reported success and left the
+# previous binary in place -- which then gets tested and blamed for a bug
+# that was already fixed. Before SoftFloat, `all` was phony and always
+# relinked, so nothing depended on this being right.
+HEADERS = $(wildcard src/*.hpp src/extensions/*.hpp src/include/*.h)
+$(OUT): $(SOFTFLOAT_OBJS) $(SRCS) $(HEADERS)
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -o $(OUT) $(SRCS) $(SOFTFLOAT_OBJS) $(LIBS)
 
 # Portable file deletion. GNU Make's built-in $(RM) is hardcoded to `rm -f`,

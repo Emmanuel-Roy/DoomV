@@ -6,6 +6,10 @@
 namespace {
 constexpr uint16_t CSR_SATP    = 0x180;
 constexpr uint16_t CSR_MSTATUS = 0x300; // sstatus is a masked view of the same storage
+// mstatus.MPRV: a load or store issued in M-mode is performed as though at
+// mstatus.MPP -- same translation, same permission checks. Fetch is never
+// affected.
+constexpr uint64_t MSTATUS_MPRV = 1ull << 17;
 
 constexpr uint64_t MSTATUS_SUM = 1ull << 18;
 constexpr uint64_t MSTATUS_MXR = 1ull << 19;
@@ -251,9 +255,16 @@ uint64_t apply_pointer_mask(Registers &regs, uint64_t vaddr, AccessType type, bo
 bool mmu_translate(Registers &regs, Memory &mem, uint64_t vaddr, AccessType type,
                     uint64_t &paddr, uint64_t &cause, uint64_t &tval, bool as_guest)
 {
-	// M-mode never translates. Real hardware lets M-mode opt into S/U's
-	// table via mstatus.MPRV for a single access -- not modeled yet, since
-	// nothing needs it until OpenSBI (Stage 3) shows up doing exactly that.
+	// M-mode does not translate, except when it explicitly asks to:
+	// mstatus.MPRV makes a load or store behave as though issued from
+	// mstatus.MPP, using that mode's translation *and* its permission
+	// checks. It is how a machine-mode trap handler reaches a supervisor
+	// or user buffer without hand-walking the page tables.
+	//
+	// MPRV never affects instruction fetch -- the handler still executes
+	// its own code from its own address space, and applying it to fetch
+	// would send M-mode through the guest's mappings mid-handler.
+	//
 	// Masking happens before anything else, including the bare-mode path
 	// below: it transforms the effective address itself, not the
 	// translation of one, so it applies whether or not paging is on.
@@ -270,6 +281,10 @@ bool mmu_translate(Registers &regs, Memory &mem, uint64_t vaddr, AccessType type
 	// is checkable against spike on its own.
 	uint64_t satp = regs.read_csr(as_guest ? CSR_VSATP : CSR_SATP);
 	PrivMode eff_priv = regs.get_priv();
+	if (!as_guest && type != AccessType::Fetch) {
+		uint64_t st = regs.read_csr(CSR_MSTATUS);
+		if (st & MSTATUS_MPRV) eff_priv = (PrivMode)((st >> 11) & 3);
+	}
 	if (as_guest) {
 		// hstatus.SPVP says whether the guest was in VS or VU -- an hlv
 		// must be checked against the guest's supervisor/user permission
