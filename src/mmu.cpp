@@ -1,4 +1,5 @@
 #include "mmu.hpp"
+#include "pmp.hpp"
 #include "registers.hpp"
 #include "memory.hpp"
 #include "extensions.hpp"
@@ -387,7 +388,18 @@ bool mmu_translate(Registers &regs, Memory &mem, uint64_t vaddr, AccessType type
 		// invalid PTE, and the walk reports a *page* fault where the
 		// architecture requires an *access* fault -- sending the supervisor
 		// off to repair a mapping that was never the problem.
+		// The walk's own reads answer to physical memory attributes *and* to
+		// PMP. PMP is checked at supervisor privilege regardless of who made
+		// the original access: an implicit page-table read is the hardware's
+		// access, not the program's, and M-mode's exemption does not extend
+		// to it.
 		if (!mem.is_backed(pte_addr, PTESIZE)) {
+			cause = access_fault_cause(type);
+			tval = vaddr;
+			return false;
+		}
+		if (Extensions.SMPMP
+		    && !pmp::check(regs, pte_addr, PTESIZE, pmp::ACC_LOAD, (uint8_t)PrivMode::S)) {
 			cause = access_fault_cause(type);
 			tval = vaddr;
 			return false;
@@ -402,6 +414,18 @@ bool mmu_translate(Registers &regs, Memory &mem, uint64_t vaddr, AccessType type
 		if ((pte & PTE_R) || (pte & PTE_X)) {
 			level = i; // leaf
 			break;
+		}
+
+		// A non-leaf PTE is a pointer and nothing else. A, D and U belong to
+		// leaves, and Svpbmt's memory-type bits likewise; carrying any of
+		// them here is a reserved encoding and faults. Ignoring them instead
+		// silently accepts a page table that names attributes it has no way
+		// to apply.
+		if ((pte & (PTE_A | PTE_D | PTE_U))
+		    || (Extensions.SVPBMT && (pte & PTE_PBMT))) {
+			cause = fault_cause(type);
+			tval = vaddr;
+			return false;
 		}
 		if (i == 0) {
 			// Non-leaf pointer at the last level -- nowhere left to go.

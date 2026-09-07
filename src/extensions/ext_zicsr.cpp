@@ -259,6 +259,10 @@ constexpr uint64_t CAUSE_ILLEGAL_INSN = 2;
 // mstatus.MPRV: an M-mode load or store is performed as though at
 // mstatus.MPP, using that mode's translation and permissions.
 constexpr uint64_t MSTATUS_MPRV = 1ull << 17;
+// mstatus.TVM: with this set, S-mode may neither execute SFENCE.VMA nor
+// touch satp -- both become illegal instructions, so a hypervisor sees
+// every attempt a guest supervisor makes to manage its own translation.
+constexpr uint64_t MSTATUS_TVM = 1ull << 20;
 
 // sstatus is architecturally just the bits of mstatus a lower-privileged
 // mode is allowed to see/touch -- SUM/MXR are read-write pass-through,
@@ -389,6 +393,14 @@ bool RiscvCore::csr_access_permitted(Registers &regs, uint16_t csr, bool writing
 	if ((uint8_t)regs.get_priv() < min_priv) return false;
 
 	if (counters::is_counter_csr(csr) && !counters::counter_permitted(regs, csr))
+		return false;
+
+	// mstatus.TVM closes satp to S-mode, reads included. Together with the
+	// SFENCE.VMA trap it gives a hypervisor a complete view of a guest
+	// supervisor's attempts to manage translation: it cannot install a root
+	// table, and it cannot read back the one it is running under.
+	if (csr == CSR_SATP && regs.get_priv() == PrivMode::S
+	    && (regs.read_csr(CSR_MSTATUS) & MSTATUS_TVM))
 		return false;
 
 	// The stateen registers gate each other down the privilege hierarchy:
@@ -681,6 +693,15 @@ void RiscvCore::exec_32ZICSR(const DecodedInstruction &instr, Registers &regs, M
 		// switch below. No TLB exists to flush yet, so this is a real,
 		// deliberate no-op rather than an unrecognized encoding.
 		if (instr.funct7 == 0b0001001 && instr.rd == 0) {
+			// mstatus.TVM makes SFENCE.VMA illegal in S-mode. The point is
+			// not the fence -- there is no TLB here to flush -- but that a
+			// hypervisor running a guest supervisor traps on it to know the
+			// guest touched its page tables. A hart that quietly succeeds
+			// tells the hypervisor nothing happened.
+			if (regs.get_priv() == PrivMode::S && (regs.read_csr(CSR_MSTATUS) & MSTATUS_TVM)) {
+				raise_illegal_instruction(regs, instr.raw);
+				return;
+			}
 			regs.set_pc(pc + instr.length);
 			return;
 		}
