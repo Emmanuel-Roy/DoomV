@@ -35,5 +35,21 @@
 void RiscvCore::exec_SVINVAL(const DecodedInstruction &instr, Registers &regs, Memory &mem)
 {
 	(void)mem;
+
+	// SINVAL.VMA is governed by mstatus.TVM exactly as SFENCE.VMA is: it
+	// invalidates translations, so a hypervisor watching a guest supervisor
+	// manage its page tables has to see it. Trapping SFENCE.VMA and letting
+	// SINVAL.VMA through leaves the guest a way to do the same job
+	// unobserved -- which is what Svinval exists to provide, in bulk.
+	//
+	// SFENCE.W.INVAL and SFENCE.INVAL.IR (funct7 0b0001100) are *not*
+	// affected: they only order the invalidations around them and name no
+	// address, so there is nothing for TVM to observe.
+	if (instr.funct7 == 0b0001011 && regs.get_priv() == PrivMode::S
+	    && (regs.read_csr(0x300) & (1ull << 20))) { // mstatus.TVM
+		raise_illegal_instruction(regs, instr.raw);
+		return;
+	}
+
 	regs.set_pc(regs.get_pc() + instr.length);
 }
