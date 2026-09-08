@@ -189,10 +189,18 @@ bool gstage_translate(Registers &regs, Memory &mem, uint64_t gpa, AccessType typ
 		return false;
 	}
 
+	// MXR belongs to the hypervisor's own sstatus here, not the guest's.
+	// The second stage is the hypervisor's mapping, so it is the
+	// hypervisor's execute-readable setting that governs whether an
+	// X-only G-stage page can be loaded from. The G-stage ignored MXR
+	// entirely, so an X-only guest-physical page refused every load even
+	// with the bit set.
+	const bool hs_mxr = (regs.read_csr(CSR_MSTATUS) & MSTATUS_MXR) != 0;
+
 	bool perm_ok;
 	switch (type) {
 	case AccessType::Fetch: perm_ok = (pte & PTE_X) != 0; break;
-	case AccessType::Load:  perm_ok = (pte & PTE_R) != 0; break;
+	case AccessType::Load:  perm_ok = (pte & PTE_R) || (hs_mxr && (pte & PTE_X)); break;
 	case AccessType::Store: perm_ok = (pte & PTE_W) != 0; break;
 	case AccessType::CacheBlock: perm_ok = (pte & PTE_R) || (pte & PTE_W); break;
 	default:                perm_ok = (pte & PTE_R) && (pte & PTE_W); break;
@@ -360,7 +368,12 @@ bool mmu_translate(Registers &regs, Memory &mem, uint64_t vaddr, AccessType type
 
 	uint64_t mstatus = regs.read_csr(virt_access ? CSR_VSSTATUS : CSR_MSTATUS);
 	bool sum = mstatus & MSTATUS_SUM;
-	bool mxr = mstatus & MSTATUS_MXR;
+	// Under virtualisation both MXR bits are in effect on the first stage:
+	// the guest's own vsstatus.MXR, and the hypervisor's sstatus.MXR, which
+	// applies to every stage. Reading only the guest's made an HS-mode
+	// hypervisor unable to relax the rule for a guest that had not.
+	bool mxr = (mstatus & MSTATUS_MXR) != 0;
+	if (virt_access) mxr = mxr || (regs.read_csr(CSR_MSTATUS) & MSTATUS_MXR) != 0;
 	// The same effective privilege the walk was started with: for an hlv
 	// this is the guest's, not the hypervisor's, so a U-page check tests
 	// what the guest could reach.

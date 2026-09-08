@@ -75,6 +75,23 @@ void RiscvCore::exec_H(const DecodedInstruction &instr, Registers &regs, Memory 
 	// The fences have nothing to invalidate on a machine that re-walks the
 	// page tables for every access.
 	if (instr.funct3 == 0) {
+		// The fences themselves are no-ops here -- there is no TLB to
+		// invalidate -- but *who may issue them* is still observable, and
+		// this returned before the privilege check below ever ran. A guest
+		// supervisor could execute HFENCE.VVMA and HFENCE.GVMA, which are
+		// the hypervisor's instructions for managing the guest's own
+		// translation, and have them quietly succeed.
+		//
+		// From a virtual mode it is a virtual instruction, not an illegal
+		// one, so the hypervisor can emulate the invalidation.
+		if (regs.get_virt()) {
+			enter_trap(regs, hyp::CAUSE_VIRTUAL_INSTRUCTION, instr.raw);
+			return;
+		}
+		if (regs.get_priv() == PrivMode::U) {
+			raise_illegal_instruction(regs, instr.raw);
+			return;
+		}
 		regs.set_pc(regs.get_pc() + instr.length);
 		return;
 	}
