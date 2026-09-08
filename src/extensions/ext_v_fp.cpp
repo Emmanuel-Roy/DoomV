@@ -14,6 +14,7 @@
 #include "ext_v_common.hpp"
 #include "ext_fp_common.hpp"
 #include "ext_fp16.hpp"
+#include "ext_softfloat.hpp"
 #include <cstdint>
 #include <cmath>
 
@@ -24,15 +25,45 @@ namespace {
 // Element accessors that dispatch on SEW (32 vs 64) so the rest of this
 // file can stay width-generic -- mirrors read_velem/write_velem but
 // through the NaN-boxing-aware F register helpers instead of raw ints.
+// Half elements travel through `double` like the other two widths, and that
+// is exact rather than a shortcut: every binary16 value is representable in
+// binary64, so widening on the way in and narrowing on the way out loses
+// nothing. What matters is that the *arithmetic* happens at binary16 -- see
+// the g* wrappers below, which convert back to f16 to compute. Computing in
+// double and narrowing once at the end would round twice, and with an
+// 11-bit significand that is routine rather than a corner case.
 double read_felem(Registers &regs, int base, int sew, uint64_t i)
 {
 	if (sew == 64) return f64_from_bits(read_velem(regs, base, 64, i));
+	if (sew == 16) {
+		uint8_t f = 0;
+		return f64_from_bits(fp16::h_to_f64_bits((uint16_t)read_velem(regs, base, 16, i), f));
+	}
 	return (double)f32_from_bits((uint32_t)read_velem(regs, base, 32, i));
 }
 void write_felem(Registers &regs, int base, int sew, uint64_t i, double v)
 {
 	if (sew == 64) write_velem(regs, base, 64, i, bits_from_f64(v));
+	else if (sew == 16) {
+		// Exact by construction: v is the result of an f16 operation, so
+		// narrowing it back cannot round. A mode still has to be named.
+		uint8_t f = 0;
+		write_velem(regs, base, 16, i, fp16::f64_bits_to_h(bits_from_f64(v), 0, f));
+	}
 	else write_velem(regs, base, 32, i, bits_from_f32((float)v));
+}
+
+// The f16 bit pattern of a value that came from an f16 element, and back.
+// Exact in both directions for the reason above.
+inline uint16_t as_h(double v)
+{
+	uint8_t f = 0;
+	return fp16::f64_bits_to_h(bits_from_f64(v), 0, f);
+}
+inline double from_h(uint16_t h)
+{
+	uint8_t f = 0;
+	return f64_from_bits(fp16::h_to_f64_bits(h, f));
 }
 
 double fbinop_d(double a, double b, char op, uint8_t rm, Registers &regs) { return fp_binop(a, b, op, rm, regs); }
@@ -42,32 +73,119 @@ float  fbinop_f(float a, float b, char op, uint8_t rm, Registers &regs) { return
 // `float`/`double` host type per sew, always returning/taking double (the
 // float case round-trips through `float` for correct single-precision
 // rounding, matching read_f32_reg/write_f32_reg's role in ext_fd.cpp).
+// Every half-precision arm computes with SoftFloat f16 directly. Widening to
+// float and narrowing back would round twice, and the lesson of the scalar
+// SoftFloat migration is that rounding written twice rounds differently.
 double gbinop(double a, double b, char op, uint8_t rm, int sew, Registers &regs)
 {
+	if (sew == 16) {
+		sf::begin(rm, regs.get_frm());
+		float16_t x = sf::f16(as_h(a)), y = sf::f16(as_h(b));
+		float16_t r;
+		if (op == '+') r = f16_add(x, y);
+		else if (op == '-') r = f16_sub(x, y);
+		else if (op == '*') r = f16_mul(x, y);
+		else r = f16_div(x, y);
+		sf::end(regs);
+		return from_h(sf::bits(r));
+	}
 	return (sew == 64) ? fbinop_d(a, b, op, rm, regs) : (double)fbinop_f((float)a, (float)b, op, rm, regs);
 }
 double gsqrt(double a, uint8_t rm, int sew, Registers &regs)
 {
+	if (sew == 16) {
+		sf::begin(rm, regs.get_frm());
+		float16_t r = f16_sqrt(sf::f16(as_h(a)));
+		sf::end(regs);
+		return from_h(sf::bits(r));
+	}
 	return (sew == 64) ? fp_sqrt(a, rm, regs) : (double)fp_sqrt((float)a, rm, regs);
 }
 double gfma(double a, double b, double c, uint8_t rm, int sew, Registers &regs)
 {
+	if (sew == 16) {
+		sf::begin(rm, regs.get_frm());
+		float16_t r = f16_mulAdd(sf::f16(as_h(a)), sf::f16(as_h(b)), sf::f16(as_h(c)));
+		sf::end(regs);
+		return from_h(sf::bits(r));
+	}
 	return (sew == 64) ? fp_fma(a, b, c, rm, regs) : (double)fp_fma((float)a, (float)b, (float)c, rm, regs);
 }
 uint64_t gcompare(double a, double b, uint8_t funct3, int sew, Registers &regs)
 {
+	if (sew == 16) {
+		// funct3 here is the *scalar* comparison encoding the callers pass
+		// -- 0b010 for equality, 0b001 for less-than, 0b000 for
+		// less-or-equal -- not the vector funct6, and not the vmf* opcode
+		// order. Reversal and negation are the caller's job too: vmfgt
+		// swaps its operands and vmfne inverts the result.
+		//
+		// Routed through f16 rather than reusing the double path because
+		// the difference is in the flags, not the answer: SoftFloat's
+		// f16_eq is quiet and raises invalid only on a signalling NaN,
+		// while f16_lt and f16_le signal on any NaN. That is exactly the
+		// rule the architecture wants, so picking the right function gets
+		// the flags for free.
+		sf::begin(0, regs.get_frm());
+		float16_t x = sf::f16(as_h(a)), y = sf::f16(as_h(b));
+		bool out;
+		switch (funct3) {
+		case 0b010: out = f16_eq(x, y); break;   // EQ, quiet
+		case 0b001: out = f16_lt(x, y); break;   // LT, signalling
+		default:    out = f16_le(x, y); break;   // LE, signalling
+		}
+		sf::end(regs);
+		return out ? 1u : 0u;
+	}
 	return (sew == 64) ? fcompare(a, b, funct3, regs) : fcompare((float)a, (float)b, funct3, regs);
 }
 double gminmax(double a, double b, bool is_max, int sew, Registers &regs)
 {
+	if (sew == 16) {
+		// The same not-SoftFloat rules scalar half min/max follows: a quiet
+		// NaN is ignored rather than propagated, two NaNs give the canonical
+		// NaN, and -0.0 sorts below +0.0.
+		const uint16_t x = as_h(a), y = as_h(b);
+		if (fp16::h_is_snan(x) || fp16::h_is_snan(y)) regs.or_fflags(0x10);
+		const bool xn = fp16::h_is_nan(x), yn = fp16::h_is_nan(y);
+		if (xn && yn) return from_h(0x7E00);
+		if (xn) return from_h(y);
+		if (yn) return from_h(x);
+		if (((x | y) & 0x7FFF) == 0) {
+			const bool x_neg = (x >> 15) != 0;
+			return from_h(is_max ? (x_neg ? y : x) : (x_neg ? x : y));
+		}
+		const bool lt = f16_lt(sf::f16(x), sf::f16(y));
+		return from_h(is_max ? (lt ? y : x) : (lt ? x : y));
+	}
 	return (sew == 64) ? fminmax(a, b, is_max, regs) : (double)fminmax((float)a, (float)b, is_max, regs);
 }
 double gsgnj(double a, double b, uint8_t funct3, int sew)
 {
+	if (sew == 16) {
+		const uint16_t x = as_h(a), y = as_h(b);
+		uint16_t sign;
+		switch (funct3) {
+		case 0:  sign = y & 0x8000; break;
+		case 1:  sign = (uint16_t)((~y) & 0x8000); break;
+		default: sign = (uint16_t)((x ^ y) & 0x8000); break;
+		}
+		return from_h((uint16_t)((x & 0x7FFF) | sign));
+	}
 	return (sew == 64) ? fsgnj_f64(a, b, funct3) : (double)fsgnj_f32((float)a, (float)b, funct3);
 }
 uint64_t gclassify(double v, int sew)
 {
+	if (sew == 16) {
+		const uint16_t h = as_h(v);
+		const uint16_t e = (h >> 10) & 0x1F, m = h & 0x3FF;
+		const bool neg = (h >> 15) != 0;
+		if (e == 0x1F && m == 0)   return neg ? (1u << 0) : (1u << 7);
+		if (e == 0x1F)             return (m & 0x200) ? (1u << 9) : (1u << 8);
+		if (e == 0 && m == 0)      return neg ? (1u << 3) : (1u << 4);
+		if (e == 0)                return neg ? (1u << 2) : (1u << 5);
+		return neg ? (1u << 1) : (1u << 6);
+	}
 	return (sew == 64) ? fclassify(v) : fclassify((float)v);
 }
 
@@ -95,27 +213,49 @@ void exec_v_fp(const DecodedInstruction &instr, Registers &regs)
 	// is kept deliberately here rather than fixed in passing: making it an
 	// illegal instruction is a separate behaviour change, and the honest
 	// thing is to say so rather than leave the reader to infer it.
-	if (sew == 16) {
-		bool zvfhmin_convert = (instr.funct3 == 0b001) && (op_v_funct6(instr.funct7) == 0x12)
-		                    && (instr.rs1 == 0x0C || instr.rs1 == 0x14);
-		if (!zvfhmin_convert) return;
-	} else if (sew != 32 && sew != 64) {
-		return;
-	}
+	// Zvfh: SEW=16 is a first-class floating-point width now, not just the
+	// two Zvfhmin conversions. It used to fall through to a no-op, which is
+	// the worst of the options -- the destination kept a stale value and
+	// nothing said the operation had not happened. 895 of riscv-vector-
+	// tests 3042 cases are e16, so this was most of that suite.
+	if (sew != 16 && sew != 32 && sew != 64) return;
 
 	// Second operand: vs1[i] (.vv) or the scalar f-register rs1 (.vf).
+	// The scalar operand of a .vf form comes from an f register, and it has
+	// to be read at the element width. Reading a half-precision element as
+	// single -- which is what happened for every width below 64 -- does not
+	// give a slightly wrong number, it gives an unrelated one, because the
+	// register holds a NaN-boxed f16 and the f32 interpretation of that
+	// pattern is meaningless. Every .vf form was affected: the compares,
+	// sign-injection, min/max and the arithmetic alike.
+	auto read_fscalar = [&](int w) -> double {
+		if (w == 64) return regs.read_f(instr.rs1);
+		if (w == 16) {
+			uint8_t f = 0;
+			return f64_from_bits(fp16::h_to_f64_bits(
+				fp16::unbox_f16(bits_from_f64(regs.read_f(instr.rs1))), f));
+		}
+		return (double)read_f32_reg(regs, instr.rs1);
+	};
 	auto op2 = [&](uint64_t i) -> double {
-		return is_vv ? read_felem(regs, instr.rs1, sew, i) : (sew == 64 ? regs.read_f(instr.rs1) : (double)read_f32_reg(regs, instr.rs1));
+		return is_vv ? read_felem(regs, instr.rs1, sew, i) : read_fscalar(sew);
 	};
 
 	// funct6==0x10 family: vfmv.f.s (vv-space: rd(F) = vs2[0]) / vfmv.s.f (vf-space: vd[0] = rs1(F), rest undisturbed)
 	if (funct6 == 0x10) {
 		if (is_vv) {
 			double v = read_felem(regs, instr.rs2, sew, 0);
-			if (sew == 64) regs.write_f(instr.rd, v); else write_f32_reg(regs, instr.rd, (float)v);
+			if (sew == 64) regs.write_f(instr.rd, v);
+			else if (sew == 16) {
+				// Written NaN-boxed, the way every half-precision producer
+				// leaves an f register.
+				uint8_t f = 0;
+				regs.write_f(instr.rd, f64_from_bits(fp16::box_f16(
+					fp16::f64_bits_to_h(bits_from_f64(v), 0, f))));
+			}
+			else write_f32_reg(regs, instr.rd, (float)v);
 		} else if (vl > 0) {
-			double v = (sew == 64) ? regs.read_f(instr.rs1) : (double)read_f32_reg(regs, instr.rs1);
-			write_felem(regs, instr.rd, sew, 0, v);
+			write_felem(regs, instr.rd, sew, 0, read_fscalar(sew));
 		}
 		return;
 	}
@@ -384,38 +524,56 @@ void exec_v_fp(const DecodedInstruction &instr, Registers &regs)
 	}
 
 	default:
-		if (funct6 >= 0x30 && funct6 <= 0x3f) { // widening add/sub/mul/FMA and vfwredusum/vfwredosum -- narrow(32)->wide(64) only
-			if (sew != 32) return;
+		if (funct6 >= 0x30 && funct6 <= 0x3f) { // widening add/sub/mul/FMA and vfwredusum/vfwredosum
+			// Widening reads narrow elements and computes at double the
+			// width. Both 16->32 and 32->64 are real: this used to accept
+			// only the latter, which made every e16 widening op a no-op and
+			// accounts for about a third of what riscv-vector-tests was
+			// failing.
+			//
+			// The arithmetic happens at the *wide* width, which is the whole
+			// point of a widening operation -- one rounding, at the wider
+			// format, rather than computing narrow and converting.
+			const int wsew = sew * 2;
+			if ((sew != 16 && sew != 32) || wsew > 64) return;
+
 			bool op2_is_wide = (funct6 == 0x34 || funct6 == 0x36);
 			auto read_vs2w = [&](uint64_t i) -> double {
-				return op2_is_wide ? f64_from_bits(read_velem(regs, instr.rs2, 64, i))
-				                    : (double)f32_from_bits((uint32_t)read_velem(regs, instr.rs2, 32, i));
+				return read_felem(regs, instr.rs2, op2_is_wide ? wsew : sew, i);
 			};
+			// The .vf scalar comes from an f register at the narrow width,
+			// widened on the way in like a vector element would be.
 			auto narrow2 = [&](uint64_t i) -> double {
-				return is_vv ? (double)f32_from_bits((uint32_t)read_velem(regs, instr.rs1, 32, i)) : (double)read_f32_reg(regs, instr.rs1);
+				if (is_vv) return read_felem(regs, instr.rs1, sew, i);
+				if (sew == 16) {
+					uint8_t f = 0;
+					return f64_from_bits(fp16::h_to_f64_bits(
+						fp16::unbox_f16(bits_from_f64(regs.read_f(instr.rs1))), f));
+				}
+				return (double)read_f32_reg(regs, instr.rs1);
 			};
 			if (funct6 == 0x31 || funct6 == 0x33) { // vfwredusum.vs / vfwredosum.vs (OPFVV only)
-				double acc = f64_from_bits(read_velem(regs, instr.rs1, 64, 0));
+				double acc = read_felem(regs, instr.rs1, wsew, 0);
 				for_each_active(regs, vm, vl, [&](uint64_t i) {
-					acc = fp_binop(acc, (double)f32_from_bits((uint32_t)read_velem(regs, instr.rs2, 32, i)), '+', rm, regs);
+					acc = gbinop(acc, read_felem(regs, instr.rs2, sew, i), '+', rm, wsew, regs);
 				});
-				if (vl > 0) write_velem(regs, instr.rd, 64, 0, bits_from_f64(acc));
+				if (vl > 0) write_felem(regs, instr.rd, wsew, 0, acc);
 				return;
 			}
 			switch (funct6) {
-			case 0x30: case 0x34: for_each_active(regs, vm, vl, [&](uint64_t i) { write_velem(regs, instr.rd, 64, i, bits_from_f64(fp_binop(read_vs2w(i), narrow2(i), '+', rm, regs))); }); break;
-			case 0x32: case 0x36: for_each_active(regs, vm, vl, [&](uint64_t i) { write_velem(regs, instr.rd, 64, i, bits_from_f64(fp_binop(read_vs2w(i), narrow2(i), '-', rm, regs))); }); break;
-			case 0x38: for_each_active(regs, vm, vl, [&](uint64_t i) { write_velem(regs, instr.rd, 64, i, bits_from_f64(fp_binop(read_vs2w(i), narrow2(i), '*', rm, regs))); }); break;
+			case 0x30: case 0x34: for_each_active(regs, vm, vl, [&](uint64_t i) { write_felem(regs, instr.rd, wsew, i, gbinop(read_vs2w(i), narrow2(i), '+', rm, wsew, regs)); }); break;
+			case 0x32: case 0x36: for_each_active(regs, vm, vl, [&](uint64_t i) { write_felem(regs, instr.rd, wsew, i, gbinop(read_vs2w(i), narrow2(i), '-', rm, wsew, regs)); }); break;
+			case 0x38: for_each_active(regs, vm, vl, [&](uint64_t i) { write_felem(regs, instr.rd, wsew, i, gbinop(read_vs2w(i), narrow2(i), '*', rm, wsew, regs)); }); break;
 			case 0x3c: case 0x3d: case 0x3e: case 0x3f: { // vfwmacc/vfwnmacc/vfwmsac/vfwnmsac (macc-family only, no widening madd-family)
 				uint8_t neg = funct6 & 0x3;
 				bool negate_a = (neg == 0b01 || neg == 0b11);
 				bool negate_c = (neg == 0b01 || neg == 0b10);
 				for_each_active(regs, vm, vl, [&](uint64_t i) {
-					double old_vd = f64_from_bits(read_velem(regs, instr.rd, 64, i));
-					double a = narrow2(i), b = read_vs2w(i), c = old_vd;
+					double a = narrow2(i), b = read_vs2w(i);
+					double c = read_felem(regs, instr.rd, wsew, i);
 					if (negate_a) a = -a;
 					if (negate_c) c = -c;
-					write_velem(regs, instr.rd, 64, i, bits_from_f64(fp_fma(a, b, c, rm, regs)));
+					write_felem(regs, instr.rd, wsew, i, gfma(a, b, c, rm, wsew, regs));
 				});
 				break;
 			}
