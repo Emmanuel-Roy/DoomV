@@ -319,7 +319,7 @@ bool gstage_translate(Registers &regs, Memory &mem, uint64_t gpa, AccessType typ
 // Instruction fetch is never masked, and neither are the addresses the page
 // table walk itself produces -- masking applies to the effective address a
 // load or store computed, and nothing further down.
-int pointer_mask_len(Registers &regs, bool as_guest)
+int pointer_mask_len(Registers &regs, PrivMode eff_priv, bool eff_virt)
 {
 	uint64_t pmm;
 	// An hlv/hsv is not masked by the field that governs the mode issuing
@@ -327,10 +327,38 @@ int pointer_mask_len(Registers &regs, bool as_guest)
 	// own control over the addresses it hands to those instructions --
 	// selects the length instead. Using menvcfg here would have let the
 	// hypervisor's S-mode masking silently rewrite guest pointers.
-	if (as_guest) pmm = (regs.read_csr(CSR_HSTATUS) >> 48) & 0x3;
-	else switch (regs.get_priv()) {
+	//
+	// Otherwise the field is the one belonging to the level *above* the
+	// mode making the access, and virtualisation inserts a level:
+	//
+	//   U   senvcfg.PMM     its supervisor's choice
+	//   HS  menvcfg.PMM     the machine's
+	//   VS  henvcfg.PMM     its hypervisor's -- not menvcfg's, which
+	//                       governs HS-mode and is a different setting
+	//   VU  senvcfg.PMM     its own guest supervisor's
+	//
+	// VS-mode was reading menvcfg, so a hypervisor that enabled masking
+	// for its guest got none: the guest's tagged pointer reached the MMU
+	// with its tag still on and faulted on an address it never meant to
+	// name.
+	//
+	// The privilege and world are passed in rather than read here, because
+	// an MPRV access from M-mode is made at mstatus.MPP and MPV, and those
+	// are what select the field.
+	//
+	// hlv/hsv need no case of their own. They act as the guest at
+	// hstatus.SPVP, and the field follows that privilege like any other:
+	// SPVP=1 is an access made as VS and takes henvcfg.PMM, SPVP=0 is one
+	// made as VU and takes the guest's senvcfg.PMM. The caller resolves
+	// SPVP into eff_priv before calling, so the ordinary switch below
+	// covers both. Reading hstatus.HUPMM here instead -- which is what
+	// this used to do for every hlv regardless of SPVP -- masked by a
+	// field that governs neither, and a tagged pointer reached the MMU
+	// with its tag intact.
+	switch (eff_priv) {
 	case PrivMode::U: pmm = (regs.read_csr(CSR_SENVCFG) >> 32) & 0x3; break;
-	case PrivMode::S: pmm = (regs.read_csr(CSR_MENVCFG) >> 32) & 0x3; break;
+	case PrivMode::S: pmm = eff_virt ? ((regs.read_csr(CSR_HENVCFG) >> 32) & 0x3)
+	                                 : ((regs.read_csr(CSR_MENVCFG) >> 32) & 0x3); break;
 	default: return 0; // M-mode masking is Smmpm, which RVA23 does not mandate
 	}
 	switch (pmm) {
@@ -340,11 +368,12 @@ int pointer_mask_len(Registers &regs, bool as_guest)
 	}
 }
 
-uint64_t apply_pointer_mask(Registers &regs, uint64_t vaddr, AccessType type, bool as_guest)
+uint64_t apply_pointer_mask(Registers &regs, uint64_t vaddr, AccessType type,
+                            PrivMode eff_priv, bool eff_virt)
 {
 	if (type == AccessType::Fetch) return vaddr;
 	if (!Extensions.SSNPM) return vaddr;
-	int pmlen = pointer_mask_len(regs, as_guest);
+	int pmlen = pointer_mask_len(regs, eff_priv, eff_virt);
 	if (pmlen == 0) return vaddr;
 	// Sign-extend from the highest bit that survives, discarding the top
 	// pmlen bits.
@@ -364,10 +393,6 @@ bool mmu_translate(Registers &regs, Memory &mem, uint64_t vaddr, AccessType type
 	// its own code from its own address space, and applying it to fetch
 	// would send M-mode through the guest's mappings mid-handler.
 	//
-	// Masking happens before anything else, including the bare-mode path
-	// below: it transforms the effective address itself, not the
-	// translation of one, so it applies whether or not paging is on.
-	vaddr = apply_pointer_mask(regs, vaddr, type, as_guest);
 
 	// A guest access reads the guest's own satp and runs at the guest's own
 	// privilege, which is what makes hlv/hsv reach exactly the memory the
@@ -414,13 +439,23 @@ bool mmu_translate(Registers &regs, Memory &mem, uint64_t vaddr, AccessType type
 		}
 	}
 	const bool virt_access = Extensions.H && (as_guest || regs.get_virt() || mprv_virt);
-	uint64_t satp = regs.read_csr(virt_access ? CSR_VSATP : CSR_SATP);
-	if (as_guest) {
-		// hstatus.SPVP says whether the guest was in VS or VU -- an hlv
-		// must be checked against the guest's supervisor/user permission
-		// bits, not the hypervisor's.
+
+	// Masking happens before translation, including before the bare-mode
+	// path below: it transforms the effective address itself, not the
+	// translation of one, so it applies whether or not paging is on. It
+	// has to come *after* the privilege and world are resolved, though,
+	// because which envcfg field supplies the length depends on both --
+	// an MPRV access from M-mode is masked as the mode it borrowed.
+	// hstatus.SPVP says which guest privilege an hlv/hsv acts at, and that
+	// is the privilege the masking follows too -- so it is resolved here,
+	// before the mask, rather than further down where the permission check
+	// used to pick it up.
+	if (as_guest)
 		eff_priv = (regs.read_csr(CSR_HSTATUS) & HSTATUS_SPVP) ? PrivMode::S : PrivMode::U;
-	}
+
+	vaddr = apply_pointer_mask(regs, vaddr, type, eff_priv,
+	                           Extensions.H && (as_guest || regs.get_virt() || mprv_virt));
+	uint64_t satp = regs.read_csr(virt_access ? CSR_VSATP : CSR_SATP);
 	uint64_t mode = satp >> 60;
 	if (eff_priv == PrivMode::M || mode == 0) {
 		// No first stage, but a guest access still owes the second one:

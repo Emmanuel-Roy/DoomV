@@ -1319,6 +1319,20 @@ void RiscvCore::exec_32ZICSR(const DecodedInstruction &instr, Registers &regs, M
 				enter_trap(regs, 22, 0);
 				return;
 			}
+			// SRET is a supervisor instruction, so U-mode may not run it
+			// at all -- and from VU-mode the refusal is a virtual
+			// instruction, since HS-mode could have run it. DoomV checked
+			// neither, so a VU-mode SRET *returned*, to whatever vsepc
+			// happened to hold: in a test that never set one, address 4,
+			// which then took an instruction access fault the test could
+			// not attribute to anything.
+			if (regs.get_priv() == PrivMode::U) {
+				if (Extensions.H && regs.get_virt())
+					enter_trap(regs, hyp::CAUSE_VIRTUAL_INSTRUCTION, instr.raw);
+				else
+					raise_illegal_instruction(regs, instr.raw);
+				return;
+			}
 			// In VS-mode the names sstatus and sepc mean the guest's own
 			// vsstatus and vsepc -- the same redirection every other S-mode
 			// CSR access already goes through. SRET was reading the
