@@ -710,9 +710,14 @@ uint64_t read_vsie(Registers &regs)
 
 void write_vsie(Registers &regs, uint64_t value)
 {
+	// Only the bits hideleg delegates are the guest's to enable. A guest
+	// writing sie.SEIE for an interrupt the hypervisor kept must not turn
+	// on hie.VSEIE behind its back -- that would let the guest arm an
+	// interrupt routed to HS-mode.
+	uint64_t writable = vs_visible(regs);
 	uint64_t mie = regs.read_csr(CSR_MIE);
-	regs.write_csr(CSR_MIE, (mie & ~VS_BITS_HS)
-	                      | ((value & VS_BITS_GUEST) << 1));
+	regs.write_csr(CSR_MIE, (mie & ~writable)
+	                      | (((value << 1) & writable)));
 }
 
 uint64_t read_vsip(Registers &regs, Memory &mem)
@@ -1087,6 +1092,10 @@ void RiscvCore::enter_trap(Registers &regs, uint64_t cause, uint64_t tval, bool 
 			bool has_gpa = !is_interrupt
 			            && (cause_bit == 20 || cause_bit == 21 || cause_bit == 23);
 			regs.write_csr(0x643, has_gpa ? (regs.pending_gpa >> 2) : 0);
+			// htinst travels with htval: both describe the same fault, and
+			// a stale pseudoinstruction beside a fresh address is worse
+			// than none at all.
+			regs.write_csr(0x64A, has_gpa ? regs.pending_htinst : 0);
 
 			// A trap from a guest into HS-mode leaves virtual mode.
 			// SPVP records the guest's own privilege, so the
@@ -1158,6 +1167,7 @@ void RiscvCore::enter_trap(Registers &regs, uint64_t cause, uint64_t tval, bool 
 		bool m_has_gpa = !is_interrupt
 		              && (cause_bit == 20 || cause_bit == 21 || cause_bit == 23);
 		regs.write_csr(0x34B, m_has_gpa ? (regs.pending_gpa >> 2) : 0);
+		regs.write_csr(0x34A, m_has_gpa ? regs.pending_htinst : 0);  // mtinst
 	}
 	if (Extensions.H) regs.set_virt(false); // M-mode is never virtual
 	regs.set_priv(PrivMode::M);
@@ -1526,6 +1536,13 @@ void RiscvCore::exec_32ZICSR(const DecodedInstruction &instr, Registers &regs, M
 	// -- the guest's write arrives here as 0x205, not 0x105.
 	if (csr == CSR_STVEC || csr == CSR_MTVEC || csr == 0x205) updated &= ~0x3ull;
 
+	// mepc, sepc and vsepc hold instruction addresses, and no instruction
+	// starts on an odd byte: bit 0 is read-only zero. With C the alignment
+	// is two rather than four, so only that one bit is masked. Storing an
+	// odd value would have an xRET resume mid-instruction.
+	if (csr == CSR_MEPC || csr == CSR_SEPC || (Extensions.H && csr == 0x241))
+		updated &= ~1ull;
+
 	// mcounteren, scounteren, hcounteren and vscounteren are 32-bit
 	// fields, one bit per counter, in a 64-bit register. Bits 63:32 are
 	// read-only zero -- there is no counter 32 to enable, so a value that
@@ -1557,9 +1574,15 @@ void RiscvCore::exec_32ZICSR(const DecodedInstruction &instr, Registers &regs, M
 	// hedeleg has read-only-zero bits, and they are not an arbitrary
 	// restriction -- each one names a trap the hypervisor must keep.
 	//
+	//    9  ECALL from HS-mode. It is the hypervisor's own call to the
+	//       machine, and never the guest's business.
 	//   10  ECALL from VS-mode. This *is* how a guest calls its
 	//       hypervisor. Delegating it back to the guest would leave the
 	//       guest unable to call out at all.
+	//   11  ECALL from M-mode. There is no mode above M to trap from, so
+	//       nothing can ever raise it below M either.
+	//   16  double trap. A trap taken while already handling one is the
+	//       machine's failure to recover, not something to hand downward.
 	//   20  instruction guest-page fault
 	//   21  load guest-page fault
 	//   23  store/AMO guest-page fault
@@ -1571,7 +1594,8 @@ void RiscvCore::exec_32ZICSR(const DecodedInstruction &instr, Registers &regs, M
 	//       the guest would defeat the purpose.
 	if (Extensions.H && csr == 0x602) {
 		constexpr uint64_t HEDELEG_RO_ZERO =
-			(1ull << 10) | (1ull << 20) | (1ull << 21) | (1ull << 22) | (1ull << 23);
+			(1ull << 9)  | (1ull << 10) | (1ull << 11) | (1ull << 16)
+			| (1ull << 20) | (1ull << 21) | (1ull << 22) | (1ull << 23);
 		updated &= ~HEDELEG_RO_ZERO;
 	}
 

@@ -198,6 +198,11 @@ bool gstage_translate(Registers &regs, Memory &mem, uint64_t gpa, AccessType typ
 		// Stashed rather than written to htval here: the trap path picks
 		// htval or mtval2 once it knows where the trap is going.
 		regs.pending_gpa = gpa;
+		// An implicit access is one the hardware made on the guest's
+		// behalf while walking its page tables. htinst names which kind,
+		// so the hypervisor can tell a faulting guest load from a
+		// faulting walk *for* that load.
+		regs.pending_htinst = implicit ? 0x3000 : 0;
 		tval = gpa;
 		return false;
 	};
@@ -515,11 +520,15 @@ bool mmu_translate(Registers &regs, Memory &mem, uint64_t vaddr, AccessType type
 	uint64_t pte = 0;
 	int level = -1;
 	// Where the leaf PTE was read from, so Svadu can write A/D back into
-	// it. This is the *physical* address after any G-stage placement, not
-	// the guest physical one the walk indexed with.
+	// it. Two addresses, because a guest walk needs both: the physical one
+	// to write through, and the guest physical one to re-check against the
+	// G-stage, since reading a PTE and writing it are different
+	// permissions on the page holding it.
 	uint64_t leaf_pte_addr = 0;
+	uint64_t leaf_pte_gpa  = 0;
 	for (int i = levels - 1; i >= 0; i--) {
 		uint64_t pte_addr = a + vpn[i] * PTESIZE;
+		const uint64_t pte_gpa = pte_addr;
 		// In a guest walk this address is a guest physical one, so the
 		// second stage has to place it before the PTE can be read. This
 		// is the part that makes two-stage translation expensive: a
@@ -565,6 +574,7 @@ bool mmu_translate(Registers &regs, Memory &mem, uint64_t vaddr, AccessType type
 		if ((pte & PTE_R) || (pte & PTE_X)) {
 			level = i; // leaf
 			leaf_pte_addr = pte_addr;
+			leaf_pte_gpa  = pte_gpa;
 			break;
 		}
 
@@ -642,6 +652,29 @@ bool mmu_translate(Registers &regs, Memory &mem, uint64_t vaddr, AccessType type
 				cause = fault_cause(type);
 				tval = vaddr;
 				return false;
+			}
+			// In a guest walk the page holding the PTE was placed by the
+			// G-stage for a *read*. Setting A or D writes it, and the
+			// hypervisor may well have mapped that page read-only -- a
+			// guest page table it is watching for changes, say. So the
+			// G-stage is asked again, this time as a store, and the walk
+			// faults if it refuses. Skipping this check lets the update
+			// write straight through a G-stage read-only mapping, which
+			// is the one thing the second stage exists to prevent.
+			if (virt_access) {
+				uint64_t wr_pa;
+				if (!gstage_translate(regs, mem, leaf_pte_gpa, AccessType::Store,
+				                      wr_pa, cause, tval, false)) {
+					// This *is* an implicit access -- the A/D write the
+					// hardware makes for the guest -- and gets the write
+					// pseudoinstruction. It is passed as non-implicit
+					// above only so the G-stage demands write permission
+					// rather than the read an implicit walk asks for.
+					regs.pending_htinst = 0x3020;
+					tval = vaddr;
+					return false;
+				}
+				leaf_pte_addr = wr_pa;
 			}
 			// The store answers to PMP exactly as the walk's reads did:
 			// this is the hardware's own access, made at supervisor

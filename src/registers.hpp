@@ -134,6 +134,16 @@ public:
 	// htval then overwrote the one correct value with that zero.
 	uint64_t pending_gpa = 0;
 
+	// The pseudoinstruction htinst reports for a fault taken on an
+	// *implicit* access -- one the hardware made walking the guest's page
+	// tables, not one the program asked for. The architecture defines two:
+	// 0x3000 for the read of a PTE, 0x3020 for the write that updates its
+	// A/D bits. A hypervisor uses this to tell "the guest's load faulted"
+	// from "the walk for the guest's load faulted", which are different
+	// problems with different fixes. Zero means "not provided", which is
+	// legal for explicit accesses and wrong for these two.
+	uint64_t pending_htinst = 0;
+
 private:
 	uint64_t x[32];
 	double f[32];
