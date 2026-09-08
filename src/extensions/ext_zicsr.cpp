@@ -322,9 +322,15 @@ uint64_t compute_topi(Registers &regs, Memory &mem, bool s_level)
 	}
 	return 0;
 }
+// sie and sip show the supervisor's own interrupts. The VS-level bits are
+// *not* among them -- those belong to hie and hip, which is the whole point
+// of having a separate pair. They became visible here the moment mideleg's
+// VS bits were made read-only 1, since these are defined as mie & mideleg,
+// and a hypervisor reading sie would have seen its guests' enables mixed in
+// with its own.
 uint64_t read_sie(Registers &regs)
 {
-	return regs.read_csr(CSR_MIE) & regs.read_csr(CSR_MIDELEG);
+	return regs.read_csr(CSR_MIE) & regs.read_csr(CSR_MIDELEG) & ~HIP_MASK;
 }
 
 void write_sie(Registers &regs, uint64_t value)
@@ -336,7 +342,7 @@ void write_sie(Registers &regs, uint64_t value)
 
 uint64_t read_sip(Registers &regs, Memory &mem)
 {
-	return compute_mip(regs, mem) & regs.read_csr(CSR_MIDELEG);
+	return compute_mip(regs, mem) & regs.read_csr(CSR_MIDELEG) & ~HIP_MASK;
 }
 
 void write_sip(Registers &regs, uint64_t value)
@@ -625,6 +631,21 @@ bool RiscvCore::csr_access_permitted(Registers &regs, uint16_t csr, bool writing
 	if (Extensions.SSSTATEEN && stateen::is_stateen_csr(csr)
 	    && !stateen::stateen_access_permitted(regs, csr))
 		return false;
+
+	// mstateen0.ENVCFG does not gate a register named "stateen" -- it gates
+	// the *envcfg* registers themselves. That is what the field is for: a
+	// bit in mstateen0 controls access to the state a newer extension adds,
+	// and senvcfg/henvcfg are that state. Enforcing it only on the
+	// state-enable registers left the thing being enabled unguarded.
+	if (Extensions.SSSTATEEN && (csr == 0x10A || (Extensions.H && csr == 0x60A))
+	    && regs.get_priv() != PrivMode::M) {
+		constexpr uint64_t ENVCFG = 1ull << 62;
+		if (!(regs.read_csr(stateen::CSR_MSTATEEN0) & ENVCFG)) return false;
+		// And a guest additionally needs its hypervisor's permission.
+		if (Extensions.H && regs.get_virt()
+		    && !(regs.read_csr(stateen::CSR_HSTATEEN0) & ENVCFG))
+			return false;
+	}
 
 	return true;
 }

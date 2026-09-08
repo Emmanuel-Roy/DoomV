@@ -1,5 +1,6 @@
 #pragma once
 #include "registers.hpp"
+#include "../extensions.hpp"
 #include <cstdint>
 
 // mstatus's extension-state fields: FS (bits 14:13) for floating point and
@@ -33,24 +34,50 @@ constexpr uint64_t MSTATUS_FS_DIRTY = 3ull << 13;
 constexpr uint64_t MSTATUS_VS_MASK  = 3ull << 9;
 constexpr uint64_t MSTATUS_VS_DIRTY = 3ull << 9;
 
+// Under virtualisation there are two fields, not one, and both must be on.
+// mstatus.FS is the hypervisor's switch over the whole hart; vsstatus.FS is
+// the guest's own over its tasks. A guest that has turned its FP unit off
+// must fault on an FP instruction even though the hypervisor left the hart's
+// unit enabled -- otherwise the guest's own context-switching, which relies
+// on that trap to know when to swap FP state in, silently stops working.
+//
+// The exception is an *illegal* instruction, not a virtual one. Nothing here
+// is the hypervisor's to emulate: the guest disabled its own unit, and the
+// guest's supervisor is exactly who should hear about it.
+constexpr uint16_t CSR_VSSTATUS_X = 0x200;
+
 inline bool fp_unit_enabled(Registers &regs)
 {
-	return (regs.read_csr(CSR_MSTATUS_X) & MSTATUS_FS_MASK) != 0;
+	if ((regs.read_csr(CSR_MSTATUS_X) & MSTATUS_FS_MASK) == 0) return false;
+	if (Extensions.H && regs.get_virt())
+		return (regs.read_csr(CSR_VSSTATUS_X) & MSTATUS_FS_MASK) != 0;
+	return true;
 }
 
 inline bool vector_unit_enabled(Registers &regs)
 {
-	return (regs.read_csr(CSR_MSTATUS_X) & MSTATUS_VS_MASK) != 0;
+	if ((regs.read_csr(CSR_MSTATUS_X) & MSTATUS_VS_MASK) == 0) return false;
+	if (Extensions.H && regs.get_virt())
+		return (regs.read_csr(CSR_VSSTATUS_X) & MSTATUS_VS_MASK) != 0;
+	return true;
 }
 
+// Dirtying follows the same pair. A guest's supervisor reads *its* SD bit to
+// decide whether a task has live FP state worth saving, so marking only the
+// hypervisor's copy leaves the guest believing nothing is live and dropping
+// its tasks' registers on every switch.
 inline void mark_fp_dirty(Registers &regs)
 {
 	regs.write_csr(CSR_MSTATUS_X, regs.read_csr(CSR_MSTATUS_X) | MSTATUS_FS_DIRTY);
+	if (Extensions.H && regs.get_virt())
+		regs.write_csr(CSR_VSSTATUS_X, regs.read_csr(CSR_VSSTATUS_X) | MSTATUS_FS_DIRTY);
 }
 
 inline void mark_vector_dirty(Registers &regs)
 {
 	regs.write_csr(CSR_MSTATUS_X, regs.read_csr(CSR_MSTATUS_X) | MSTATUS_VS_DIRTY);
+	if (Extensions.H && regs.get_virt())
+		regs.write_csr(CSR_VSSTATUS_X, regs.read_csr(CSR_VSSTATUS_X) | MSTATUS_VS_DIRTY);
 }
 
 // SD (bit 63) summarises the above: it reads as one whenever FS or VS is

@@ -295,6 +295,19 @@ bool gstage_translate(Registers &regs, Memory &mem, uint64_t gpa, AccessType typ
 	}
 
 	uint64_t ppn_full = pte_ppn(pte);
+
+	// Svnapot on the second stage, by the same rule as the first: N marks a
+	// 64KB naturally-aligned region, legal only on a level-0 leaf whose PPN
+	// ends in 0x8. Every other encoding is reserved and must fault rather
+	// than translate as though the bit were absent -- that is how an OS
+	// discovers which NAPOT sizes exist. The G-stage checked none of it, so
+	// a guest-physical PTE with a reserved encoding translated silently.
+	if (pte & PTE_N) {
+		if (!Extensions.SVNAPOT || level != 0 || (ppn_full & 0xF) != 0x8)
+			return gfault(guest_fault_cause(type));
+		ppn_full = (ppn_full & ~0xFull) | ((gpa >> 12) & 0xF);
+	}
+
 	if (level > 0) {
 		uint64_t low_mask = (1ull << (9 * level)) - 1;
 		if (ppn_full & low_mask) return gfault(guest_fault_cause(type));
