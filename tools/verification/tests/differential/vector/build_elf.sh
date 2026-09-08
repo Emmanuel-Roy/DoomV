@@ -15,7 +15,12 @@ TEST="${1:?usage: build_elf.sh <test_basename>}"
 DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$DIR"
 
-CC=riscv64-linux-gnu-gcc
+TOOLS="${DOOMV_TOOLS:-$HOME/.local/share/doomv}"
+if [ -x "$TOOLS/xpack/bin/riscv-none-elf-gcc" ]; then
+    CC="$TOOLS/xpack/bin/riscv-none-elf-gcc"
+else
+    CC=riscv64-linux-gnu-gcc
+fi
 
 # Each test needs its own extension set. VLEN is pinned to 128 on the
 # reference side because DoomV is fixed there (Registers::VLEN_BITS), and
@@ -65,7 +70,9 @@ export MARCH ISA
 
 # Sourced (BUILD_ELF_NO_RUN set) when the caller only wants MARCH/ISA.
 if [ -z "${BUILD_ELF_NO_RUN:-}" ]; then
-	$CC -march="$MARCH" -mabi=lp64d -static -mcmodel=medany -nostdlib -nostartfiles \
-	    -T vtest_v.lds -o "$TEST.elf" "$TEST.S" 2>&1 | grep -v RWX || true
+	# Never let a failed compile reuse yesterday's ELF.
+	rm -f "$TEST.elf"
+	"$CC" -march="$MARCH" -mabi=lp64d -static -mcmodel=medany -nostdlib -nostartfiles \
+	    -T vtest_v.lds -o "$TEST.elf" "$TEST.S"
 	[ -f "$TEST.elf" ] || { echo "ERROR: $TEST.elf was not produced" >&2; exit 1; }
 fi

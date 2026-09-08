@@ -33,7 +33,7 @@
 # because it was the thing being depended on.
 #
 # Env: DISTRO (default Ubuntu), SPIKE / SAIL / SAIL_CONFIG (passed through).
-set -u
+set -uo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 # Five levels up, not three: this suite moved from tools/vtest/vector to
@@ -120,28 +120,12 @@ for t in "${TESTS[@]}"; do
 	BEG="$(nmsym 'D begin_signature')"
 	END="$(nmsym 'D end_signature')"
 
-	# DoomV hardcodes its -sig output to ./signature.log relative to its own
-	# cwd (see src/main.cpp), so two of these running at once silently
-	# overwrite each other's results -- which looks like a wrong answer, not
-	# like a collision. Serialise on a lock directory; mkdir is atomic even
-	# over a Windows filesystem, where flock is not dependable.
-	LOCK="$ROOT/.signature.lock"
-	for _ in $(seq 1 600); do
-		mkdir "$LOCK" 2>/dev/null && break
-		sleep 1
-	done
-
-	( cd "$ROOT" && rm -f signature.log crash.log &&
-	  timeout 180 ./riscv_doom.exe tools/doom/doombuild/DOOM1.WAD \
-		"tools/verification/tests/differential/vector/$t.elf" -march="$(march_for "$t")" \
-		-sig="$BEG:$END" -break="0x$HALT" >/dev/null 2>&1 )
-
-	if [ -f "$ROOT/signature.log" ]; then cp "$ROOT/signature.log" "$HERE/$t.doomv.sig"; fi
-	rmdir "$LOCK" 2>/dev/null
-
-	if [ ! -f "$ROOT/signature.log" ]; then
-		echo "DoomV produced no signature.log"; fail=1; continue
-	fi
+	if [ -z "$HALT" ] || [ -z "$BEG" ] || [ -z "$END" ]; then
+        echo "Missing ELF symbols for $t"; fail=1; continue
+    fi
+    python "$ROOT/scripts/run_dut.py" "$HERE/$t.elf" "$HERE/$t.doomv.sig" \
+        --march="$(march_for "$t")" --begin="$BEG" --end="$END" --halt="$HALT" \
+        || { fail=1; continue; }
 
 	python "$HERE/compare.py" "$t" "$REF" || fail=1
 	echo ""

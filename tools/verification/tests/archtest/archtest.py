@@ -36,6 +36,9 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[3]
 CONFIG = "sail-RVA23S64"
 
+sys.path.insert(0, str(ROOT / "scripts"))
+from run_dut import run_dut
+
 # DoomV's -march resets every extension it does not name, so the profile has
 # to be spelled out in full rather than added to a default.
 MARCH = (
@@ -95,7 +98,9 @@ def read_doomv_sig(path: Path) -> list:
     """
     words = [int(w, 16) for w in path.read_text().split()]
     if len(words) % 2:
-        words.append(0)
+        raise ValueError("truncated DoomV signature (odd number of 32-bit words)")
+    if any(w < 0 or w > 0xffffffff for w in words):
+        raise ValueError("DoomV signature contains an invalid 32-bit word")
     return [words[i] | (words[i + 1] << 32) for i in range(0, len(words), 2)]
 
 
@@ -107,91 +112,27 @@ def run_one(elf: Path, sail_sig: Path, outdir: Path, keep: bool, timeout: int) -
     except (ValueError, struct.error) as e:
         return "skip", str(e)
     beg, end = syms.get("begin_signature"), syms.get("end_signature")
-    if beg is None or end is None:
+    if beg is None or end is None or end <= beg or (end - beg) % 8:
         return "skip", "no signature symbols"
 
     # The test writes its verdict to tohost and spins; DoomV does not exit on
     # an HTIF write, so it is stopped at the store instead.
     halt = syms.get("write_tohost_pass") or syms.get("write_tohost")
 
-    siglog = ROOT / "signature.log"
-    cmd = [
-        str(ROOT / "riscv_doom.exe"),
-        str(ROOT / "tools" / "doom" / "doombuild" / "DOOM1.WAD"),
-        str(elf),
-        "-march=" + MARCH,
-        "-sig={:x}:{:x}".format(beg, end),
-    ]
-    if halt:
-        cmd.append("-break=0x{:x}".format(halt))
-
-    # DoomV hardcodes its -sig output to ./signature.log relative to its own
-    # cwd, so this run and the differential harness next door would silently
-    # overwrite each other's results -- which looks like a wrong answer, not
-    # like a collision. Same lock directory as run_diff.sh; mkdir is atomic
-    # even over a Windows filesystem, where flock is not dependable.
-    lock = ROOT / ".signature.lock"
-    for _ in range(600):
-        try:
-            lock.mkdir()
-            break
-        except FileExistsError:
-            time.sleep(1)
-    else:
-        return "nosig", "timed out waiting for the signature lock"
+    dut = outdir / (name + ".doomv.sig")
+    dut.unlink(missing_ok=True)
     try:
-        if siglog.exists():
-            siglog.unlink()
-        # DoomV writes the signature when it reaches the -break address and
-        # then keeps its SDL window open rather than exiting, so it always
-        # has to be killed and the exit status never means anything. What
-        # decides the outcome is whether signature.log appeared.
-        #
-        # It is therefore not enough to run with a timeout and wait: every
-        # test, passing or not, would burn the entire budget, and 663 of
-        # them at even 150s each is over a day. So poll for the file and
-        # kill DoomV as soon as it has finished writing it. The timeout
-        # stays as the backstop for a test that never reaches the halt
-        # address at all.
-        proc = subprocess.Popen(cmd, cwd=str(ROOT),
-                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        deadline = time.time() + timeout
-        stable_size = -1
-        try:
-            while time.time() < deadline:
-                if proc.poll() is not None:
-                    break
-                if siglog.exists():
-                    # Wait for the size to stop changing before killing, or a
-                    # large signature gets truncated mid-write and the diff
-                    # blames DoomV for a harness race.
-                    size = siglog.stat().st_size
-                    if size > 0 and size == stable_size:
-                        break
-                    stable_size = size
-                time.sleep(0.25)
-        finally:
-            if proc.poll() is None:
-                proc.kill()
-                proc.wait(timeout=30)
+        dut.write_text(run_dut(elf, MARCH, beg, end, timeout, halt=halt))
+    except (OSError, RuntimeError, ValueError) as exc:
+        return "nosig", str(exc)
 
-        if not siglog.exists():
-            return "nosig", "no signature.log (never reached the halt address)"
-        # Claim the file while still holding the lock. Releasing first would
-        # leave a window in which another run's DoomV overwrites it, and the
-        # result would be attributed to this test.
-        dut = outdir / (name + ".doomv.sig")
-        if dut.exists():
-            dut.unlink()
-        siglog.replace(dut)
-    finally:
-        try:
-            lock.rmdir()
-        except OSError:
-            pass
-
-    ref = read_sail_sig(sail_sig)
-    got = read_doomv_sig(dut)
+    try:
+        ref = read_sail_sig(sail_sig)
+        got = read_doomv_sig(dut)
+    except ValueError as exc:
+        return "fail", str(exc)
+    if not ref or len(ref) * 8 != end - beg:
+        return "fail", "reference length does not match ELF signature region"
     n = min(len(ref), len(got))
     diffs = [i for i in range(n) if ref[i] != got[i]]
     if not diffs and len(ref) == len(got):
@@ -217,6 +158,8 @@ def main() -> int:
     # not fail loudly: it reports "timed out", which reads like a hang.
     ap.add_argument("--timeout", type=int, default=900)
     args = ap.parse_args()
+    if args.timeout <= 0 or args.limit < 0:
+        ap.error("--timeout must be positive and --limit nonnegative")
 
     build = Path(args.work) / CONFIG / "build"
     if not build.is_dir():
@@ -243,10 +186,11 @@ def main() -> int:
         sail_sig = elf.with_suffix("")            # <name>.sig.elf -> <name>.sig
         if not sail_sig.exists():
             counts["skip"] += 1
+            problems.append(f"{elf.name}: missing Sail reference signature")
             continue
         status, detail = run_one(elf, sail_sig, outdir, args.keep, args.timeout)
         counts[status] += 1
-        if status in ("fail", "nosig"):
+        if status in ("fail", "nosig", "skip"):
             problems.append("{}/{}: {}".format(
                 elf.parent.name, elf.name[: -len(".sig.elf")], detail))
         print("\r[{}/{}] pass={} fail={} nosig={} skip={}".format(
@@ -261,7 +205,7 @@ def main() -> int:
         print("  " + p)
     if len(problems) > 40:
         print("  ... and {} more".format(len(problems) - 40))
-    return 0 if not problems else 1
+    return 0 if counts["pass"] > 0 and not problems else 1
 
 
 if __name__ == "__main__":

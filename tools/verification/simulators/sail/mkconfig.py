@@ -31,6 +31,8 @@ YAML = os.path.join(REPO, "tools", "verification", "tests", "arch-test",
                     "config", "sail", "sail-RVA23S64", "sail-RVA23S64.yaml")
 SIM = os.path.join(HERE, "src", "build", "c_emulator", "sail_riscv_sim")
 OUT = os.path.join(HERE, "rva23s64.json")
+SIM = os.environ.get("SAIL", SIM)
+YAML = os.environ.get("SAIL_PROFILE", YAML)
 
 # Extensions the profile names that are not separate toggles in Sail's
 # config, because the model expresses them another way.

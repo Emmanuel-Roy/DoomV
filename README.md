@@ -274,6 +274,33 @@ separately in `tools/doom/doombuild/`: a cross-compiled `doomgeneric` with a
 small platform layer (`doomgeneric_doomv.c`, `w_file_doomv.c`, a libc
 shim) that talks to DoomV's MMIO instead of a real OS.
 
+## Scripts
+
+The supported entry points are collected in `scripts/`:
+
+```powershell
+# Native host tools, then WSL/RISC-V tools separately.
+powershell -ExecutionPolicy Bypass -File scripts/install_dependencies.ps1
+powershell -ExecutionPolicy Bypass -File scripts/toolchain.ps1
+
+# Build DoomV, Linux, or both.
+python scripts/build.py doom
+python scripts/build.py linux
+python scripts/build.py all
+
+# Boot either guest; --smoke proves Linux reaches BusyBox userspace.
+python scripts/boot.py doom
+python scripts/boot.py linux --smoke
+
+# All suites by default, or selected suites by name.
+python scripts/verify.py
+python scripts/verify.py differential archtest
+```
+
+Install Ubuntu first when needed with `wsl --install -d Ubuntu`;
+`toolchain.ps1` intentionally does not install or modify WSL itself. Full
+options and dependency separation are in [`scripts/README.md`](scripts/README.md).
+
 ## Design notes
 
 The core dispatches on a plain switch statement rather than a table of

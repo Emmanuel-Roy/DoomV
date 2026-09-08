@@ -29,12 +29,17 @@ TEST="${1:-vtest_v}"
 DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$DIR"
 
-SAIL="${SAIL:-/mnt/z/Code/Dev/DoomV/tools/verification/simulators/sail/src/build/c_emulator/sail_riscv_sim}"
-CONFIG="${SAIL_CONFIG:-/mnt/z/Code/Dev/DoomV/tools/verification/simulators/sail/rva23s64.json}"
+ROOT="$(cd "$DIR/../../../../.." && pwd)"
+MANIFEST="$ROOT/build/verification/tools.json"
+if [ -z "${SAIL:-}" ] && [ -f "$MANIFEST" ]; then
+    SAIL="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["sail"])' "$MANIFEST")"
+fi
+SAIL="${SAIL:-$ROOT/tools/verification/simulators/sail/src/build/c_emulator/sail_riscv_sim}"
+CONFIG="${SAIL_CONFIG:-$ROOT/tools/verification/simulators/sail/rva23s64.json}"
 NM=riscv64-linux-gnu-nm
 
 [ -x "$SAIL" ] || { echo "ERROR: sail_riscv_sim not built at $SAIL" >&2; exit 1; }
-[ -f "$TEST.elf" ] || { echo "ERROR: $TEST.elf not built -- run spike_sig.sh first" >&2; exit 1; }
+[ -f "$TEST.elf" ] || { echo "ERROR: $TEST.elf not built -- run build_elf.sh first" >&2; exit 1; }
 
 sym() { $NM "$TEST.elf" | awk -v s="$1" '$3==s {print $1}'; }
 BEG=$(sym begin_signature)
@@ -50,11 +55,17 @@ echo "$TEST: sail begin=0x$BEG end=0x$END" >&2
 # The instruction limit is generous: these tests are short, and the limit
 # exists to bound a runaway rather than to be reached.
 rm -f "$TEST.sail.sig"
-timeout 300 "$SAIL" --config "$CONFIG" --test-signature "$TEST.sail.sig"     --inst-limit 5000000 "./$TEST.elf" > /tmp/sail_raw.txt 2>&1 || true
+RAW="$(mktemp)"
+trap 'rm -f "$RAW"' EXIT
+if ! timeout 300 "$SAIL" --config "$CONFIG" --test-signature "$TEST.sail.sig" \
+    --inst-limit 5000000 "./$TEST.elf" > "$RAW" 2>&1; then
+    cat "$RAW" >&2
+    exit 1
+fi
 
-if ! grep -q "SUCCESS" /tmp/sail_raw.txt; then
+if ! grep -q "SUCCESS" "$RAW" || [ ! -s "$TEST.sail.sig" ]; then
 	echo "ERROR: sail did not reach the test's HTIF exit:" >&2
-	tail -4 /tmp/sail_raw.txt >&2
+	tail -4 "$RAW" >&2
 	# A common cause is a test that drops to S-mode without installing a
 	# PMP entry: with PMP implemented and nothing configured, the spec
 	# denies S and U access outright, and the test faults before its first
