@@ -297,8 +297,25 @@ def main() -> int:
                 counts["pass"] += 1
                 dut.unlink()
                 con.unlink(missing_ok=True)
+        elif verdict is not None:
+            # A signature test with no reference to diff against. Passing it
+            # unconditionally is the trap: these suites all *also* export
+            # tohost and self-check, so the test's own verdict is available
+            # and is a real answer. Reporting "pass" for a comparison that
+            # never happened made riscv-vector-tests read 3042/3042 on a run
+            # where nothing had been checked at all.
+            if verdict == 1:
+                counts["pass"] += 1
+                dut.unlink()
+                con.unlink(missing_ok=True)
+            else:
+                counts["fail"] += 1
+                problems.append(f"{elf.name}: tohost={verdict:#x} "
+                                f"(subtest {verdict >> 1}) -- see out/{con.name}")
         else:
-            counts["pass"] += 1
+            # Neither a reference nor a self-check verdict: there is nothing
+            # to compare, and calling that a pass would be a lie.
+            counts["skip"] += 1
             dut.unlink()
             con.unlink(missing_ok=True)
 
