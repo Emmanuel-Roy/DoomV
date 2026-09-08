@@ -19,6 +19,7 @@ void write_hstatus(Registers &regs, uint64_t value);
 constexpr uint16_t CSR_HSTATUS_ADDR = 0x600;
 constexpr uint16_t CSR_VSSTATUS_ADDR = 0x200;
 constexpr uint16_t CSR_VSEPC_ADDR    = 0x241;
+constexpr uint16_t CSR_HGATP_ADDR    = 0x680;
 constexpr uint64_t CAUSE_VIRTUAL_INSTRUCTION = 22;
 
 } // namespace hyp

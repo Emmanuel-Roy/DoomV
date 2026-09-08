@@ -381,6 +381,22 @@ void write_satp(Registers &regs, uint64_t value)
 	write_satp_warl(regs, CSR_SATP, value);
 }
 
+// hgatp's MODE is WARL on the same terms as satp's, with its own set of
+// legal values: 0 (Bare), 8 (Sv39x4), 9 (Sv48x4), 10 (Sv57x4). Everything
+// else is reserved, and a reserved value must not read back -- software
+// probes the field by writing a candidate and seeing what survives, so
+// storing 2 tells the prober this hart implements a second-stage mode it
+// has never heard of.
+//
+// PPN[1:0] additionally read as zero: the root of a G-stage table is
+// 16KiB-aligned, not 4KiB, because the top level is four pages wide.
+void write_hgatp_warl(Registers &regs, uint64_t value)
+{
+	uint64_t mode = value >> 60;
+	if (mode != 0 && mode != 8 && mode != 9 && mode != 10) return;
+	regs.write_csr(hyp::CSR_HGATP_ADDR, value & ~0x3ull);
+}
+
 uint64_t read_sstatus(Registers &regs)
 {
 	// SD is part of sstatus's view too, and is derived rather than stored
@@ -452,7 +468,11 @@ bool RiscvCore::csr_access_permitted(Registers &regs, uint16_t csr, bool writing
 	// SFENCE.VMA trap it gives a hypervisor a complete view of a guest
 	// supervisor's attempts to manage translation: it cannot install a root
 	// table, and it cannot read back the one it is running under.
-	if (csr == CSR_SATP && regs.get_priv() == PrivMode::S
+	// hgatp is closed by the same bit and for the same reason: it is the
+	// hypervisor's own second-stage root, and M-mode withholding
+	// translation control has to withhold all of it.
+	if ((csr == CSR_SATP || (Extensions.H && csr == hyp::CSR_HGATP_ADDR))
+	    && regs.get_priv() == PrivMode::S
 	    && (regs.read_csr(CSR_MSTATUS) & MSTATUS_TVM))
 		return false;
 
@@ -1085,6 +1105,7 @@ void RiscvCore::exec_32ZICSR(const DecodedInstruction &instr, Registers &regs, M
 	// Not covered by a test yet: vsatp's MODE only becomes observable once
 	// two-stage translation reads it, which is the next increment.
 	else if (Extensions.H && csr == 0x280) write_satp_warl(regs, 0x280, updated);
+	else if (Extensions.H && csr == hyp::CSR_HGATP_ADDR) write_hgatp_warl(regs, updated);
 	else if (csr == CSR_SIE) write_sie(regs, updated);
 	else if (csr == CSR_SIP) write_sip(regs, updated);
 	else if (csr == CSR_MIP) regs.write_csr(CSR_MIP, updated & MIP_SHADOW_MASK);
