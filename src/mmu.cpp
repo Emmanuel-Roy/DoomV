@@ -5,6 +5,7 @@
 #include "registers.hpp"
 #include "memory.hpp"
 #include "extensions.hpp"
+#include "extensions/ext_zicfiss.hpp"
 
 namespace {
 constexpr uint16_t CSR_SATP    = 0x180;
@@ -273,6 +274,12 @@ bool gstage_translate(Registers &regs, Memory &mem, uint64_t gpa, AccessType typ
 	case AccessType::Load:  perm_ok = (pte & PTE_R) || (hs_mxr && (pte & PTE_X)); break;
 	case AccessType::Store: perm_ok = (pte & PTE_W) != 0; break;
 	case AccessType::CacheBlock: perm_ok = (pte & PTE_R) || (pte & PTE_W); break;
+	// On the second stage a shadow stack access is simply a write. The
+	// W=1 R=0 encoding means "shadow stack" only in the guest's own tables;
+	// in the hypervisor's it stays reserved, because the hypervisor is not
+	// the one keeping a shadow stack and a guest must not be able to
+	// conjure one by arranging the G-stage.
+	case AccessType::ShadowStack: perm_ok = (pte & PTE_R) && (pte & PTE_W); break;
 	default:                perm_ok = (pte & PTE_R) && (pte & PTE_W); break;
 	}
 	// A walk of the guest's page tables is a *read* of memory whatever the
@@ -482,6 +489,16 @@ bool mmu_translate(Registers &regs, Memory &mem, uint64_t vaddr, AccessType type
 	uint64_t satp = regs.read_csr(virt_access ? CSR_VSATP : CSR_SATP);
 	uint64_t mode = satp >> 60;
 	if (eff_priv == PrivMode::M || mode == 0) {
+		// With the first stage off there are no page tables, so there is no
+		// page marked as a shadow stack -- and a shadow stack instruction
+		// has nowhere legitimate to go. It faults rather than falling
+		// through to raw physical memory, which would let a guest with
+		// paging disabled push return addresses anywhere it liked.
+		if (type == AccessType::ShadowStack) {
+			cause = access_fault_cause(AccessType::Store);
+			tval = vaddr;
+			return false;
+		}
 		// No first stage, but a guest access still owes the second one:
 		// with the guest's own paging off its addresses are guest
 		// *physical* addresses, which hgatp still has to place.
@@ -531,6 +548,14 @@ bool mmu_translate(Registers &regs, Memory &mem, uint64_t vaddr, AccessType type
 	// this is the guest's, not the hypervisor's, so a U-page check tests
 	// what the guest could reach.
 	PrivMode priv = eff_priv;
+
+	// Whether the W=1 R=0 encoding means "shadow stack" at all. It does so
+	// only while shadow stacks are enabled for this mode; with SSE clear it
+	// is the reserved encoding it has always been, and a PTE carrying it is
+	// a page fault. Software discovers the extension is unavailable that
+	// way, so keying this on the extension being *implemented* rather than
+	// *enabled* would tell it the opposite.
+	const bool ss_enabled = cfiss::enabled(regs);
 
 	uint64_t vpn[5] = {0, 0, 0, 0, 0};
 	for (int i = 0; i < levels; i++) vpn[i] = (vaddr >> (12 + 9 * i)) & 0x1FF;
@@ -589,7 +614,7 @@ bool mmu_translate(Registers &regs, Memory &mem, uint64_t vaddr, AccessType type
 		// one encoding the extension repurposes, and it is what makes such
 		// a page unwritable by an ordinary store on hardware that has the
 		// extension and a page fault on hardware that does not.
-		const bool ss_page = Extensions.ZICFISS
+		const bool ss_page = ss_enabled
 		                  && !(pte & PTE_R) && (pte & PTE_W) && (pte & PTE_V);
 		if (!(pte & PTE_V) || (!ss_page && !(pte & PTE_R) && (pte & PTE_W))) {
 			// Invalid, or the reserved W=1/R=0 encoding.
@@ -597,7 +622,14 @@ bool mmu_translate(Registers &regs, Memory &mem, uint64_t vaddr, AccessType type
 			tval = vaddr;
 			return false;
 		}
-		if ((pte & PTE_R) || (pte & PTE_X)) {
+		// What makes a PTE a leaf is that it grants some permission. The
+		// usual test is R or X -- but a shadow stack page grants only W,
+		// and it is a leaf too. Without that case the walk reads it as a
+		// pointer to another table and descends into whatever its PPN
+		// happens to address, so every shadow stack access failed
+		// somewhere further down and never reached the permission check
+		// written for it.
+		if ((pte & PTE_R) || (pte & PTE_X) || ss_page) {
 			level = i; // leaf
 			leaf_pte_addr = pte_addr;
 			leaf_pte_gpa  = pte_gpa;
@@ -631,27 +663,61 @@ bool mmu_translate(Registers &regs, Memory &mem, uint64_t vaddr, AccessType type
 	// unwinders do it. A shadow stack instruction aimed at any *other*
 	// page is equally wrong, since that is how it would be tricked into
 	// writing somewhere useful.
-	const bool is_ss_page = Extensions.ZICFISS && !(pte & PTE_R) && (pte & PTE_W);
+	const bool is_ss_page = ss_enabled && !(pte & PTE_R) && (pte & PTE_W);
+
+	// A shadow stack access is checked in two steps, and which step fails
+	// decides the exception:
+	//
+	//   1. it needs write permission, like any other write. Missing W is a
+	//      *page* fault -- the mapping is wrong and the supervisor can fix
+	//      it, which is exactly what a copy-on-write shadow stack page
+	//      needs in order to be made writable and retried.
+	//   2. it then needs the page to actually be a shadow stack, R=0. A
+	//      writable page that is not one is an *access* fault: the mapping
+	//      is fine and repairing it is not the answer, the instruction
+	//      simply may not touch that memory.
+	//
+	// Collapsing the two into one access fault loses the distinction the
+	// supervisor acts on, and it is the difference between a shadow stack
+	// that survives fork() and one that faults forever.
+	if (type == AccessType::ShadowStack) {
+		if (!(pte & PTE_W)) {
+			cause = CAUSE_STORE_PAGE_FAULT;
+			tval = vaddr;
+			return false;
+		}
+		if (!is_ss_page) {
+			cause = access_fault_cause(AccessType::Store);
+			tval = vaddr;
+			return false;
+		}
+	}
 
 	bool perm_ok;
 	switch (type) {
 	case AccessType::Fetch: perm_ok = (pte & PTE_X); break;
+	// A shadow stack page is readable by an ordinary load even though R is
+	// clear -- unwinders and debuggers read return addresses, and there is
+	// nothing to protect against in reading them. MXR does not enter into
+	// it: the page is not execute-only, it is shadow-stack.
 	case AccessType::Load:  perm_ok = (pte & PTE_R) || (mxr && (pte & PTE_X))
 	                                || is_ss_page; break;
+	// Everything that writes is refused on a shadow stack page, which is
+	// the property the whole extension rests on.
 	case AccessType::Store: perm_ok = (pte & PTE_W) && !is_ss_page; break;
 	case AccessType::Amo:   perm_ok = (pte & PTE_R) && (pte & PTE_W); break;
 	case AccessType::CacheBlock: perm_ok = ((pte & PTE_R) || (pte & PTE_W))
 	                                    && !is_ss_page; break;
-	case AccessType::ShadowStack: perm_ok = is_ss_page; break;
+	case AccessType::ShadowStack: perm_ok = true; break;   // settled above
 	default:                perm_ok = false; break;
 	}
 	if (!perm_ok) {
-		// Reaching the wrong kind of page is an *access* fault rather than
-		// a page fault: the mapping is not the problem and repairing it is
-		// not the answer, which is the same reasoning PMP denials follow.
-		if (type == AccessType::ShadowStack || (is_ss_page && type != AccessType::Fetch)) {
-			cause = access_fault_cause(type == AccessType::ShadowStack
-			                           ? AccessType::Store : type);
+		// An ordinary access refused *because* the page is a shadow stack
+		// is an access fault, not a page fault: the mapping is not the
+		// problem, and a supervisor that "fixed" it would be removing the
+		// protection.
+		if (is_ss_page && type != AccessType::Fetch) {
+			cause = access_fault_cause(type);
 			tval = vaddr;
 			return false;
 		}
