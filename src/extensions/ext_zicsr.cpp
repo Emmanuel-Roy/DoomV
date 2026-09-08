@@ -151,6 +151,36 @@ constexpr uint64_t MIP_MEIP = 1ull << 11;
 constexpr uint64_t MIP_LCOFIP = 1ull << 13;
 constexpr uint64_t MIP_SHADOW_MASK = MIP_SSIP | MIP_MSIP | MIP_SEIP | MIP_STIP | MIP_LCOFIP;
 
+// VS-level interrupts. These live in mip/mie alongside the M and S ones,
+// and they are the mechanism by which a hypervisor makes a guest believe
+// it has taken an interrupt: the hypervisor sets a bit in hvip, the bit
+// appears in hip, hideleg routes it to VS-mode, and the guest sees an
+// ordinary S-level interrupt.
+//
+// The cause the guest sees is one less than the bit number -- VSSIP (2)
+// arrives as cause 1, VSTIP (6) as 5, VSEIP (10) as 9 -- because from
+// inside the guest these *are* its supervisor software, timer and
+// external interrupts. That renumbering is what makes a guest kernel run
+// unmodified.
+constexpr uint64_t MIP_VSSIP = 1ull << 2;
+constexpr uint64_t MIP_VSTIP = 1ull << 6;
+constexpr uint64_t MIP_VSEIP = 1ull << 10;
+constexpr uint64_t MIP_SGEIP = 1ull << 12;
+constexpr uint64_t HIP_MASK  = MIP_VSSIP | MIP_VSTIP | MIP_VSEIP | MIP_SGEIP;
+
+// Only VSSIP is software-writable through hvip; VSTIP and VSEIP are
+// read-only there because they are also driven by hardware -- the guest's
+// timer and the guest external-interrupt file -- and hvip contributes to
+// them by OR rather than by assignment.
+constexpr uint64_t HVIP_WMASK = MIP_VSSIP | MIP_VSTIP | MIP_VSEIP;
+
+constexpr uint16_t CSR_HIE  = 0x604;
+constexpr uint16_t CSR_HIP  = 0x644;
+constexpr uint16_t CSR_HVIP = 0x645;
+constexpr uint16_t CSR_HGEIP = 0xE12;
+constexpr uint16_t CSR_HGEIE = 0x607;
+constexpr uint16_t CSR_HSTATUS_N = 0x600;
+
 constexpr uint64_t MENVCFG_STCE = 1ull << 63;
 
 // mstatus's virtualisation fields. Both sit above bit 32, so they exist
@@ -209,6 +239,28 @@ uint64_t compute_mip(Registers &regs, Memory &mem)
 	if ((raw & MIP_STIP) || stip_from_sstc(regs, mem)) mip |= MIP_STIP;
 	if (mem.get_imsic_m().aggregate_pending()) mip |= MIP_MEIP;
 	if ((raw & MIP_SEIP) || mem.get_imsic_s().aggregate_pending()) mip |= MIP_SEIP;
+
+	if (Extensions.H) {
+		// hvip is the hypervisor's injection register: whatever it sets
+		// here is pending for the guest. VSTIP and VSEIP additionally
+		// take hardware sources, so they are an OR rather than a copy --
+		// a hypervisor clearing hvip.VSEIP must not clear an interrupt
+		// the guest's external interrupt file is genuinely asserting.
+		uint64_t hvip = regs.read_csr(CSR_HVIP) & HVIP_WMASK;
+		mip |= hvip;
+
+		// SGEIP is not injectable at all: it is the OR of the guest
+		// external interrupts the hypervisor has enabled, and says "one
+		// of your guests wants attention".
+		if (regs.read_csr(CSR_HGEIP) & regs.read_csr(CSR_HGEIE)) mip |= MIP_SGEIP;
+
+		// hstatus.VGEIN selects which guest external interrupt belongs to
+		// the guest currently scheduled; that one, if pending, is the
+		// guest's own VSEIP.
+		uint64_t vgein = (regs.read_csr(CSR_HSTATUS_N) >> 12) & 0x3F;
+		if (vgein != 0 && (regs.read_csr(CSR_HGEIP) & (1ull << vgein)))
+			mip |= MIP_VSEIP;
+	}
 	return mip;
 }
 
@@ -499,6 +551,100 @@ bool RiscvCore::csr_access_permitted(Registers &regs, uint16_t csr, bool writing
 	return true;
 }
 
+
+// henvcfg's bits are not independent of menvcfg's. Three of them name an
+// extension M-mode can withhold, and withholding at the top has to
+// withhold all the way down: if menvcfg.STCE is clear, henvcfg.STCE is
+// read-only zero, and the same for PBMTE and ADUE. Without that, a
+// hypervisor could hand a guest an extension the machine had switched
+// off, and -- worse for anything probing -- henvcfg would read back a
+// capability that does not work.
+//
+// The masking has to apply on *read* as well as on write. A bit set while
+// menvcfg permitted it must disappear the moment menvcfg is cleared,
+// rather than staying visible until something writes henvcfg again.
+//
+// CBIE, CBZE, CBCFE, LPE, SSE and FIOM are deliberately absent: those are
+// per-mode controls, not delegated capabilities, and a guest's setting is
+// its own. One of the hypervisor tests checks exactly that, asserting that
+// VS-mode's LPE is independent of menvcfg.LPE.
+uint64_t henvcfg_mask(Registers &regs)
+{
+	constexpr uint64_t DELEGATED = (1ull << 63)   // STCE
+	                             | (1ull << 62)   // PBMTE
+	                             | (1ull << 61);  // ADUE
+	return ~DELEGATED | regs.read_csr(CSR_MENVCFG);
+}
+
+// CBIE (bits 5:4) selects what cbo.inval does: 0 traps, 1 flushes, 3
+// invalidates. 2 is reserved, and WARL means a reserved value must not
+// read back -- software probes the field by writing a value and seeing
+// what survives, so retaining 2 claims a behaviour this hart does not
+// have. The ordinary WARL response is to keep the field it had.
+uint64_t cbie_warl(uint64_t updated, uint64_t old)
+{
+	constexpr uint64_t CBIE = 3ull << 4;
+	if (((updated >> 4) & 0x3) == 2) return (updated & ~CBIE) | (old & CBIE);
+	return updated;
+}
+
+
+// hip and hie are HS-mode's windows onto the VS-level bits of mip and mie.
+// They are views, not storage: hip.VSSIP *is* mip.VSSIP, and writing it
+// writes hvip, which is what makes the read and write directions agree.
+// Holding them as separate registers is the mistake that makes an
+// injected interrupt visible in hvip and nowhere else.
+uint64_t read_hip(Registers &regs, Memory &mem)
+{
+	return compute_mip(regs, mem) & HIP_MASK;
+}
+
+void write_hip(Registers &regs, uint64_t value)
+{
+	// VSSIP alone is writable here, and the write lands in hvip. VSTIP,
+	// VSEIP and SGEIP are read-only through hip: they are asserted by
+	// hardware, and a hypervisor that wants to inject them does so
+	// through hvip instead.
+	uint64_t hvip = regs.read_csr(CSR_HVIP);
+	regs.write_csr(CSR_HVIP, (hvip & ~MIP_VSSIP) | (value & MIP_VSSIP));
+}
+
+uint64_t read_hie(Registers &regs)
+{
+	return regs.read_csr(CSR_MIE) & HIP_MASK;
+}
+
+void write_hie(Registers &regs, uint64_t value)
+{
+	uint64_t mie = regs.read_csr(CSR_MIE);
+	regs.write_csr(CSR_MIE, (mie & ~HIP_MASK) | (value & HIP_MASK));
+}
+
+void write_hvip(Registers &regs, uint64_t value)
+{
+	regs.write_csr(CSR_HVIP, value & HVIP_WMASK);
+}
+
+
+// mideleg's VS-level bits are read-only 1 when the hypervisor extension is
+// implemented. VS interrupts have nowhere else to go: they exist to be
+// handled by HS-mode or delegated onward to the guest, and M-mode taking
+// them directly would mean the machine servicing an interrupt raised for a
+// guest it knows nothing about. Making them writable lets software clear a
+// bit and then wait forever for an interrupt that is no longer routed
+// anywhere.
+//
+// Bit 12 (SGEIP) is *not* in this set, because GEILEN is zero on this hart
+// -- there is no guest external interrupt controller, so the interrupt it
+// delegates does not exist. That is a configuration property, not a gap:
+// hgeie and hgeip read as zero for the same reason, and software that
+// probes them discovers GEILEN=0 and stops asking.
+uint64_t mideleg_fixed_ones()
+{
+	if (!Extensions.H) return 0;
+	return MIP_VSSIP | MIP_VSTIP | MIP_VSEIP;
+}
+
 uint64_t RiscvCore::read_csr_effective(Registers &regs, Memory &mem, uint16_t csr)
 {
 	// PMP entries past the implemented count read as zero rather than as
@@ -509,6 +655,14 @@ uint64_t RiscvCore::read_csr_effective(Registers &regs, Memory &mem, uint16_t cs
 	if (csr == 0x100) return read_sstatus(regs);
 	if (csr == CSR_MISA) return compute_misa();
 	if (Extensions.H && csr == hyp::CSR_HSTATUS_ADDR) return hyp::read_hstatus(regs);
+	if (Extensions.H && csr == 0x60A) return regs.read_csr(0x60A) & henvcfg_mask(regs);
+	if (csr == CSR_MIDELEG) return regs.read_csr(CSR_MIDELEG) | mideleg_fixed_ones();
+	// GEILEN is zero: no guest external interrupt file exists, so both
+	// registers that describe one read as zero however they were written.
+	if (Extensions.H && (csr == CSR_HGEIE || csr == CSR_HGEIP)) return 0;
+	if (Extensions.H && csr == CSR_HIP) return read_hip(regs, mem);
+	if (Extensions.H && csr == CSR_HIE) return read_hie(regs);
+	if (Extensions.H && csr == CSR_HVIP) return regs.read_csr(CSR_HVIP) & HVIP_WMASK;
 	if (csr == CSR_SIE) return read_sie(regs);
 	if (csr == CSR_SIP) return read_sip(regs, mem);
 	if (csr == CSR_MIP) return compute_mip(regs, mem);
@@ -653,9 +807,21 @@ void RiscvCore::enter_trap(Registers &regs, uint64_t cause, uint64_t tval, bool 
 		// the vs* shadows -- which is also what the guest would reach by
 		// their S-mode names, so from inside the guest this is
 		// indistinguishable from taking a trap on real hardware.
-		regs.write_csr(0x241, pc);    // vsepc
-		regs.write_csr(0x242, cause); // vscause
-		regs.write_csr(0x243, tval);  // vstval
+		// A VS-level *interrupt* is renumbered on the way in: the guest
+		// must see its own supervisor cause, not the VS-level one. VSSIP
+		// (bit 2) arrives as cause 1, VSTIP (6) as 5, VSEIP (10) as 9 --
+		// one less in every case, since the VS bits sit exactly one
+		// position above the S bits they stand in for. Exceptions carry
+		// their own numbers through unchanged.
+		//
+		// Without this a guest kernel reads cause 2 for a software
+		// interrupt and dispatches on a number that means nothing to it.
+		uint64_t vs_cause = cause;
+		if (is_interrupt) vs_cause = (cause & (1ull << 63)) | (cause_bit - 1);
+
+		regs.write_csr(0x241, pc);       // vsepc
+		regs.write_csr(0x242, vs_cause); // vscause
+		regs.write_csr(0x243, tval);     // vstval
 
 		// Interrupt-enable stacking happens in vsstatus, the guest's own
 		// sstatus. Using the real sstatus here would corrupt the
@@ -785,10 +951,15 @@ bool RiscvCore::check_and_take_interrupt(Registers &regs, Memory &mem)
 	uint64_t pending_enabled = compute_mip(regs, mem) & regs.read_csr(CSR_MIE);
 	if (!pending_enabled) return false;
 
-	// Fixed priority order per spec: MEI > MSI > MTI > SEI > SSI > STI.
+	// Fixed priority order per spec: MEI > MSI > MTI > SEI > SSI > STI,
+	// then the VS-level ones below those, then SGEI. A VS interrupt is
+	// lower priority than every interrupt belonging to a more privileged
+	// mode, which is the whole point -- the hypervisor gets to run before
+	// the guest it is injecting into.
 	static const int priority_order[] = {
 		(int)CAUSE_M_EXTERNAL, (int)CAUSE_M_SOFTWARE, (int)CAUSE_M_TIMER,
 		(int)CAUSE_S_EXTERNAL, (int)CAUSE_S_SOFTWARE, (int)CAUSE_S_TIMER,
+		12 /* SGEI */, 10 /* VSEI */, 2 /* VSSI */, 6 /* VSTI */,
 	};
 	int bit = -1;
 	for (int b : priority_order) {
@@ -799,6 +970,23 @@ bool RiscvCore::check_and_take_interrupt(Registers &regs, Memory &mem)
 	PrivMode priv = regs.get_priv();
 	bool to_s = (regs.read_csr(CSR_MIDELEG) & (1ull << bit)) != 0;
 	uint64_t mstatus = regs.read_csr(CSR_MSTATUS);
+
+	// A VS-level interrupt that HS-mode has delegated onward with hideleg
+	// belongs to the guest, and can only be taken while the guest is
+	// actually running. Its enable is the guest's own vsstatus.SIE, not
+	// the hypervisor's sstatus.SIE: a hypervisor with interrupts disabled
+	// does not thereby disable its guest's.
+	//
+	// enter_trap handles the renumbering (VSSIP's bit 2 arrives as cause
+	// 1) and the vs* register selection, so nothing here has to know
+	// about it -- this only decides whether the interrupt is taken.
+	if (Extensions.H && to_s && (regs.read_csr(0x603) & (1ull << bit))) {
+		if (!regs.get_virt()) return false;   // no guest running to take it
+		if (priv == PrivMode::S && !(regs.read_csr(0x200) & MSTATUS_SIE))
+			return false;                      // vsstatus.SIE
+		enter_trap(regs, (1ull << 63) | (uint64_t)bit, 0, /*is_interrupt=*/true);
+		return true;
+	}
 
 	if (!to_s) {
 		// M-target: always taken from S/U; from M itself only if MIE is
@@ -1096,6 +1284,14 @@ void RiscvCore::exec_32ZICSR(const DecodedInstruction &instr, Registers &regs, M
 		if (((updated >> 32) & 0x3) == 1) updated = (updated & ~PMM) | (old & PMM);
 	}
 
+	// CBIE is WARL in all three envcfg registers, and henvcfg additionally
+	// cannot set a bit menvcfg has cleared -- see henvcfg_mask.
+	if (csr == CSR_MENVCFG || csr == 0x10A || (Extensions.H && csr == 0x60A))
+		updated = cbie_warl(updated, old);
+	if (Extensions.H && csr == 0x60A)
+		updated = (regs.read_csr(0x60A) & ~henvcfg_mask(regs))
+		        | (updated & henvcfg_mask(regs));
+
 	// hedeleg has read-only-zero bits, and they are not an arbitrary
 	// restriction -- each one names a trap the hypervisor must keep.
 	//
@@ -1144,6 +1340,12 @@ void RiscvCore::exec_32ZICSR(const DecodedInstruction &instr, Registers &regs, M
 	// two-stage translation reads it, which is the next increment.
 	else if (Extensions.H && csr == 0x280) write_satp_warl(regs, 0x280, updated);
 	else if (Extensions.H && csr == hyp::CSR_HGATP_ADDR) write_hgatp_warl(regs, updated);
+	else if (csr == CSR_MIDELEG)
+		regs.write_csr(CSR_MIDELEG, updated | mideleg_fixed_ones());
+	else if (Extensions.H && (csr == CSR_HGEIE || csr == CSR_HGEIP)) { /* GEILEN=0 */ }
+	else if (Extensions.H && csr == CSR_HIP) write_hip(regs, updated);
+	else if (Extensions.H && csr == CSR_HIE) write_hie(regs, updated);
+	else if (Extensions.H && csr == CSR_HVIP) write_hvip(regs, updated);
 	else if (csr == CSR_SIE) write_sie(regs, updated);
 	else if (csr == CSR_SIP) write_sip(regs, updated);
 	else if (csr == CSR_MIP) regs.write_csr(CSR_MIP, updated & MIP_SHADOW_MASK);
