@@ -17,7 +17,10 @@
 #   hypervisor     damo-rv-priv-ats, 43 groups. The only H coverage that
 #                  exists anywhere: riscv-arch-test has no hypervisor
 #                  tests, no testplan and no coverpoints, while RVA23S64
-#                  requires H and the Sh* sub-extensions.
+#                  requires H and the Sh* sub-extensions. 13/43 groups and
+#                  1757/2079 assertions at the time of writing -- this is
+#                  the one suite that is not yet clean, and the only one
+#                  whose failures are still being worked through.
 #   vector         riscv-vector-tests at VLEN=128, 3042 ELFs. Slow.
 #   riscvtests     riscv-tests, 372 rv64 tests. Broad regression net.
 #   linux          boots Linux to an interactive shell.

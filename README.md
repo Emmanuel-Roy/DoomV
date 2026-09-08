@@ -175,11 +175,13 @@ to be the one that is wrong, but it does not decide anything.
 | --- | --- | --- |
 | riscv-arch-test RVA23S64 | the certification suite, 663 tests, signature-diffed against Sail | **663 / 663** |
 | differential | 19 hand-written suites, 639 cases, diffed against Sail | **19 / 19** |
-| damo-rv-priv-ats | hypervisor, the only H coverage that exists anywhere | 200 / 251 assertions in `Hypervisor_CSR`, rest in progress |
+| damo-rv-priv-ats | hypervisor, the only H coverage that exists anywhere -- 43 groups | 13 / 43 groups, **1757 / 2079 assertions**; in progress |
 | Linux | OpenSBI + 6.12 + busybox | boots to an interactive shell |
 | DOOM | bare-metal, no OS | plays |
 
-Reproduce all of it with one command:
+Every suite runs headless (`-ng`), which is what makes them practical to
+run at all: arch-test's 663 tests take about 40 seconds and the 43-group
+hypervisor suite about 10. Reproduce all of it with one command:
 
 ```sh
 tools/verification/verify.sh          # build, then every suite
