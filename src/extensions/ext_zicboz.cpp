@@ -24,6 +24,8 @@
 #include "riscv_core.hpp"
 #include "registers.hpp"
 #include "memory.hpp"
+#include "ext_cbo_gate.hpp"
+#include "ext_h.hpp"
 #include "mmu.hpp"
 #include <cstdint>
 
@@ -49,6 +51,18 @@ DecodedInstruction Decoder::decode_zicboz(uint32_t raw_instr) const
 
 void RiscvCore::exec_ZICBOZ(const DecodedInstruction &instr, Registers &regs, Memory &mem)
 {
+	// cbo.zero answers to CBZE in the same envcfg chain the other cache-
+	// block instructions use, and for the same reason: this one actually
+	// writes memory, so a hypervisor withholding it from a guest is
+	// withholding a store it would rather emulate.
+	switch (cbo::check(regs, cbo::CBZE)) {
+	case cbo::DENY_ILLEGAL: raise_illegal_instruction(regs, instr.raw); return;
+	case cbo::DENY_VIRTUAL:
+		enter_trap(regs, hyp::CAUSE_VIRTUAL_INSTRUCTION, instr.raw);
+		return;
+	default: break;
+	}
+
 	uint64_t base = regs.read_x(instr.rs1) & ~(CBOZ_BLOCK_SIZE - 1);
 
 	// Translate once per 8-byte chunk rather than once for the block: a

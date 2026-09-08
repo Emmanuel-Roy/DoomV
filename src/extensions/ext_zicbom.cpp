@@ -22,6 +22,8 @@
 #include "memory.hpp"
 #include "mmu.hpp"
 #include <cstdint>
+#include "ext_cbo_gate.hpp"
+#include "ext_h.hpp"
 
 DecodedInstruction Decoder::decode_zicbom(uint32_t raw_instr) const
 {
@@ -64,6 +66,22 @@ void RiscvCore::exec_ZICBOM(const DecodedInstruction &instr, Registers &regs, Me
 	// Nor is the D bit involved, since nothing is written. But a failure is
 	// still reported as a *store* fault. AccessType::CacheBlock carries all
 	// three of those rules; see its definition in mmu.hpp.
+	// The permission layer, which used to be missing entirely: menvcfg,
+	// henvcfg and senvcfg each carry a field that can make these trap, and
+	// a hypervisor clears CBIE precisely so that a guest's cbo.inval comes
+	// to it. cbo.inval answers to CBIE; clean and flush to CBCFE.
+	//
+	// A guest refused by the hypervisor's gate gets a virtual instruction,
+	// not an illegal one -- see ext_cbo_gate.hpp for why the two differ.
+	const cbo::Field field = (instr.imm == 0) ? cbo::CBIE : cbo::CBCFE;
+	switch (cbo::check(regs, field)) {
+	case cbo::DENY_ILLEGAL: raise_illegal_instruction(regs, instr.raw); return;
+	case cbo::DENY_VIRTUAL:
+		enter_trap(regs, hyp::CAUSE_VIRTUAL_INSTRUCTION, instr.raw);
+		return;
+	default: break;
+	}
+
 	uint64_t base = regs.read_x(instr.rs1) & ~(CBOM_BLOCK_SIZE - 1);
 	uint64_t paddr;
 	if (!translate_or_trap(regs, mem, base, AccessType::CacheBlock, paddr)) return;
