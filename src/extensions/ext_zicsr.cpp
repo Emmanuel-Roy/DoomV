@@ -530,9 +530,51 @@ void write_sstatus(Registers &regs, uint64_t value)
 // OpenSBI's feature detection reads a spread of them to see which exist.
 // Making unknown CSRs illegal is a separate, much larger behaviour change
 // than making privilege boundaries real, and belongs in its own step.
+
+// The RV32-only "h" companions, which hold bits 63:32 of a register that is
+// a single piece on RV64. Grouped by where they live rather than listed
+// flat, since the counters alone account for sixty of them.
+bool is_rv32_high_half(uint16_t csr)
+{
+	// cycleh..hpmcounter31h, and their machine-mode originals.
+	if (csr >= 0xC80 && csr <= 0xC9F) return true;
+	if (csr >= 0xB80 && csr <= 0xB9F) return true;
+	// mhpmevent3h..31h
+	if (csr >= 0x723 && csr <= 0x73F) return true;
+	// The state-enable high halves, machine, supervisor and hypervisor.
+	if (csr >= 0x31C && csr <= 0x31F) return true;
+	if (csr >= 0x11C && csr <= 0x11F) return true;
+	if (csr >= 0x61C && csr <= 0x61F) return true;
+	switch (csr) {
+	case 0x310: // mstatush
+	case 0x31A: // menvcfgh
+	case 0x757: // mseccfgh
+	case 0x15D: // stimecmph
+	case 0x25D: // vstimecmph
+	case 0x615: // htimedeltah
+	case 0x61A: // henvcfgh
+	case 0x655: // hviph
+	case 0x656: // hviprio1h
+	case 0x657: // hviprio2h
+	case 0x318: // mvienh
+	case 0x319: // mviph
+		return true;
+	default:
+		return false;
+	}
+}
+
 bool RiscvCore::csr_access_permitted(Registers &regs, uint16_t csr, bool writing)
 {
 	if (writing && ((csr >> 10) & 0x3) == 0x3) return false;
+
+	// The high halves. Every 64-bit CSR that RV32 has to split in two has
+	// an "h" companion holding bits 63:32, and on RV64 those companions do
+	// not exist -- the register is one piece. They are illegal at every
+	// privilege, M-mode included, and DoomV answered them from the generic
+	// csr[] backing store instead, so software probing for RV32 layout
+	// found registers that cannot be there.
+	if (Extensions.XLEN64 && is_rv32_high_half(csr)) return false;
 
 	// csr[9:8] normally encodes the lowest privilege that may access the
 	// register -- 0 for U, 1 for S, 3 for M. The value 2 is not a
@@ -1496,6 +1538,26 @@ void RiscvCore::exec_32ZICSR(const DecodedInstruction &instr, Registers &regs, M
 		if (Extensions.H && regs.get_virt() && csr == 0x24D) {
 			enter_trap(regs, hyp::CAUSE_VIRTUAL_INSTRUCTION, instr.raw);
 			return;
+		}
+
+		// A VU-mode access to a supervisor CSR is a virtual instruction
+		// too. VU sits below its own guest supervisor, and the register it
+		// reached for is one VS-mode may have -- so the exception is the
+		// emulable kind rather than "no such register". Reaching for a
+		// *machine* CSR stays illegal: no one below M may touch those, and
+		// there is no hypervisor able to stand in for M.
+		//
+		// The number has already been redirected, so a guest's `sstatus`
+		// arrives here as vsstatus (0x2xx); both 0x1xx and 0x2xx are
+		// supervisor-level for this purpose.
+		if (Extensions.H && regs.get_virt() && regs.get_priv() == PrivMode::U
+		    && !(writes && ((csr >> 10) & 0x3) == 0x3)
+		    && !(Extensions.XLEN64 && is_rv32_high_half(csr))) {
+			uint8_t level = (csr >> 8) & 0x3;
+			if (level == 1 || level == 2) {
+				enter_trap(regs, hyp::CAUSE_VIRTUAL_INSTRUCTION, instr.raw);
+				return;
+			}
 		}
 		// tval is the whole instruction for an illegal-instruction trap,
 		// which is what a handler needs to work out which CSR was refused.
