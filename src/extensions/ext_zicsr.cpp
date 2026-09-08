@@ -743,12 +743,115 @@ uint64_t RiscvCore::read_csr_effective(Registers &regs, Memory &mem, uint16_t cs
 	return regs.read_csr(csr);
 }
 
+// Byte-granular access that respects page boundaries. Only the straddling
+// case actually needs this -- an aligned access never crosses a page -- but
+// splitting unconditionally keeps one code path instead of two, and the
+// cost is a per-byte translation on an operation that already walked the
+// page table once.
+//
+// The translation is redone per byte rather than cached per page because
+// the page a byte falls in is the only thing that decides its physical
+// address, and recomputing it is cheap next to getting it wrong.
+bool RiscvCore::load_virtual(Registers &regs, Memory &mem, uint64_t vaddr,
+                             unsigned size, uint64_t &out)
+{
+	// The wide path first: one translation, one memory read, which is what
+	// every aligned access takes.
+	if (((vaddr + size - 1) >> 12) == (vaddr >> 12)) {
+		uint64_t paddr;
+		if (!translate_or_trap(regs, mem, vaddr, AccessType::Load, paddr, size))
+			return false;
+		switch (size) {
+		case 1:  out = mem.read8(paddr);  break;
+		case 2:  out = mem.read16(paddr); break;
+		case 4:  out = mem.read32(paddr); break;
+		default: out = mem.read64(paddr); break;
+		}
+		return true;
+	}
+
+	// Straddling: check the whole access first, so the fault is reported
+	// before any bytes are gathered, then assemble little-endian.
+	uint64_t probe;
+	if (!translate_or_trap(regs, mem, vaddr, AccessType::Load, probe, size))
+		return false;
+
+	uint64_t value = 0;
+	for (unsigned i = 0; i < size; i++) {
+		uint64_t pa;
+		if (!translate_or_trap(regs, mem, vaddr + i, AccessType::Load, pa, 1))
+			return false;
+		value |= (uint64_t)mem.read8(pa) << (8 * i);
+	}
+	out = value;
+	return true;
+}
+
+bool RiscvCore::store_virtual(Registers &regs, Memory &mem, uint64_t vaddr,
+                              unsigned size, uint64_t value)
+{
+	if (((vaddr + size - 1) >> 12) == (vaddr >> 12)) {
+		uint64_t paddr;
+		if (!translate_or_trap(regs, mem, vaddr, AccessType::Store, paddr, size))
+			return false;
+		switch (size) {
+		case 1:  mem.write8(paddr, (uint8_t)value);   break;
+		// Memory has no write16 -- see memory.hpp, where the MMIO
+		// dispatch is defined for 8, 32 and 64 only.
+		case 2:  mem.write8(paddr, (uint8_t)value);
+		         mem.write8(paddr + 1, (uint8_t)(value >> 8)); break;
+		case 4:  mem.write32(paddr, (uint32_t)value); break;
+		default: mem.write64(paddr, value);           break;
+		}
+		return true;
+	}
+
+	// Every byte is translated before any is written. A store that
+	// straddles into a page it may not write must not leave the first page
+	// modified -- software that catches the fault and retries would
+	// otherwise write those bytes twice.
+	uint64_t pa[8];
+	for (unsigned i = 0; i < size; i++) {
+		if (!translate_or_trap(regs, mem, vaddr + i, AccessType::Store, pa[i], 1))
+			return false;
+	}
+	for (unsigned i = 0; i < size; i++)
+		mem.write8(pa[i], (uint8_t)(value >> (8 * i)));
+	return true;
+}
+
 bool RiscvCore::translate_or_trap(Registers &regs, Memory &mem, uint64_t vaddr, AccessType type, uint64_t &paddr, unsigned size)
 {
 	uint64_t cause, tval;
 	if (!mmu_translate(regs, mem, vaddr, type, paddr, cause, tval)) {
 		enter_trap(regs, cause, tval);
 		return false;
+	}
+
+	// An access that crosses a page boundary is two accesses as far as the
+	// page tables are concerned, and the second page can answer differently
+	// from the first: unmapped, read-only, or owned by another privilege.
+	// Translating only the base address means a misaligned load spanning
+	// into an unmapped page succeeds by reading whatever followed the first
+	// page physically -- no fault, wrong data, silently.
+	//
+	// Misalignment is ordinary here rather than exotic: RVA23S64 requires
+	// misaligned loads and stores to work, and with C an instruction can
+	// start on any even address, so a four-byte access two bytes from the
+	// end of a page is routine.
+	//
+	// The fault has to name the *original* address, not the start of the
+	// second page, because that is the address software asked for and the
+	// one it needs to see in stval.
+	if (size > 1) {
+		const uint64_t last = vaddr + size - 1;
+		if ((last >> 12) != (vaddr >> 12)) {
+			uint64_t tail_paddr;
+			if (!mmu_translate(regs, mem, last, type, tail_paddr, cause, tval)) {
+				enter_trap(regs, cause, tval);
+				return false;
+			}
+		}
 	}
 
 	// PMP is checked on the *physical* address, after translation, and a

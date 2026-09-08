@@ -56,6 +56,19 @@ public:
 	// skips both checks.
 	bool translate_or_trap(Registers &regs, Memory &mem, uint64_t vaddr, AccessType type, uint64_t &paddr, unsigned size = 1);
 
+	// Load or store `size` bytes at a virtual address, splitting the access
+	// at a page boundary when it crosses one. The two halves can land on
+	// physical pages that are nowhere near each other, so a straddling
+	// access cannot be done with one translation and one wide memory
+	// operation however the permissions turn out.
+	//
+	// Both return false having already entered a trap, exactly as
+	// translate_or_trap does. store_virtual checks the whole range before
+	// writing any of it, so a store that runs into a read-only page leaves
+	// the first page untouched instead of half-writing it.
+	bool load_virtual(Registers &regs, Memory &mem, uint64_t vaddr, unsigned size, uint64_t &out);
+	bool store_virtual(Registers &regs, Memory &mem, uint64_t vaddr, unsigned size, uint64_t value);
+
 	// Called once per DoomSystem::step(), before fetch. Computes the
 	// effective mip & mie, picks the highest-priority pending+enabled+
 	// unmasked interrupt (if any) per the spec's fixed priority order,

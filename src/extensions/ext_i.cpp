@@ -209,24 +209,25 @@ void RiscvCore::exec_32I(const DecodedInstruction &instr, Registers &regs, Memor
 
 	case 0b0000011: { // Load
 		uint64_t addr = rs1_val + imm_u;
-		// One translation per instruction, at the base address -- correct
-		// for any naturally-aligned access (the overwhelming common case;
-		// the compiler never emits anything else), since an aligned access
-		// of width <= its own alignment can never itself cross a 4KB page
-		// boundary. A deliberately misaligned access that straddles a page
-		// boundary would read from the wrong second page; not something
-		// worth the per-byte-translation cost until it's an actual problem.
-		uint64_t paddr;
-		if (!translate_or_trap(regs, mem, addr, AccessType::Load, paddr)) return;
+		// The width is passed to the translation so a straddling access
+		// checks both pages. An aligned access of width <= its own
+		// alignment can never cross a 4KB boundary, so this costs nothing
+		// in the common case -- but misaligned accesses are architectural
+		// here, not exotic, and one that runs into an unmapped second page
+		// used to succeed by reading whatever followed the first page
+		// physically.
+		static const unsigned width[8] = {1, 2, 4, 8, 1, 2, 4, 1};
+		const unsigned n = width[instr.funct3 & 0x7];
+		uint64_t raw;
+		if (!load_virtual(regs, mem, addr, n, raw)) return;
+
 		uint64_t val = 0;
 		switch (instr.funct3) {
-		case 0b000: val = (uint64_t)(int64_t)(int8_t)mem.read8(paddr);   break; // LB
-		case 0b001: val = (uint64_t)(int64_t)(int16_t)mem.read16(paddr); break; // LH
-		case 0b010: val = (uint64_t)(int64_t)(int32_t)mem.read32(paddr); break; // LW -- sign-extends on RV64
-		case 0b011: val = mem.read64(paddr);                             break; // LD
-		case 0b100: val = mem.read8(paddr);                              break; // LBU
-		case 0b101: val = mem.read16(paddr);                             break; // LHU
-		case 0b110: val = mem.read32(paddr);                             break; // LWU -- zero-extends
+		case 0b000: val = (uint64_t)(int64_t)(int8_t)(uint8_t)raw;   break; // LB
+		case 0b001: val = (uint64_t)(int64_t)(int16_t)(uint16_t)raw; break; // LH
+		case 0b010: val = (uint64_t)(int64_t)(int32_t)(uint32_t)raw; break; // LW -- sign-extends on RV64
+		case 0b011: val = raw;                                       break; // LD
+		default:    val = raw;                                       break; // LBU/LHU/LWU -- zero-extended already
 		}
 		regs.write_x(instr.rd, val);
 		break;
@@ -234,23 +235,13 @@ void RiscvCore::exec_32I(const DecodedInstruction &instr, Registers &regs, Memor
 
 	case 0b0100011: { // Store
 		uint64_t addr = rs1_val + imm_u;
-		uint64_t paddr; // see the Load case above re: single-translation-per-access
-		if (!translate_or_trap(regs, mem, addr, AccessType::Store, paddr)) return;
-		switch (instr.funct3) {
-		case 0b000: // SB
-			mem.write8(paddr, (uint8_t)rs2_val);
-			break;
-		case 0b001: // SH
-			mem.write8(paddr, (uint8_t)(rs2_val & 0xFF));
-			mem.write8(paddr + 1, (uint8_t)((rs2_val >> 8) & 0xFF));
-			break;
-		case 0b010: // SW
-			mem.write32(paddr, (uint32_t)rs2_val);
-			break;
-		case 0b011: // SD
-			mem.write64(paddr, rs2_val);
-			break;
-		}
+		// Same page-crossing rule as the load above. The whole access is
+		// checked before any of it is written, so a store that straddles
+		// into a read-only page leaves the first page untouched rather
+		// than half-writing it.
+		static const unsigned swidth[4] = {1, 2, 4, 8};
+		if (instr.funct3 > 0b011) break;   // no such store width
+		if (!store_virtual(regs, mem, addr, swidth[instr.funct3 & 0x3], rs2_val)) return;
 		break;
 	}
 
