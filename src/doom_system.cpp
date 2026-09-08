@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <cstring>
 #include <fstream>
+#include <cstdlib>
 #include <chrono>
 #include <thread>
 #include <vector>
@@ -14,7 +15,7 @@ DoomSystem::DoomSystem() : decoder(core, regs, memory)
 
 bool DoomSystem::init(const char *wad_path, const char *elf_path)
 {
-	if (!gui.init()) return false;
+	if (!headless && !gui.init()) return false;
 
 	controls.load("controls.json");
 
@@ -35,7 +36,7 @@ bool DoomSystem::init(const char *wad_path, const char *elf_path)
 
 bool DoomSystem::init_linux_boot(const char *sbi_path, const char *kernel_path, const char *dtb_path, const char *initrd_path)
 {
-	if (!gui.init()) return false;
+	if (!headless && !gui.init()) return false;
 	linux_mode = true;
 
 	// fw_jump.elf's own build-time FW_TEXT_START already is RAM_BASE (see
@@ -179,6 +180,7 @@ void DoomSystem::step()
 	if (debugger.should_halt(pc, false)) {
 		debugger.dump_log(regs, memory, "crash.log");
 		if (has_sig_range) debugger.dump_signature(memory, sig_begin, sig_end, sig_path.c_str());
+		run_finished = true;
 		return;
 	}
 
@@ -232,6 +234,9 @@ void DoomSystem::step()
 			std::ofstream f("tohost.log");
 			if (f) f << std::hex << memory.tohost_written() << std::endl;
 		}
+		// Last, after tohost.log: a headless run exits the instant this is
+		// set, and the harness reads that file for the verdict.
+		run_finished = true;
 		memory.step_instructions(1);
 		return;
 	}
@@ -246,6 +251,7 @@ void DoomSystem::step()
 		}
 		debugger.dump_log(regs, memory, "crash.log");
 		if (has_sig_range) debugger.dump_signature(memory, sig_begin, sig_end, sig_path.c_str());
+		run_finished = true;
 	} else if (result.illegal) {
 		// Not halting, so the guest gets its trap. This is the ordinary
 		// path now: a guest with a handler is entitled to take the
@@ -346,6 +352,15 @@ void DoomSystem::run()
 	// Debugger stays exclusively CPU-thread-owned, so it needs no locking.
 	std::thread cpu_thread(&DoomSystem::cpu_loop, this);
 	cpu_thread.detach();
+
+	// Headless: nothing to draw and nothing to poll, so this thread just
+	// waits for the guest to finish and then ends the process. Without
+	// this the run would sit in the loop below forever with no window,
+	// which is the worst of both worlds.
+	if (headless) {
+		while (!run_finished) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+		std::exit(0);
+	}
 
 	while (true) {
 		for (const RawKeyEvent &ev : gui.poll_input()) {

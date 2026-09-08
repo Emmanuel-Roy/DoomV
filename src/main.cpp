@@ -15,6 +15,7 @@ int main(int argc, char *argv[])
 	bool have_sig = false;
 	std::string opensbi_path, kernel_path, dtb_path, initrd_path;
 	uint64_t tohost_addr = 0;
+	bool headless = false;
 	for (int i = 1; i < argc; i++) {
 		std::string arg = argv[i];
 		if (arg.rfind("-march=", 0) == 0) {
@@ -28,6 +29,8 @@ int main(int argc, char *argv[])
 			sig_begin = std::stoull(range.substr(0, colon), nullptr, 16);
 			sig_end = std::stoull(range.substr(colon + 1), nullptr, 16);
 			have_sig = true;
+		} else if (arg == "-nogui") {
+			headless = true;
 		} else if (arg.rfind("-tohost=", 0) == 0) {
 			// Stop when the guest stores nonzero to this address. Every
 			// bare-metal RISC-V test suite ends that way.
@@ -74,6 +77,8 @@ int main(int argc, char *argv[])
 	}
 
 	DoomSystem system;
+	// Before init: init is what opens the window.
+	if (headless) system.set_headless();
 	if (linux_boot) {
 		if (!system.init_linux_boot(opensbi_path.c_str(), kernel_path.c_str(), dtb_path.c_str(), initrd_path.c_str())) {
 			return -1;

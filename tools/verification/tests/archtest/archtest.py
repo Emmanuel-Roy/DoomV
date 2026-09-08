@@ -99,6 +99,37 @@ def read_doomv_sig(path: Path) -> list:
     return [words[i] | (words[i + 1] << 32) for i in range(0, len(words), 2)]
 
 
+def acquire_lock(timeout: int = 300) -> bool:
+    """Claim ./.signature.lock, breaking one that was abandoned.
+
+    DoomV hardcodes its -sig output to ./signature.log relative to its own
+    cwd, so this run and the differential harness next door would silently
+    overwrite each other's results -- which looks like a wrong answer, not
+    like a collision. mkdir is the primitive because it is atomic even over
+    a Windows filesystem, where flock is not dependable.
+
+    A killed run leaves the directory behind, and every later run then
+    waited out the full timeout on every test before giving up. So a lock
+    whose mtime is older than any single test could plausibly take is
+    treated as abandoned and removed.
+    """
+    lock = ROOT / ".signature.lock"
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            lock.mkdir()
+            return True
+        except FileExistsError:
+            try:
+                if time.time() - lock.stat().st_mtime > 600:
+                    lock.rmdir()
+                    continue
+            except OSError:
+                pass
+            time.sleep(0.5)
+    return False
+
+
 def run_one(elf: Path, sail_sig: Path, outdir: Path, keep: bool, timeout: int) -> tuple:
     """Returns (status, detail); status in {pass, fail, nosig, skip}."""
     name = elf.name[: -len(".sig.elf")]
@@ -116,7 +147,7 @@ def run_one(elf: Path, sail_sig: Path, outdir: Path, keep: bool, timeout: int) -
 
     siglog = ROOT / "signature.log"
     cmd = [
-        str(ROOT / "riscv_doom.exe"),
+        str(ROOT / "riscv_doom.exe"), "-nogui",
         str(ROOT / "tools" / "doom" / "doombuild" / "DOOM1.WAD"),
         str(elf),
         "-march=" + MARCH,
@@ -130,50 +161,26 @@ def run_one(elf: Path, sail_sig: Path, outdir: Path, keep: bool, timeout: int) -
     # overwrite each other's results -- which looks like a wrong answer, not
     # like a collision. Same lock directory as run_diff.sh; mkdir is atomic
     # even over a Windows filesystem, where flock is not dependable.
-    lock = ROOT / ".signature.lock"
-    for _ in range(600):
-        try:
-            lock.mkdir()
-            break
-        except FileExistsError:
-            time.sleep(1)
-    else:
+    if not acquire_lock():
         return "nosig", "timed out waiting for the signature lock"
+    lock = ROOT / ".signature.lock"
     try:
         if siglog.exists():
             siglog.unlink()
-        # DoomV writes the signature when it reaches the -break address and
-        # then keeps its SDL window open rather than exiting, so it always
-        # has to be killed and the exit status never means anything. What
-        # decides the outcome is whether signature.log appeared.
-        #
-        # It is therefore not enough to run with a timeout and wait: every
-        # test, passing or not, would burn the entire budget, and 663 of
-        # them at even 150s each is over a day. So poll for the file and
-        # kill DoomV as soon as it has finished writing it. The timeout
-        # stays as the backstop for a test that never reaches the halt
-        # address at all.
+        # With -nogui DoomV exits on its own once it reaches the halt
+        # address, so this is a plain wait. It used to poll for
+        # signature.log and kill the process, because the SDL window kept
+        # a finished test alive forever and its exit status never meant
+        # anything -- that cost about a minute per test whether it passed
+        # or not. The timeout survives only as the backstop for a test
+        # that never reaches the halt address at all.
         proc = subprocess.Popen(cmd, cwd=str(ROOT),
                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        deadline = time.time() + timeout
-        stable_size = -1
         try:
-            while time.time() < deadline:
-                if proc.poll() is not None:
-                    break
-                if siglog.exists():
-                    # Wait for the size to stop changing before killing, or a
-                    # large signature gets truncated mid-write and the diff
-                    # blames DoomV for a harness race.
-                    size = siglog.stat().st_size
-                    if size > 0 and size == stable_size:
-                        break
-                    stable_size = size
-                time.sleep(0.25)
-        finally:
-            if proc.poll() is None:
-                proc.kill()
-                proc.wait(timeout=30)
+            proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=30)
 
         if not siglog.exists():
             return "nosig", "no signature.log (never reached the halt address)"

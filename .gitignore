@@ -65,6 +65,7 @@ __pycache__/
 # releases the Sail model's own test tree uses -- binaries, not sources.
 tools/verification/tests/suites/*
 !tools/verification/tests/suites/fetch.sh
+!tools/verification/tests/suites/run_suite.py
 
 # SoftFloat object files (built from the spike submodule sources).
 build/

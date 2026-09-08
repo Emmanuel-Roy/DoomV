@@ -41,6 +41,19 @@ public:
 	std::atomic<bool> resume_requested{false};
 	void watch_tohost(uint64_t addr);
 
+	// Headless: no SDL window, and the process exits as soon as the guest
+	// stops rather than sitting in a render loop nobody is watching. A
+	// conformance run has no use for a window, and the window is the only
+	// reason a finished test has to be killed from outside.
+	void set_headless() { headless = true; }
+
+	bool headless = false;
+	// Set by the CPU thread once a run has stopped *and* its crash log and
+	// signature are on disk. debugger.halted is not a substitute: it is
+	// raised inside should_halt(), before either file is written, so a
+	// headless exit keyed off it truncates the signature it was run to
+	// produce. That cost 89 of 663 arch-tests.
+	std::atomic<bool> run_finished{false};
 	bool pending_illegal = false;
 	uint64_t pending_illegal_tval = 0;
 	void resume_from_halt();
