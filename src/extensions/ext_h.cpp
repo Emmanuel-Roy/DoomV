@@ -147,6 +147,7 @@ uint16_t redirect_for_virt(Registers &regs, uint16_t csr)
 	case 0x141: return CSR_VSEPC;     // sepc
 	case 0x142: return CSR_VSCAUSE;   // scause
 	case 0x143: return CSR_VSTVAL;    // stval
+	case 0x106: return 0x206;         // scounteren -> vscounteren
 	case 0x144: return CSR_VSIP;      // sip
 	case 0x180: return CSR_VSATP;     // satp
 	default: return csr;

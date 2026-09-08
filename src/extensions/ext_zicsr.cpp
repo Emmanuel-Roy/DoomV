@@ -645,6 +645,46 @@ uint64_t mideleg_fixed_ones()
 	return MIP_VSSIP | MIP_VSTIP | MIP_VSEIP;
 }
 
+
+// vsie and vsip are the guest's view of the VS-level interrupt bits, and
+// the view is *shifted*: what the hypervisor calls VSSIP at bit 2 the
+// guest calls SSIP at bit 1, and likewise VSTIP/STIP at 6/5 and
+// VSEIP/SEIP at 10/9. It is the same renumbering enter_trap applies to
+// the cause, and for the same reason -- inside the guest these are its
+// own supervisor interrupts, sitting where a supervisor expects to find
+// them. A guest reaching for sie/sip is redirected here, so getting the
+// shift wrong means a guest enabling its timer interrupt actually enables
+// nothing.
+constexpr uint64_t VS_BITS_HS    = MIP_VSSIP | MIP_VSTIP | MIP_VSEIP;   // 2, 6, 10
+constexpr uint64_t VS_BITS_GUEST = VS_BITS_HS >> 1;                     // 1, 5, 9
+
+uint64_t read_vsie(Registers &regs)
+{
+	return (regs.read_csr(CSR_MIE) & VS_BITS_HS) >> 1;
+}
+
+void write_vsie(Registers &regs, uint64_t value)
+{
+	uint64_t mie = regs.read_csr(CSR_MIE);
+	regs.write_csr(CSR_MIE, (mie & ~VS_BITS_HS)
+	                      | ((value & VS_BITS_GUEST) << 1));
+}
+
+uint64_t read_vsip(Registers &regs, Memory &mem)
+{
+	return (compute_mip(regs, mem) & VS_BITS_HS) >> 1;
+}
+
+void write_vsip(Registers &regs, uint64_t value)
+{
+	// Only SSIP is writable by the guest, and it lands in hvip.VSSIP --
+	// the same storage hip.VSSIP writes, so a guest clearing its own
+	// pending software interrupt clears the one the hypervisor injected.
+	uint64_t hvip = regs.read_csr(CSR_HVIP);
+	regs.write_csr(CSR_HVIP, (hvip & ~MIP_VSSIP)
+	                       | ((value & (VS_BITS_GUEST & 0x2)) << 1));
+}
+
 uint64_t RiscvCore::read_csr_effective(Registers &regs, Memory &mem, uint16_t csr)
 {
 	// PMP entries past the implemented count read as zero rather than as
@@ -660,6 +700,8 @@ uint64_t RiscvCore::read_csr_effective(Registers &regs, Memory &mem, uint16_t cs
 	// GEILEN is zero: no guest external interrupt file exists, so both
 	// registers that describe one read as zero however they were written.
 	if (Extensions.H && (csr == CSR_HGEIE || csr == CSR_HGEIP)) return 0;
+	if (Extensions.H && csr == 0x204) return read_vsie(regs);
+	if (Extensions.H && csr == 0x244) return read_vsip(regs, mem);
 	if (Extensions.H && csr == CSR_HIP) return read_hip(regs, mem);
 	if (Extensions.H && csr == CSR_HIE) return read_hie(regs);
 	if (Extensions.H && csr == CSR_HVIP) return regs.read_csr(CSR_HVIP) & HVIP_WMASK;
@@ -675,6 +717,14 @@ uint64_t RiscvCore::read_csr_effective(Registers &regs, Memory &mem, uint16_t cs
 	// cycle/time/instret/hpmcounter* (Zicntr, Zihpm). time was already
 	// here as an mtime alias; the other two read the same counter for the
 	// reason ext_zicntr.cpp explains.
+	// htimedelta is what lets a guest have its own timeline. A guest
+	// reading `time` gets the host's mtime plus this offset, so a
+	// hypervisor can migrate a guest, or start one long after boot,
+	// without the guest observing a jump. Only `time` is shifted --
+	// cycle and instret are counts of work actually done, and the guest
+	// really did run for that many.
+	if (Extensions.H && regs.get_virt() && csr == CSR_TIME)
+		return counters::read_counter(regs, mem, csr) + regs.read_csr(0x605);
 	if (counters::is_counter_csr(csr)) return counters::read_counter(regs, mem, csr);
 	// scountovf has no storage of its own -- it is assembled from the OF
 	// bits of every mhpmevent, so the two cannot drift apart.
@@ -1232,6 +1282,13 @@ void RiscvCore::exec_32ZICSR(const DecodedInstruction &instr, Registers &regs, M
 			enter_trap(regs, hyp::CAUSE_VIRTUAL_INSTRUCTION, instr.raw);
 			return;
 		}
+		// Same rule for the counters: a guest refused by hcounteren has
+		// been refused by its hypervisor, which can emulate the read.
+		if (counters::is_counter_csr(csr)
+		    && counters::counter_denial_is_virtual(regs, csr)) {
+			enter_trap(regs, hyp::CAUSE_VIRTUAL_INSTRUCTION, instr.raw);
+			return;
+		}
 		// tval is the whole instruction for an illegal-instruction trap,
 		// which is what a handler needs to work out which CSR was refused.
 		raise_illegal_instruction(regs, instr.raw);
@@ -1270,6 +1327,14 @@ void RiscvCore::exec_32ZICSR(const DecodedInstruction &instr, Registers &regs, M
 	// since VS redirection has already rewritten the number by this point
 	// -- the guest's write arrives here as 0x205, not 0x105.
 	if (csr == CSR_STVEC || csr == CSR_MTVEC || csr == 0x205) updated &= ~0x3ull;
+
+	// mcounteren, scounteren, hcounteren and vscounteren are 32-bit
+	// fields, one bit per counter, in a 64-bit register. Bits 63:32 are
+	// read-only zero -- there is no counter 32 to enable, so a value that
+	// reads back there describes something that cannot exist.
+	if (csr == 0x306 || csr == 0x106
+	    || (Extensions.H && (csr == 0x606 || csr == 0x206)))
+		updated &= 0xFFFFFFFFull;
 
 	// The PMM field of menvcfg/senvcfg/henvcfg (bits 33:32) selects the
 	// pointer-masking length: 0 is off, 2 is PMLEN=7, 3 is PMLEN=16. Value
@@ -1343,6 +1408,8 @@ void RiscvCore::exec_32ZICSR(const DecodedInstruction &instr, Registers &regs, M
 	else if (csr == CSR_MIDELEG)
 		regs.write_csr(CSR_MIDELEG, updated | mideleg_fixed_ones());
 	else if (Extensions.H && (csr == CSR_HGEIE || csr == CSR_HGEIP)) { /* GEILEN=0 */ }
+	else if (Extensions.H && csr == 0x204) write_vsie(regs, updated);
+	else if (Extensions.H && csr == 0x244) write_vsip(regs, updated);
 	else if (Extensions.H && csr == CSR_HIP) write_hip(regs, updated);
 	else if (Extensions.H && csr == CSR_HIE) write_hie(regs, updated);
 	else if (Extensions.H && csr == CSR_HVIP) write_hvip(regs, updated);

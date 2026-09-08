@@ -23,6 +23,12 @@ constexpr uint16_t CSR_HPM_LAST  = 0xC1F;
 
 constexpr uint16_t CSR_MCOUNTEREN = 0x306;
 constexpr uint16_t CSR_SCOUNTEREN = 0x106;
+// The hypervisor's gate over its guest, and the guest's own gate over its
+// user code. vscounteren is what a guest supervisor reaches by the name
+// scounteren, so a VU-mode check has to read this one rather than the
+// hypervisor's.
+constexpr uint16_t CSR_HCOUNTEREN  = 0x606;
+constexpr uint16_t CSR_VSCOUNTEREN = 0x206;
 
 // True for the whole unprivileged counter window, hpm counters included.
 inline bool is_counter_csr(uint16_t csr)
@@ -36,5 +42,8 @@ inline int counter_index(uint16_t csr) { return (int)(csr - CSR_CYCLE); }
 
 uint64_t read_counter(Registers &regs, Memory &mem, uint16_t csr);
 bool counter_permitted(Registers &regs, uint16_t csr);
+// Whether a refusal came from the hypervisor's gate rather than the
+// machine's or the guest's own -- cause 22 instead of cause 2.
+bool counter_denial_is_virtual(Registers &regs, uint16_t csr);
 
 } // namespace counters

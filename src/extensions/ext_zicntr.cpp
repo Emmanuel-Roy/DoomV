@@ -1,4 +1,5 @@
 #include "ext_zicntr.hpp"
+#include "extensions.hpp"
 
 namespace counters {
 
@@ -49,8 +50,46 @@ bool counter_permitted(Registers &regs, uint16_t csr)
 
 	uint64_t bit = 1ull << counter_index(csr);
 	if (!(regs.read_csr(CSR_MCOUNTEREN) & bit)) return false;
+
+	// Under virtualisation the chain gains a link. hcounteren is the
+	// hypervisor's say over what its guest may read, and it sits between
+	// mcounteren and the guest's own scounteren: a counter reaches VU-mode
+	// only if the machine, the hypervisor *and* the guest kernel all allow
+	// it. Leaving hcounteren out of the chain let a guest read counters
+	// the hypervisor had withheld -- and hcounteren is precisely the
+	// register a hypervisor uses to stop a guest timing the host.
+	//
+	// The guest's supervisor gate is vscounteren, not the hypervisor's
+	// scounteren; reading the wrong one applies the host kernel's policy
+	// to the guest's user code.
+	if (Extensions.H && regs.get_virt()) {
+		if (!(regs.read_csr(CSR_HCOUNTEREN) & bit)) return false;
+		if (priv == PrivMode::U && !(regs.read_csr(CSR_VSCOUNTEREN) & bit))
+			return false;
+		return true;
+	}
+
 	if (priv == PrivMode::U && !(regs.read_csr(CSR_SCOUNTEREN) & bit)) return false;
 	return true;
+}
+
+// Which exception a refused counter raises. The three gates do not answer
+// alike, and the difference is the same one the state-enable registers
+// make: a refusal by *hcounteren* is the hypervisor's, and the guest gets a
+// virtual instruction so the hypervisor can emulate the read on its behalf.
+// A refusal by mcounteren is the machine's, and a refusal by the guest's
+// own vscounteren is the guest kernel's -- both are cause 2, because
+// neither has a hypervisor underneath waiting to step in.
+bool counter_denial_is_virtual(Registers &regs, uint16_t csr)
+{
+	if (!Extensions.H || !regs.get_virt()) return false;
+	if (regs.get_priv() == PrivMode::M) return false;
+
+	uint64_t bit = 1ull << counter_index(csr);
+	// M-mode's refusal takes precedence: if mcounteren closed it, the
+	// hypervisor never got a say and the guest is not being denied by it.
+	if (!(regs.read_csr(CSR_MCOUNTEREN) & bit)) return false;
+	return (regs.read_csr(CSR_HCOUNTEREN) & bit) == 0;
 }
 
 } // namespace counters
