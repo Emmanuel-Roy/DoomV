@@ -747,7 +747,16 @@ void RiscvCore::exec_32ZICSR(const DecodedInstruction &instr, Registers &regs, M
 			// hypervisor running a guest supervisor traps on it to know the
 			// guest touched its page tables. A hart that quietly succeeds
 			// tells the hypervisor nothing happened.
-			if (regs.get_priv() == PrivMode::S && (regs.read_csr(CSR_MSTATUS) & MSTATUS_TVM)) {
+			// In VS-mode the governing bit is hstatus.VTVM, and the trap is
+			// a virtual instruction rather than an illegal one -- same
+			// reasoning as the satp case above.
+			if (Extensions.H && regs.get_virt() && regs.get_priv() == PrivMode::S
+			    && (regs.read_csr(hyp::CSR_HSTATUS_ADDR) & (1ull << 20))) {
+				enter_trap(regs, hyp::CAUSE_VIRTUAL_INSTRUCTION, instr.raw);
+				return;
+			}
+			if (!regs.get_virt() && regs.get_priv() == PrivMode::S
+			    && (regs.read_csr(CSR_MSTATUS) & MSTATUS_TVM)) {
 				raise_illegal_instruction(regs, instr.raw);
 				return;
 			}
@@ -854,13 +863,34 @@ void RiscvCore::exec_32ZICSR(const DecodedInstruction &instr, Registers &regs, M
 			regs.set_pc(regs.read_csr(CSR_MEPC));
 			return;
 		}
-		case 0x105: // WFI -- always legal to treat as a plain, immediate
-			// no-op (it's only ever a hint, never a mandatory wait), and
-			// simplest here: check_and_take_interrupt runs again before
-			// the very next fetch regardless, so nothing is lost by not
-			// actually blocking until mip & mie is nonzero.
+		case 0x105: { // WFI
+			// Treating the wait itself as a no-op is fine -- it is a hint,
+			// never a mandatory wait, and check_and_take_interrupt runs
+			// again before the next fetch regardless.
+			//
+			// Whether it is *allowed* is a different question. mstatus.TW
+			// traps it from S-mode, and hstatus.VTW traps it from VS-mode,
+			// so that a hypervisor can decide what a guest halting means
+			// rather than having the guest silently continue.
+			//
+			// TW outranks VTW: when M-mode has closed WFI to everything
+			// below it, the guest gets an illegal instruction (cause 2) and
+			// the trap goes to M, not a virtual instruction handled by a
+			// hypervisor that is itself denied the instruction.
+			constexpr uint64_t MSTATUS_TW = 1ull << 21;
+			if (regs.get_priv() != PrivMode::M
+			    && (regs.read_csr(CSR_MSTATUS) & MSTATUS_TW)) {
+				raise_illegal_instruction(regs, instr.raw);
+				return;
+			}
+			if (Extensions.H && regs.get_virt() && regs.get_priv() == PrivMode::S
+			    && (regs.read_csr(hyp::CSR_HSTATUS_ADDR) & (1ull << 21))) { // VTW
+				enter_trap(regs, hyp::CAUSE_VIRTUAL_INSTRUCTION, instr.raw);
+				return;
+			}
 			regs.set_pc(pc + instr.length);
 			return;
+		}
 		default:
 			// Genuinely unrecognized SYSTEM encoding.
 			regs.set_pc(pc + instr.length);
@@ -877,6 +907,22 @@ void RiscvCore::exec_32ZICSR(const DecodedInstruction &instr, Registers &regs, M
 	// killing it, so it has to be decided before the ordinary privilege
 	// check below turns it into cause 2.
 	if (Extensions.H && hyp::is_virtual_instruction_csr(regs, csr)) {
+		enter_trap(regs, hyp::CAUSE_VIRTUAL_INSTRUCTION, instr.raw);
+		return;
+	}
+
+	// hstatus.VTVM does for a guest supervisor what mstatus.TVM does for a
+	// real one: satp becomes unreachable, so the hypervisor sees every
+	// attempt the guest makes to install or inspect its own root table.
+	//
+	// The cause is 22, not 2. Refusing with an illegal instruction tells
+	// the guest it did something forbidden; a virtual instruction tells the
+	// hypervisor the guest did something only the hypervisor may do, which
+	// it can then emulate. This has to be checked *before* redirection,
+	// while the number is still satp rather than vsatp.
+	if (Extensions.H && regs.get_virt() && regs.get_priv() == PrivMode::S
+	    && csr == CSR_SATP
+	    && (regs.read_csr(hyp::CSR_HSTATUS_ADDR) & (1ull << 20))) { // VTVM
 		enter_trap(regs, hyp::CAUSE_VIRTUAL_INSTRUCTION, instr.raw);
 		return;
 	}

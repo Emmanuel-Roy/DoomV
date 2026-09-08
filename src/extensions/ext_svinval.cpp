@@ -29,6 +29,7 @@
 #include "riscv_decoder.hpp"
 #include "riscv_core.hpp"
 #include "registers.hpp"
+#include "extensions.hpp"
 #include "memory.hpp"
 #include <cstdint>
 
@@ -55,6 +56,17 @@ void RiscvCore::exec_SVINVAL(const DecodedInstruction &instr, Registers &regs, M
 	// SFENCE.W.INVAL and SFENCE.INVAL.IR (funct7 0b0001100) are *not*
 	// affected: they only order the invalidations around them and name no
 	// address, so there is nothing for TVM to observe.
+	//
+	// In VS-mode the governing bit is hstatus.VTVM instead, and the trap is
+	// a virtual instruction rather than an illegal one, so the hypervisor
+	// can emulate the invalidation rather than simply refusing it.
+	if (instr.funct7 == 0b0001011 && Extensions.H && regs.get_virt()
+	    && regs.get_priv() == PrivMode::S
+	    && (regs.read_csr(0x600) & (1ull << 20))) { // hstatus.VTVM
+		enter_trap(regs, 22, instr.raw);
+		return;
+	}
+
 	if (instr.funct7 == 0b0001011 && regs.get_priv() == PrivMode::S
 	    && (regs.read_csr(0x300) & (1ull << 20))) { // mstatus.TVM
 		raise_illegal_instruction(regs, instr.raw);
