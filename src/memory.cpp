@@ -231,13 +231,38 @@ void Memory::write32(uint64_t addr, uint32_t val)
 
 void Memory::write64(uint64_t addr, uint64_t val)
 {
-	// A nonzero store to tohost ends the test. Only the first is kept: a
-	// harness that keeps running would otherwise see the value overwritten
-	// by whatever the test does on its way out.
-	if (tohost_addr && addr == tohost_addr && val != 0 && tohost_value == 0)
+	// tohost is not only the exit channel. It is a full HTIF port, and the
+	// word is device(63:56) | command(55:48) | payload(47:0): device 1 is
+	// the console, so a test that prints writes here too. Treating the
+	// first nonzero store as the verdict reads a character as a result --
+	// the damo hypervisor tests print, and every one of them looked like a
+	// failure whose reported code was a carriage return.
+	//
+	// The exit is device 0, command 0, with bit 0 of the payload set; the
+	// code is the rest of the payload, so 1 means pass and (n<<1)|1 names
+	// failing subtest n.
+	if (tohost_addr && addr == tohost_addr && tohost_value == 0
+	    && (val >> 48) == 0 && (val & 1))
 		tohost_value = val;
 	write32(addr + 0, (uint32_t)(val & 0xFFFFFFFFu));
 	write32(addr + 4, (uint32_t)(val >> 32));
+
+	// The console half of HTIF. A test that prints sends device 1,
+	// command 1, with the character in the payload, and then *waits for the
+	// host to clear tohost* before sending the next one. With nothing
+	// answering, the guest spins on its first character and never reaches
+	// its own exit -- which is exactly how the damo hypervisor tests
+	// behaved here: running forever, producing nothing, looking like a hang
+	// in the emulator rather than an unimplemented handshake.
+	//
+	// Acknowledging is the whole protocol: print the byte and zero tohost.
+	if (tohost_addr && addr == tohost_addr && ((val >> 56) & 0xFF) == 1
+	    && ((val >> 48) & 0xFF) == 1) {
+		std::putchar((int)(val & 0xFF));
+		std::fflush(stdout);
+		write32(addr + 0, 0);
+		write32(addr + 4, 0);
+	}
 }
 
 bool Memory::load_elf(const char *path)

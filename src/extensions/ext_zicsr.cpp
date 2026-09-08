@@ -776,7 +776,7 @@ void RiscvCore::exec_32ZICSR(const DecodedInstruction &instr, Registers &regs, M
 			// things and are handled by different code paths. VU-mode
 			// keeps cause 8, the same as U: the guest's userspace
 			// calls its own kernel, not the hypervisor.
-			if (Extensions.H && regs.get_virt() && priv == PrivMode::S)
+			if (Extensions.H && regs.get_virt() && regs.get_priv() == PrivMode::S)
 				cause = 10;
 			enter_trap(regs, cause, 0);
 			return;
@@ -785,12 +785,39 @@ void RiscvCore::exec_32ZICSR(const DecodedInstruction &instr, Registers &regs, M
 			enter_trap(regs, CAUSE_BREAKPOINT, pc);
 			return;
 		case 0x102: { // SRET -- mirrors MRET below, using the S-mode fields
-			uint64_t mstatus = regs.read_csr(CSR_MSTATUS);
+			// hstatus.VTSR traps a guest supervisor's SRET as a *virtual*
+			// instruction (cause 22) rather than an illegal one, so the
+			// hypervisor can emulate the return itself. The bit was defined
+			// and made writable and then never consulted, so a guest with
+			// VTSR set simply returned -- to whatever sepc held, which in a
+			// test that never set it is zero.
+			//
+			// Cause 22 and not 2: the distinction is the whole point. An
+			// illegal instruction tells the guest it did something no one
+			// may do; a virtual instruction tells the hypervisor the guest
+			// did something only the hypervisor may do, and can be emulated
+			// on its behalf.
+			if (Extensions.H && regs.get_virt() && regs.get_priv() == PrivMode::S
+			    && (regs.read_csr(hyp::CSR_HSTATUS_ADDR) & (1ull << 22))) {
+				enter_trap(regs, 22, 0);
+				return;
+			}
+			// In VS-mode the names sstatus and sepc mean the guest's own
+			// vsstatus and vsepc -- the same redirection every other S-mode
+			// CSR access already goes through. SRET was reading the
+			// hypervisor's copies instead, so a guest returning from its own
+			// trap resumed at the *hypervisor's* sepc, which in a test that
+			// never set one is zero.
+			const bool vs = Extensions.H && regs.get_virt();
+			const uint16_t status_csr = vs ? hyp::CSR_VSSTATUS_ADDR : CSR_MSTATUS;
+			const uint16_t epc_csr    = vs ? hyp::CSR_VSEPC_ADDR    : CSR_SEPC;
+
+			uint64_t mstatus = regs.read_csr(status_csr);
 			mstatus = (mstatus & MSTATUS_SPIE) ? (mstatus | MSTATUS_SIE) : (mstatus & ~MSTATUS_SIE);
 			mstatus |= MSTATUS_SPIE; // SPIE reset to 1 on return, per spec
 			PrivMode target = (mstatus & MSTATUS_SPP) ? PrivMode::S : PrivMode::U;
 			mstatus &= ~MSTATUS_SPP; // SPP reset to U on return, per spec
-			regs.write_csr(CSR_MSTATUS, mstatus);
+			regs.write_csr(status_csr, mstatus);
 
 			// An SRET in HS-mode returns to the guest when hstatus.SPV
 			// says the trap came from one; SPV is then cleared, so a
@@ -806,7 +833,7 @@ void RiscvCore::exec_32ZICSR(const DecodedInstruction &instr, Registers &regs, M
 				hyp::write_hstatus(regs, hstatus & ~(1ull << 7));
 			}
 			regs.set_priv(target);
-			regs.set_pc(regs.read_csr(CSR_SEPC));
+			regs.set_pc(regs.read_csr(epc_csr));
 			return;
 		}
 		case 0x302: { // MRET
