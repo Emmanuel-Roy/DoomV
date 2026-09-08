@@ -273,7 +273,7 @@ void exec_v_fp(const DecodedInstruction &instr, Registers &regs)
 	}
 
 	if (!is_vv && (funct6 == 0x0e || funct6 == 0x0f)) { // vfslide1up.vf / vfslide1down.vf
-		double scalar = (sew == 64) ? regs.read_f(instr.rs1) : (double)read_f32_reg(regs, instr.rs1);
+		double scalar = read_fscalar(sew);   // at the element width, not always f32
 		if (funct6 == 0x0e) {
 			for_each_active(regs, vm, vl, [&](uint64_t i) {
 				write_felem(regs, instr.rd, sew, i, (i == 0) ? scalar : read_felem(regs, instr.rs2, sew, i - 1));
