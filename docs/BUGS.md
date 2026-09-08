@@ -253,6 +253,16 @@ of console output (`2667bf1`, re-verified in `936df17`).
 109. [Atomics were never alignment-checked, and the check order is not the obvious one](#bug109)
 110. [`SINVAL.VMA` did not obey `mstatus.TVM`](#bug110)
 
+<a id="part-viii-toc"></a>
+### Part VIII — After the certification suite: the hypervisor, and 663/663 (2026-09-07)
+
+111. [An illegal instruction halted the debugger instead of trapping](#bug111)
+112. [`sstatus` hid FS, VS, UXL and SD](#bug112)
+113. [Linux was never actually booting](#bug113)
+114. [Three HTIF bugs, all self-inflicted](#bug114)
+115. [Seven hypervisor bits that existed and were never consulted](#bug115)
+116. [Two-stage translation applied only to `hlv` and `hsv`](#bug116)
+
 <a id="part-vii"></a>
 ### Part VII — Cross-cutting
 
@@ -5192,3 +5202,207 @@ Every one of those is gone. It is the machine disagreeing with the
 specification about **which of several simultaneously-valid complaints to
 make first** — which is, appropriately, the last thing left after
 everything that produces a wrong *value* has been fixed.
+
+---
+
+<a id="part-viii"></a>
+## Part VIII — After the certification suite: the hypervisor, and 663/663
+
+Part VII closed on ten arch-test failures and called them "the machine
+disagreeing with the specification about which of several simultaneously-valid
+complaints to make first". That reading was half right. Two of them were
+exactly that. The rest were three more missing features and a bug in the
+harness, and finding them took a change of method: diffing Sail's
+`--trace-instr` and `--trace-gpr` output against DoomV's own instruction
+history, instead of reading signatures and guessing.
+
+Signature-guessing had by then produced three wrong fixes in a row —
+`cbo.inval` "must need write permission", misaligned atomics "must report
+misaligned", a split fetch "must name the instruction" — each plausible, each
+contradicted by the reference. A trace diff names the divergent instruction
+directly, and ended the guessing.
+
+### 111. An illegal instruction halted the debugger instead of trapping
+<a id="bug111"></a>
+
+**Symptom.** Six `sv39_exceptions` tests stopped after 743 instructions,
+writing `deadbeef` where the reference recorded about 61 trap records.
+
+**Root cause.** `Debugger::should_halt` halted unconditionally on any illegal
+instruction, raising the trap only if a human resumed. The reasoning was
+written down and was true when written: nothing in the project had an
+illegal-instruction handler, so trapping would spin re-trapping instead of
+surfacing a crash log.
+
+**Why it went unnoticed.** The premise expired silently. OpenSBI installs a
+handler, Linux installs one and turns it into SIGILL, and every arch-test
+image installs one and then deliberately executes an illegal instruction to
+check that the trap works. Halting stops the guest at exactly the moment it is
+testing that it can recover — and the emulator looks correct by its own
+lights, which is why three rounds of signature inspection missed it.
+
+**How it was found.** Diffing DoomV's instruction history against Sail's
+trace: the two agreed for 743 instructions, then at #742 the test jumped to
+`0x140009002`, whose encoding is `0x00000000` — `c.illegal`, on purpose — and
+Sail entered the M-mode handler while DoomV simply stopped.
+
+**Resolution.** The trap is raised inline. The halt survives as
+`Debugger::break_on_illegal`, off by default, because during bare-metal
+bring-up before any handler exists a crash log really is more useful than a
+silent loop — which is what made the original decision right at the time.
+`sv39_exceptions_Smode` went from 351 differing words to passing.
+
+**Evidence.** `e98ef88`. Same expired-premise shape as [Bug 96](#bug96) and
+[Bug 100](#bug100).
+
+### 112. sstatus hid FS, VS, UXL and SD
+<a id="bug112"></a>
+
+**Symptom.** A page-table entry recorded with its physical page number
+zeroed — an MMU bug, to all appearances.
+
+**Root cause.** `SSTATUS_MASK` carried SIE, SPIE, SPP, SUM and MXR and nothing
+else, so sstatus read zero everywhere else. sstatus is a view of mstatus and
+the view is wider: FS (14:13) and VS (10:9) carry the floating-point and
+vector state, UXL (33:32) the U-mode XLEN, SD (63) the summary of FS and VS.
+
+**Why it matters beyond the test.** A supervisor decides whether a task has
+live FP or vector registers worth saving on a context switch by reading FS and
+VS here — it has no access to mstatus. Masking them out told every supervisor
+that no extension state was ever live, which corrupts state across task
+switches and surfaces much later with no obvious cause.
+
+**How it was found.** `--trace-gpr` showed the trap handler doing
+`csrrs x7, sstatus` and rebuilding a PTE out of bits 16:0. Sail read
+`0x...6600` (FS=3, VS=3), DoomV read 0, and the handler faithfully stored the
+PTE that follows from that. The cause was three steps upstream of the symptom.
+
+**Resolution.** The mask carries the full view. UXL and SD are read-only
+through it, via a separate `SSTATUS_WMASK`, since UXL is fixed at 64-bit and
+SD is derived. **riscv-arch-test: 663 of 663, zero failures.**
+
+**Evidence.** `895667c`.
+
+### 113. Linux was never actually booting
+<a id="bug113"></a>
+
+**Symptom.** None, and that is the point. "Linux boots to /bin/sh in 238
+lines" had been reported as a healthy result for most of a working session.
+
+**Root cause.** The log stopped right after `Run /bin/sh as init process`
+because the emulator halted there — [Bug 111](#bug111)'s debugger halt, on the
+first instruction userspace executed. A halt and a successful boot produce an
+identical-looking log: the output simply ends.
+
+Fixing the halt exposed the real failure. Userspace issued a `vsetivli`; the
+hart raised an illegal instruction, entirely correctly, because the device
+tree never mentioned V; Linux therefore never enabled `mstatus.VS` for the
+task, turned the trap into SIGILL, and killed init.
+
+**Resolution.** Two halves of one mistake. The device tree gains `v`, `zvbb`
+and `zvfhmin` — the identical omission as the earlier `zba`/`zbb`/`zbs`/
+`zicond` one ([Bug 43](#bug43)), with the same signature: the guest refuses to
+use a feature that is present, and the refusal looks like a guest problem. And
+a Linux boot with no `-march` now selects the RVA23S64 profile, because
+advertising V to a hart built with `V = false` produced a second panic, in the
+kernel this time, on a `vsetvli` the hart was configured not to have.
+
+Linux now reaches an interactive shell prompt, which it had never done.
+
+**Evidence.** `051cdd1`.
+
+### 114. Three HTIF bugs, all self-inflicted
+<a id="bug114"></a>
+
+Running `damo-rv-priv-ats` — the only hypervisor coverage that exists
+anywhere — needed HTIF, and the first implementation had three distinct bugs
+worth recording because each produced a convincing wrong answer.
+
+**Infinite recursion.** Acknowledging a console write means storing zero to
+the port, and those stores come straight back into the handler. Clearing the
+low half first leaves the high half still reading device 1, command 1, so the
+re-entered call saw a console packet with a zero payload, printed a NUL,
+cleared again, and never stopped. It looked exactly like the guest hanging.
+
+**A stale upper word.** `write64` decomposes into two 32-bit stores, low
+first, so evaluating on the low one compares a fresh payload against the
+previous packet's upper word. A carriage return — `0x0d`, odd — then reads as
+device 0, command 0 with bit 0 set: an exit, with the character as its code.
+This is the "subtest 36169534507319302 failed" that the very first run
+reported. The check now runs only after the high half lands.
+
+**Dumping the wrong memory.** The runner used the tohost word as its signature
+range, but acknowledging a console write zeroes that word, so by the time
+anything read it the verdict was gone. DoomV writes the captured value to
+`tohost.log` instead.
+
+**Evidence.** `89cbeb5`. The suites now print their own results, which names
+the failing assertion directly and is how every hypervisor bug below was
+found.
+
+### 115. Seven hypervisor bits that existed and were never consulted
+<a id="bug115"></a>
+
+`riscv-arch-test` has no hypervisor tests, no testplan and no coverpoints,
+while RVA23S64 requires H and the `Sh*` sub-extensions. The first damo file
+found seven defects, every one a defined, writable bit that nothing read:
+
+* **`hstatus.VTSR`** — a guest supervisor's `SRET` must trap to the hypervisor
+  as a virtual instruction so the hypervisor can emulate the return. DoomV
+  performed the return, to whatever `sepc` held.
+* **`SRET` read the hypervisor's `sepc` and `sstatus` in VS-mode** — those
+  names mean the guest's `vsepc` and `vsstatus` there, the same redirection
+  every other S-mode CSR access already went through.
+* **`hstatus.VTVM`** — a guest's `satp` access, `SFENCE.VMA` and `SINVAL.VMA`
+  now trap. Without it the guest manages its own translation with the
+  hypervisor none the wiser.
+* **`hstatus.VTW`** and **`mstatus.TW`** — a guest's `WFI`. TW outranks VTW:
+  when M-mode has closed WFI to everything below it, the guest gets an illegal
+  instruction and the trap goes to M, not a virtual instruction handled by a
+  hypervisor that is itself denied the instruction.
+* **`hstatus.GVA` and `mstatus.GVA`** — whether tval holds a guest virtual
+  address. One classification function serves both paths deliberately: the
+  same fault reports GVA in hstatus when delegated and in mstatus when not,
+  and a hypervisor reading either has to see the same answer.
+* **`hgatp` MODE was not WARL** — reserved encodings were stored, so software
+  probing the field was told this hart implements a second-stage mode nobody
+  has defined. `mstatus.TVM` also left `hgatp` open while closing `satp`;
+  M-mode withholding translation control has to withhold all of it.
+
+Most of these trap as cause 22 rather than cause 2, and the difference carries
+the meaning: illegal says the guest did something nobody may do, virtual says
+it did something only the hypervisor may do and which can be emulated on its
+behalf.
+
+**Evidence.** `3d6f3b5`, `110e5d5`, `45d7308`, `97b281d`. damo-tests went from
+hanging, to 5 of 43 groups, to 12 of 43.
+
+### 116. Two-stage translation applied only to hlv and hsv
+<a id="bug116"></a>
+
+**Symptom.** `GHIGH-01: GPA bit 41 set -> load guest-page-fault` reported
+cause 5 (load access fault) instead of 21.
+
+**Root cause.** The G-stage was gated on an `as_guest` flag that only `hlv`
+and `hsv` set. A guest's ordinary loads and stores never went through `hgatp`
+at all — they addressed host physical memory directly. A guest could reach
+anything.
+
+**Why it went unnoticed.** `hlv` and `hsv` are the rare case, and they were
+the only case tested: `vtest_hgatp` exercises two-stage translation through
+exactly those instructions and passes 14 of 14. The comment in `mmu.cpp` still
+read "Second-stage translation through hgatp is not applied here yet. With
+hgatp left at zero the second stage is bare" — an assumption that stopped
+being true the moment hgatp was implemented, in a different commit, without
+this line being revisited.
+
+**Resolution.** Two-stage translation applies to any access made in a virtual
+mode. What `hlv` and `hsv` actually add is whose privilege to check against:
+they execute in HS-mode on the guest's behalf, so permissions come from
+`hstatus.SPVP` rather than the current mode, while a real VS access is already
+running at the guest's own privilege.
+
+**Note.** This is the fourth entry in this document — with [43](#bug43),
+[96](#bug96) and [100](#bug100) — where a comment asserting "not needed yet"
+outlived the condition that made it true. It is the most reliable single
+predictor of a bug in this codebase.

@@ -303,13 +303,21 @@ bool mmu_translate(Registers &regs, Memory &mem, uint64_t vaddr, AccessType type
 	// guest could reach -- and fault where the guest would fault -- rather
 	// than whatever the hypervisor happens to have mapped.
 	//
-	// Second-stage translation through hgatp is not applied here yet. With
-	// hgatp left at zero the second stage is bare, and a two-stage walk
-	// reduces exactly to this one-stage walk, which is why this increment
-	// is checkable against spike on its own.
-	uint64_t satp = regs.read_csr(as_guest ? CSR_VSATP : CSR_SATP);
+	// Two-stage translation applies to *any* access made in a virtual mode,
+	// not only to hlv/hsv. That distinction was wrong and it was a large
+	// hole: with the second stage gated on the explicit hypervisor
+	// load/store instructions, a guest's ordinary loads and stores went
+	// straight to host physical memory, unmediated by hgatp. A guest could
+	// address anything.
+	//
+	// What hlv/hsv actually add is *whose* privilege to check against: they
+	// execute in HS-mode on the guest's behalf, so the permission bits come
+	// from hstatus.SPVP rather than from the current mode. A real VS access
+	// is already running at the guest's own privilege.
+	const bool virt_access = Extensions.H && (as_guest || regs.get_virt());
+	uint64_t satp = regs.read_csr(virt_access ? CSR_VSATP : CSR_SATP);
 	PrivMode eff_priv = regs.get_priv();
-	if (!as_guest && type != AccessType::Fetch) {
+	if (!virt_access && type != AccessType::Fetch) {
 		uint64_t st = regs.read_csr(CSR_MSTATUS);
 		if (st & MSTATUS_MPRV) eff_priv = (PrivMode)((st >> 11) & 3);
 	}
@@ -324,7 +332,7 @@ bool mmu_translate(Registers &regs, Memory &mem, uint64_t vaddr, AccessType type
 		// No first stage, but a guest access still owes the second one:
 		// with the guest's own paging off its addresses are guest
 		// *physical* addresses, which hgatp still has to place.
-		if (as_guest) {
+		if (virt_access) {
 			if (!gstage_translate(regs, mem, vaddr, type, paddr, cause, tval, false)) {
 				tval = vaddr; // stval reports the guest VA, htval the GPA
 				return false;
@@ -350,7 +358,7 @@ bool mmu_translate(Registers &regs, Memory &mem, uint64_t vaddr, AccessType type
 		return false;
 	}
 
-	uint64_t mstatus = regs.read_csr(as_guest ? CSR_VSSTATUS : CSR_MSTATUS);
+	uint64_t mstatus = regs.read_csr(virt_access ? CSR_VSSTATUS : CSR_MSTATUS);
 	bool sum = mstatus & MSTATUS_SUM;
 	bool mxr = mstatus & MSTATUS_MXR;
 	// The same effective privilege the walk was started with: for an hlv
@@ -374,7 +382,7 @@ bool mmu_translate(Registers &regs, Memory &mem, uint64_t vaddr, AccessType type
 		// is the part that makes two-stage translation expensive: a
 		// single guest access performs one of these per level, plus one
 		// for the final address, and any of them can fault.
-		if (as_guest) {
+		if (virt_access) {
 			uint64_t pte_pa;
 			if (!gstage_translate(regs, mem, pte_addr, type, pte_pa, cause, tval, true)) {
 				tval = vaddr; // the access that faulted, not the PTE address
@@ -566,7 +574,7 @@ bool mmu_translate(Registers &regs, Memory &mem, uint64_t vaddr, AccessType type
 	// real one. The second stage places it -- and can fault here even
 	// though the guest's own tables were perfectly happy, which is exactly
 	// the case the distinct guest-page-fault causes exist to report.
-	if (as_guest) {
+	if (virt_access) {
 		uint64_t gpa = paddr;
 		if (!gstage_translate(regs, mem, gpa, type, paddr, cause, tval, false)) {
 			tval = vaddr;
