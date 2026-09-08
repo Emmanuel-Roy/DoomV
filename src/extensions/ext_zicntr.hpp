@@ -23,12 +23,10 @@ constexpr uint16_t CSR_HPM_LAST  = 0xC1F;
 
 constexpr uint16_t CSR_MCOUNTEREN = 0x306;
 constexpr uint16_t CSR_SCOUNTEREN = 0x106;
-// The hypervisor's gate over its guest, and the guest's own gate over its
-// user code. vscounteren is what a guest supervisor reaches by the name
-// scounteren, so a VU-mode check has to read this one rather than the
-// hypervisor's.
-constexpr uint16_t CSR_HCOUNTEREN  = 0x606;
-constexpr uint16_t CSR_VSCOUNTEREN = 0x206;
+// The hypervisor's gate over its guest. There is no vscounteren: the H
+// extension leaves scounteren as a single register, context-switched by
+// the hypervisor, so a VU-mode check reads CSR_SCOUNTEREN above.
+constexpr uint16_t CSR_HCOUNTEREN = 0x606;
 
 // True for the whole unprivileged counter window, hpm counters included.
 inline bool is_counter_csr(uint16_t csr)

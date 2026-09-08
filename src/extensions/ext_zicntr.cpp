@@ -59,12 +59,15 @@ bool counter_permitted(Registers &regs, uint16_t csr)
 	// the hypervisor had withheld -- and hcounteren is precisely the
 	// register a hypervisor uses to stop a guest timing the host.
 	//
-	// The guest's supervisor gate is vscounteren, not the hypervisor's
-	// scounteren; reading the wrong one applies the host kernel's policy
-	// to the guest's user code.
+	// The guest's supervisor gate is scounteren itself. The H extension
+	// defines no vscounteren -- scounteren is a single register holding
+	// whichever supervisor's values are current, context-switched by the
+	// hypervisor along with the rest of the guest's supervisor state, and
+	// substituting a VS-numbered register here denies VU-mode a counter
+	// its own kernel had enabled.
 	if (Extensions.H && regs.get_virt()) {
 		if (!(regs.read_csr(CSR_HCOUNTEREN) & bit)) return false;
-		if (priv == PrivMode::U && !(regs.read_csr(CSR_VSCOUNTEREN) & bit))
+		if (priv == PrivMode::U && !(regs.read_csr(CSR_SCOUNTEREN) & bit))
 			return false;
 		return true;
 	}

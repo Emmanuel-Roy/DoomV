@@ -180,6 +180,7 @@ constexpr uint16_t CSR_HVIP = 0x645;
 constexpr uint16_t CSR_HGEIP = 0xE12;
 constexpr uint16_t CSR_HGEIE = 0x607;
 constexpr uint16_t CSR_HSTATUS_N = 0x600;
+constexpr uint16_t CSR_VSSTATUS_N = 0x200;
 
 constexpr uint64_t MENVCFG_STCE = 1ull << 63;
 
@@ -658,9 +659,18 @@ uint64_t mideleg_fixed_ones()
 constexpr uint64_t VS_BITS_HS    = MIP_VSSIP | MIP_VSTIP | MIP_VSEIP;   // 2, 6, 10
 constexpr uint64_t VS_BITS_GUEST = VS_BITS_HS >> 1;                     // 1, 5, 9
 
+// hideleg decides which VS-level interrupts the guest is allowed to see at
+// all. A bit the hypervisor has not delegated is not merely undeliverable
+// to the guest -- it must not appear in the guest's vsip either, or a guest
+// kernel polls a pending bit for an interrupt that will never arrive.
+uint64_t vs_visible(Registers &regs)
+{
+	return VS_BITS_HS & regs.read_csr(0x603);   // hideleg
+}
+
 uint64_t read_vsie(Registers &regs)
 {
-	return (regs.read_csr(CSR_MIE) & VS_BITS_HS) >> 1;
+	return (regs.read_csr(CSR_MIE) & vs_visible(regs)) >> 1;
 }
 
 void write_vsie(Registers &regs, uint64_t value)
@@ -672,7 +682,7 @@ void write_vsie(Registers &regs, uint64_t value)
 
 uint64_t read_vsip(Registers &regs, Memory &mem)
 {
-	return (compute_mip(regs, mem) & VS_BITS_HS) >> 1;
+	return (compute_mip(regs, mem) & vs_visible(regs)) >> 1;
 }
 
 void write_vsip(Registers &regs, uint64_t value)
@@ -683,6 +693,28 @@ void write_vsip(Registers &regs, uint64_t value)
 	uint64_t hvip = regs.read_csr(CSR_HVIP);
 	regs.write_csr(CSR_HVIP, (hvip & ~MIP_VSSIP)
 	                       | ((value & (VS_BITS_GUEST & 0x2)) << 1));
+}
+
+
+// vsstatus is the guest's sstatus and has to behave like one, not like
+// plain storage. Two of its fields are not stored at all:
+//
+//   SD  is derived -- set exactly when FS or VS reads Dirty. A guest
+//       kernel tests SD to decide whether it must save floating-point or
+//       vector state on a context switch, so a stored-and-stale SD either
+//       loses a guest's registers or costs it a save on every switch.
+//   UXL is read-only 2: this hart's VU-mode is always 64-bit, and a
+//       writable UXL would promise a width VU cannot actually run at.
+uint64_t read_vsstatus(Registers &regs)
+{
+	return (vcommon::with_sd(regs.read_csr(CSR_VSSTATUS_N)) & SSTATUS_MASK)
+	     | (2ull << 32);
+}
+
+void write_vsstatus(Registers &regs, uint64_t value)
+{
+	uint64_t old = regs.read_csr(CSR_VSSTATUS_N);
+	regs.write_csr(CSR_VSSTATUS_N, (old & ~SSTATUS_WMASK) | (value & SSTATUS_WMASK));
 }
 
 uint64_t RiscvCore::read_csr_effective(Registers &regs, Memory &mem, uint16_t csr)
@@ -700,6 +732,7 @@ uint64_t RiscvCore::read_csr_effective(Registers &regs, Memory &mem, uint16_t cs
 	// GEILEN is zero: no guest external interrupt file exists, so both
 	// registers that describe one read as zero however they were written.
 	if (Extensions.H && (csr == CSR_HGEIE || csr == CSR_HGEIP)) return 0;
+	if (Extensions.H && csr == CSR_VSSTATUS_N) return read_vsstatus(regs);
 	if (Extensions.H && csr == 0x204) return read_vsie(regs);
 	if (Extensions.H && csr == 0x244) return read_vsip(regs, mem);
 	if (Extensions.H && csr == CSR_HIP) return read_hip(regs, mem);
@@ -1435,8 +1468,7 @@ void RiscvCore::exec_32ZICSR(const DecodedInstruction &instr, Registers &regs, M
 	// fields, one bit per counter, in a 64-bit register. Bits 63:32 are
 	// read-only zero -- there is no counter 32 to enable, so a value that
 	// reads back there describes something that cannot exist.
-	if (csr == 0x306 || csr == 0x106
-	    || (Extensions.H && (csr == 0x606 || csr == 0x206)))
+	if (csr == 0x306 || csr == 0x106 || (Extensions.H && csr == 0x606))
 		updated &= 0xFFFFFFFFull;
 
 	// The PMM field of menvcfg/senvcfg/henvcfg (bits 33:32) selects the
@@ -1511,6 +1543,7 @@ void RiscvCore::exec_32ZICSR(const DecodedInstruction &instr, Registers &regs, M
 	else if (csr == CSR_MIDELEG)
 		regs.write_csr(CSR_MIDELEG, updated | mideleg_fixed_ones());
 	else if (Extensions.H && (csr == CSR_HGEIE || csr == CSR_HGEIP)) { /* GEILEN=0 */ }
+	else if (Extensions.H && csr == CSR_VSSTATUS_N) write_vsstatus(regs, updated);
 	else if (Extensions.H && csr == 0x204) write_vsie(regs, updated);
 	else if (Extensions.H && csr == 0x244) write_vsip(regs, updated);
 	else if (Extensions.H && csr == CSR_HIP) write_hip(regs, updated);
