@@ -67,15 +67,49 @@ from archtest import (elf_symbols, read_sail_sig, read_doomv_sig,  # noqa: E402
 # reporting them absent is the honest configuration; the tests have
 # "not implemented" paths for exactly this case. Enable them with
 # -march=..._zicfilp_zicfiss to exercise the implementation.
-SUITE_MARCH = MARCH + "_zkr"
+SUITE_MARCH = MARCH + "_zkr_zicfilp_zicfiss"
 
-WSL_SAIL = "/root/build/sail-0131/build/c_emulator/sail_riscv_sim"
-WSL_CFG = "/mnt/z/Code/Dev/DoomV/tools/verification/tests/arch-test/config/sail/sail-RVA23S64/sail.json"
+# The Sail build and the config have to be a matched pair: a config
+# generated for one model release fails the schema check of another, which
+# is what "Additional property 'lrsc' not allowed" means when it appears.
+# tools/verification/simulators/sail/mkconfig.py generates the config from
+# the *installed* model's own defaults for exactly this reason, so the two
+# here are the pair it produces.
+#
+# This config has Zicfilp, Zicfiss and Zkr enabled. That matters: without a
+# reference that implements them, their tests could only be guessed at --
+# and guessing produced a landing-pad rule that armed on `jalr ra, off(ra)`
+# and broke a passing group. A probe against this Sail settled it in one
+# run.
+WSL_SAIL = "/mnt/z/Code/Dev/DoomV/tools/verification/simulators/sail/src/build/c_emulator/sail_riscv_sim"
+WSL_CFG = "/mnt/z/Code/Dev/DoomV/tools/verification/simulators/sail/rva23s64.json"
 
 
 def win_to_wsl(p: Path) -> str:
     s = str(p.resolve()).replace("\\", "/")
     return "/mnt/" + s[0].lower() + s[2:]
+
+
+def sail_verdict(elf: Path) -> str:
+    """Run one self-checking ELF under Sail and report what the reference
+    makes of it. A test DoomV fails that Sail also fails is a test problem
+    or a configuration difference, not a DoomV defect -- and that is worth
+    knowing before spending a day on it."""
+    cmd = [WSL_SAIL, "--config", WSL_CFG, win_to_wsl(elf)]
+    try:
+        r = subprocess.run(["wsl", "-d", "Ubuntu", "-u", "root", "--"] + cmd,
+                           capture_output=True, text=True, timeout=300, env=_env())
+    except subprocess.TimeoutExpired:
+        return "sail: timeout"
+    out = (r.stdout or "") + (r.stderr or "")
+    for line in out.splitlines():
+        if line.startswith("  Failed:") or line.startswith("  Passed:"):
+            pass
+    passed = next((l.split()[-1] for l in out.splitlines() if l.strip().startswith("Passed:")), "?")
+    failed = next((l.split()[-1] for l in out.splitlines() if l.strip().startswith("Failed:")), "?")
+    if "SUCCESS" in out:
+        return f"sail: PASS ({passed} passed)"
+    return f"sail: fail ({passed} passed, {failed} failed)"
 
 
 def sail_run(elf: Path, sig_out: Path | None):
@@ -185,6 +219,9 @@ def main() -> int:
     ap.add_argument("--timeout", type=int, default=300)
     ap.add_argument("--no-sail", action="store_true",
                     help="skip the Sail reference and use only each test's own pass/fail")
+    ap.add_argument("--sail-verdict", action="store_true",
+                    help="also run each failing test under Sail and report its verdict, "
+                         "so a DoomV failure can be told from a test that no model passes")
     args = ap.parse_args()
 
     root = HERE / args.suite
@@ -234,8 +271,11 @@ def main() -> int:
                 problems.append(f"{elf.name}: never signalled completion")
             else:
                 counts["fail"] += 1
+                extra = ""
+                if args.sail_verdict:
+                    extra = "  [" + sail_verdict(elf) + "]"
                 problems.append(f"{elf.name}: tohost={verdict:#x} (subtest {verdict >> 1}) "
-                                f"-- see out/{con.name}")
+                                f"-- see out/{con.name}{extra}")
             print(progress(i, len(elfs), counts), end="", flush=True)
             continue
         if dut is None:

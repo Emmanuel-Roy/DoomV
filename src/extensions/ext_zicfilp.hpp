@@ -57,6 +57,26 @@ constexpr uint64_t STATUS_MPELP = 1ull << 41;
 // other envcfg field follows -- and it means a hypervisor can enforce
 // landing pads on a guest that has not asked for them, but a guest cannot
 // exempt itself from what its hypervisor requires.
+// The same question asked about a mode the hart is not in yet. xRET needs
+// this: ELP comes back from xPELP only if the mode being returned *to*
+// enforces landing pads, and is cleared otherwise. Restoring it
+// unconditionally leaves a guest that has landing pads switched off with an
+// expectation armed, and its next instruction faults for a check it is not
+// subject to.
+inline bool enabled_for(Registers &regs, PrivMode priv, bool virt)
+{
+	if (!Extensions.ZICFILP) return false;
+	switch (priv) {
+	case PrivMode::M:
+		return (regs.read_csr(CSR_MSECCFG) & MSECCFG_MLPE) != 0;
+	case PrivMode::S:
+		return virt ? (regs.read_csr(CSR_HENVCFG) & ENVCFG_LPE) != 0
+		            : (regs.read_csr(CSR_MENVCFG) & ENVCFG_LPE) != 0;
+	default:
+		return (regs.read_csr(CSR_SENVCFG) & ENVCFG_LPE) != 0;
+	}
+}
+
 inline bool enabled(Registers &regs)
 {
 	if (!Extensions.ZICFILP) return false;
@@ -74,17 +94,26 @@ inline bool enabled(Registers &regs)
 
 // Whether a JALR arms the expectation.
 //
-// A return does not: `jalr x0, rs1` where rs1 is a link register (x1 or
-// x5) is the backward edge, and guarding it is Zicfiss's job. A
-// software-guarded branch -- rs1 = x7 -- does not either: that register is
-// reserved for the compiler to say it has already established where the
-// jump goes, which is how a switch-table dispatch avoids needing a landing
-// pad at every case.
+// The test is on rs1 alone -- what the jump goes *through* -- and not on rd
+// at all. Any transfer through a link register (x1 or x5) is a
+// return-flavoured edge whatever it does with the return address, and the
+// backward edge is Zicfiss's to guard, not this extension's. x7 is the
+// software-guarded branch: the register a compiler uses to say it has
+// already established where the jump goes, which is how a switch-table
+// dispatch avoids needing a landing pad at every case.
+//
+// Keying this on `rd == 0 && (rs1 == 1 || rs1 == 5)` -- reading the
+// exemption as "is this a `ret`" -- is wrong and not subtly so. An
+// ordinary `jalr ra, off(ra)`, which is what a compiler emits for a call
+// through a resolved PLT-style pointer, has rs1 = x1 and rd = x1: exempt by
+// the real rule, armed by that one. It made every such call demand a
+// landing pad, and since a binary built without them has none, the next
+// instruction faulted. Sail was the arbiter here -- a probe with
+// menvcfg.LPE set showed the reference not arming on that form.
 inline bool arms_expectation(uint8_t rd, uint8_t rs1)
 {
-	if (rd == 0 && (rs1 == 1 || rs1 == 5)) return false;  // return
-	if (rs1 == 7) return false;                            // software-guarded
-	return true;
+	(void)rd;
+	return rs1 != 1 && rs1 != 5 && rs1 != 7;
 }
 
 } // namespace cfilp

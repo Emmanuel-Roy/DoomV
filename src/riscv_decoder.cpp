@@ -366,6 +366,33 @@ DispatchResult Decoder::decode_and_dispatch(uint64_t pc, uint32_t raw_word)
 		entry = {true, pc, tag, instr, enabled};
 	}
 
+
+	// Zicfilp: with the expectation armed, the only instruction that may
+	// execute is a landing pad. Anything else -- including a perfectly
+	// ordinary instruction that simply happens to follow an indirect jump
+	// into unmarked code -- is a software-check exception.
+	//
+	// This sits before the illegal-instruction rejection below, not after.
+	// The landing-pad check happens as the instruction is decoded, so it
+	// fires even for an encoding this hart does not implement: an attacker
+	// who lands on garbage should be told the *control flow* was wrong,
+	// which is the actionable fact, rather than that the garbage was not a
+	// valid instruction. Reporting cause 2 there loses that.
+	//
+	// LPAD is AUIPC with rd=x0. Recognising it here rather than letting it
+	// dispatch is what keeps the check to one place; ext_i.cpp clears the
+	// expectation and validates the label when it actually runs.
+	if (Extensions.ZICFILP && regs.elp) {
+		const bool is_lpad = instr.ext == Extension::I
+		                  && instr.opcode == 0b0010111 && instr.rd == 0;
+		if (!is_lpad) {
+			// tval 2 names the landing-pad check specifically, which is
+			// what tells a handler this was Zicfilp and not Zicfiss.
+			core.raise_software_check(regs, 2);
+			return {false, instr};
+		}
+	}
+
 	if (!enabled) {
 		return {true, instr};
 	}
@@ -380,30 +407,6 @@ DispatchResult Decoder::decode_and_dispatch(uint64_t pc, uint32_t raw_word)
 	if ((instr.ext == Extension::F || instr.ext == Extension::D || instr.ext == Extension::ZFA
 	     || instr.ext == Extension::ZFHMIN) && !vcommon::fp_unit_enabled(regs)) {
 		return {true, instr};
-	}
-
-	// Zicfilp: with the expectation armed, the only instruction that may
-	// execute is a landing pad. Anything else -- including a perfectly
-	// ordinary instruction that simply happens to follow an indirect jump
-	// into unmarked code -- is a software-check exception.
-	//
-	// This sits after the enable checks and before the dispatch, because
-	// it has to catch *every* instruction rather than any particular
-	// extension's, and because a disabled-unit trap is the more specific
-	// answer where both would apply.
-	//
-	// LPAD is AUIPC with rd=x0. Recognising it here rather than letting it
-	// dispatch is what keeps the check to one place; ext_i.cpp clears the
-	// expectation and validates the label when it actually runs.
-	if (Extensions.ZICFILP && regs.elp) {
-		const bool is_lpad = instr.ext == Extension::I
-		                  && instr.opcode == 0b0010111 && instr.rd == 0;
-		if (!is_lpad) {
-			// tval 2 names the landing-pad check specifically, which is
-			// what tells a handler this was Zicfilp and not Zicfiss.
-			core.raise_software_check(regs, 2);
-			return {false, instr};
-		}
 	}
 
 	switch (instr.ext) {

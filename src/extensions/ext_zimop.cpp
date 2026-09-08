@@ -17,6 +17,8 @@
 #include "riscv_decoder.hpp"
 #include "ext_zicfiss.hpp"
 #include "mmu.hpp"
+#include <cstdio>
+#include <cstdlib>
 #include "riscv_core.hpp"
 #include "registers.hpp"
 #include "memory.hpp"

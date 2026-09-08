@@ -918,6 +918,14 @@ uint64_t RiscvCore::read_csr_effective(Registers &regs, Memory &mem, uint16_t cs
 	if (csr == CSR_MISA) return compute_misa();
 	if (Extensions.H && csr == hyp::CSR_HSTATUS_ADDR) return hyp::read_hstatus(regs);
 	if (Extensions.H && csr == 0x60A) return regs.read_csr(0x60A) & henvcfg_mask(regs);
+	// senvcfg's SSE is the guest supervisor's control over shadow stacks
+	// for its user code, and the hypervisor's henvcfg.SSE sits above it:
+	// with that clear, the guest cannot enable what its hypervisor has
+	// withheld, so the bit reads zero however it was written. Same
+	// withholding shape as henvcfg's own delegated bits.
+	if (Extensions.ZICFISS && Extensions.H && regs.get_virt() && csr == 0x10A
+	    && !(regs.read_csr(0x60A) & (1ull << 3)))
+		return regs.read_csr(0x10A) & ~(1ull << 3);
 	if (csr == CSR_MIDELEG) return regs.read_csr(CSR_MIDELEG) | mideleg_fixed_ones();
 	// GEILEN is zero: no guest external interrupt file exists, so both
 	// registers that describe one read as zero however they were written.
@@ -1536,13 +1544,14 @@ void RiscvCore::exec_32ZICSR(const DecodedInstruction &instr, Registers &regs, M
 			const uint16_t epc_csr    = vs ? hyp::CSR_VSEPC_ADDR    : CSR_SEPC;
 
 			uint64_t mstatus = regs.read_csr(status_csr);
-			// ELP comes back from SPELP, and SPELP is left clear -- the
-			// same one-shot discipline SPIE and SPP follow, so a second
-			// return cannot re-arm an expectation the first one consumed.
-			if (Extensions.ZICFILP) {
-				regs.elp = (mstatus & cfilp::STATUS_SPELP) != 0;
-				mstatus &= ~cfilp::STATUS_SPELP;
-			}
+			// SPELP is consumed here -- the same one-shot discipline
+			// SPIE and SPP follow, so a second return cannot re-arm an
+			// expectation the first one already took. Whether it becomes
+			// a live expectation is decided below, once the mode being
+			// returned to is known.
+			const bool saved_elp = Extensions.ZICFILP
+			                    && (mstatus & cfilp::STATUS_SPELP) != 0;
+			if (Extensions.ZICFILP) mstatus &= ~cfilp::STATUS_SPELP;
 			mstatus = (mstatus & MSTATUS_SPIE) ? (mstatus | MSTATUS_SIE) : (mstatus & ~MSTATUS_SIE);
 			mstatus |= MSTATUS_SPIE; // SPIE reset to 1 on return, per spec
 			PrivMode target = (mstatus & MSTATUS_SPP) ? PrivMode::S : PrivMode::U;
@@ -1563,15 +1572,20 @@ void RiscvCore::exec_32ZICSR(const DecodedInstruction &instr, Registers &regs, M
 				hyp::write_hstatus(regs, hstatus & ~(1ull << 7));
 			}
 			regs.set_priv(target);
+			// ELP is restored only if the mode being returned to actually
+			// enforces landing pads. Returning to a guest that has them
+			// switched off with an expectation still armed would fault its
+			// next instruction for a check it is not subject to.
+			if (Extensions.ZICFILP)
+				regs.elp = saved_elp && cfilp::enabled(regs);
 			regs.set_pc(regs.read_csr(epc_csr));
 			return;
 		}
 		case 0x302: { // MRET
 			uint64_t mstatus = regs.read_csr(CSR_MSTATUS);
-			if (Extensions.ZICFILP) {
-				regs.elp = (mstatus & cfilp::STATUS_MPELP) != 0;
-				mstatus &= ~cfilp::STATUS_MPELP;
-			}
+			const bool saved_elp = Extensions.ZICFILP
+			                    && (mstatus & cfilp::STATUS_MPELP) != 0;
+			if (Extensions.ZICFILP) mstatus &= ~cfilp::STATUS_MPELP;
 			mstatus = (mstatus & MSTATUS_MPIE) ? (mstatus | MSTATUS_MIE) : (mstatus & ~MSTATUS_MIE);
 			mstatus |= MSTATUS_MPIE; // MPIE reset to 1 on return, per spec
 			PrivMode target = (PrivMode)((mstatus & MSTATUS_MPP) >> 11);
@@ -1585,6 +1599,8 @@ void RiscvCore::exec_32ZICSR(const DecodedInstruction &instr, Registers &regs, M
 			regs.write_csr(CSR_MSTATUS, mstatus);
 			if (Extensions.H) regs.set_virt(target_virt);
 			regs.set_priv(target);
+			if (Extensions.ZICFILP)
+				regs.elp = saved_elp && cfilp::enabled(regs);
 			regs.set_pc(regs.read_csr(CSR_MEPC));
 			return;
 		}
@@ -1823,6 +1839,12 @@ void RiscvCore::exec_32ZICSR(const DecodedInstruction &instr, Registers &regs, M
 			if (!Extensions.ZICFILP) updated &= ~ENVCFG_LPE;
 			if (!Extensions.ZICFISS) updated &= ~ENVCFG_SSE;
 		}
+		// A guest cannot set senvcfg.SSE while its hypervisor has
+		// henvcfg.SSE clear -- the write has no effect rather than being
+		// refused, which is what "read-only zero" means for a WARL bit.
+		if (Extensions.ZICFISS && Extensions.H && regs.get_virt() && csr == 0x10A
+		    && !(regs.read_csr(0x60A) & ENVCFG_SSE))
+			updated &= ~ENVCFG_SSE;
 	}
 
 	// CBIE is WARL in all three envcfg registers, and henvcfg additionally
