@@ -96,6 +96,12 @@ public:
 	// carry on, while a bare-metal guest with no handler still gets caught
 	// at the exact instruction instead of vanishing into a trap loop.
 	void raise_illegal_instruction(Registers &regs, uint64_t tval);
+
+	// Cause 18, the software-check exception. Zicfilp raises it with tval=2
+	// for a missing or mismatched landing pad, and Zicfiss with tval=3 for
+	// a shadow-stack mismatch; the tval is what tells a handler which
+	// check failed.
+	void raise_software_check(Registers &regs, uint64_t tval);
 	static bool csr_access_permitted(Registers &regs, uint16_t csr, bool writing);
 
 private:

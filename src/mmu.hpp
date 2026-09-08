@@ -25,6 +25,12 @@ enum class AccessType : uint8_t {
 	// Modelling it as a Store demands write permission and the D bit;
 	// modelling it as a Load reports the wrong cause. Hence its own tag.
 	CacheBlock,
+	// A shadow stack access (Zicfiss). It is the only kind that may touch
+	// a page marked W=1 R=0, and the only kind that may write one -- an
+	// ordinary store to such a page faults, which is the entire point:
+	// the return addresses on it survive a buffer overrun because nothing
+	// the program can write with reaches them.
+	ShadowStack,
 };
 
 // Sv39 address translation. Stateless on purpose (no TLB) -- every call

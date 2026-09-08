@@ -4,6 +4,7 @@
 #include "riscv_core.hpp"
 #include "registers.hpp"
 #include "memory.hpp"
+#include "ext_zicfilp.hpp"
 #include "extensions.hpp"
 
 DecodedInstruction Decoder::decode_i(uint32_t raw_instr, Extension ext) const
@@ -176,7 +177,28 @@ void RiscvCore::exec_32I(const DecodedInstruction &instr, Registers &regs, Memor
 		regs.write_x(instr.rd, imm_u);
 		break;
 
-	case 0b0010111: // AUIPC
+	case 0b0010111: // AUIPC -- and, with rd=x0, Zicfilp's LPAD
+		// LPAD is AUIPC discarding its result, so the arithmetic below is
+		// still exactly right and the instruction stays a no-op on a hart
+		// without Zicfilp. What it additionally does here is disarm the
+		// landing-pad expectation an indirect jump armed.
+		//
+		// The label check is the part that carries the security: a nonzero
+		// label must match the top twenty bits of x7, which the caller set
+		// before jumping. Without it every landing pad in the program would
+		// be interchangeable, and an attacker could redirect any indirect
+		// call to any function entry.
+		if (Extensions.ZICFILP && instr.rd == 0 && regs.elp) {
+			uint64_t label = (uint64_t)imm_u >> 12;
+			if (label != 0 && ((regs.read_x(7) >> 12) & 0xFFFFF) != label) {
+				// A wrong label is as much a violation as no landing pad
+				// at all, and reports the same way.
+				regs.elp = false;
+				raise_software_check(regs, 2);
+				return;
+			}
+			regs.elp = false;
+		}
 		regs.write_x(instr.rd, pc + imm_u);
 		break;
 
@@ -190,6 +212,11 @@ void RiscvCore::exec_32I(const DecodedInstruction &instr, Registers &regs, Memor
 			uint64_t target = (rs1_val + imm_u) & ~1ull;
 			regs.write_x(instr.rd, next_pc);
 			next_pc = target;
+			// Arm the landing-pad expectation, unless this jump is a
+			// return or a software-guarded branch -- see
+			// cfilp::arms_expectation for why those two are exempt.
+			if (cfilp::enabled(regs) && cfilp::arms_expectation(instr.rd, instr.rs1))
+				regs.elp = true;
 		}
 		break;
 

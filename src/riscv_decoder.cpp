@@ -382,6 +382,30 @@ DispatchResult Decoder::decode_and_dispatch(uint64_t pc, uint32_t raw_word)
 		return {true, instr};
 	}
 
+	// Zicfilp: with the expectation armed, the only instruction that may
+	// execute is a landing pad. Anything else -- including a perfectly
+	// ordinary instruction that simply happens to follow an indirect jump
+	// into unmarked code -- is a software-check exception.
+	//
+	// This sits after the enable checks and before the dispatch, because
+	// it has to catch *every* instruction rather than any particular
+	// extension's, and because a disabled-unit trap is the more specific
+	// answer where both would apply.
+	//
+	// LPAD is AUIPC with rd=x0. Recognising it here rather than letting it
+	// dispatch is what keeps the check to one place; ext_i.cpp clears the
+	// expectation and validates the label when it actually runs.
+	if (Extensions.ZICFILP && regs.elp) {
+		const bool is_lpad = instr.ext == Extension::I
+		                  && instr.opcode == 0b0010111 && instr.rd == 0;
+		if (!is_lpad) {
+			// tval 2 names the landing-pad check specifically, which is
+			// what tells a handler this was Zicfilp and not Zicfiss.
+			core.raise_software_check(regs, 2);
+			return {false, instr};
+		}
+	}
+
 	switch (instr.ext) {
 	case Extension::I:
 	case Extension::C: // every RVC instruction is an alias for a standard I-type/R-type/B-type/J-type op

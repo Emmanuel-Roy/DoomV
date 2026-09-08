@@ -52,6 +52,23 @@ sys.path.insert(0, str(HERE.parent / "archtest"))
 from archtest import (elf_symbols, read_sail_sig, read_doomv_sig,  # noqa: E402
                       acquire_lock, MARCH)
 
+# Zkr is added here rather than to arch-test's MARCH because arch-test's
+# reference signatures were generated against Sail's RVA23S64 config, and
+# changing the ISA under a set of precomputed signatures would be comparing
+# two different machines.
+#
+# Zicfilp and Zicfiss are deliberately *not* enabled, even though DoomV
+# implements both. This suite assumes they are absent: its CSR tests probe
+# menvcfg by writing all ones, which on a hart with landing pads genuinely
+# enables them for S-mode -- and the suite's own code has no landing pads,
+# so its next indirect call faults. That is correct hardware behaviour and
+# the test would fail on any real Zicfilp machine. Both extensions are
+# optional in RVA23S64 and the reference model does not implement them, so
+# reporting them absent is the honest configuration; the tests have
+# "not implemented" paths for exactly this case. Enable them with
+# -march=..._zicfilp_zicfiss to exercise the implementation.
+SUITE_MARCH = MARCH + "_zkr"
+
 WSL_SAIL = "/root/build/sail-0131/build/c_emulator/sail_riscv_sim"
 WSL_CFG = "/mnt/z/Code/Dev/DoomV/tools/verification/tests/arch-test/config/sail/sail-RVA23S64/sail.json"
 
@@ -101,7 +118,7 @@ def doomv_run(elf: Path, syms: dict, timeout: int):
     # kill-on-timeout into a sub-second run that returns an exit code.
     cmd = [str(ROOT / "riscv_doom.exe"), "-nogui",
            str(ROOT / "tools" / "doom" / "doombuild" / "DOOM1.WAD"),
-           str(elf), "-march=" + MARCH,
+           str(elf), "-march=" + SUITE_MARCH,
            "-tohost={:x}".format(syms["tohost"])]
     if not self_check:
         cmd.append("-sig={:x}:{:x}".format(beg, end))

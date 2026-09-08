@@ -584,7 +584,14 @@ bool mmu_translate(Registers &regs, Memory &mem, uint64_t vaddr, AccessType type
 			return false;
 		}
 		pte = mem.read64(pte_addr);
-		if (!(pte & PTE_V) || (!(pte & PTE_R) && (pte & PTE_W))) {
+		// W without R is reserved -- unless Zicfiss is implemented, where
+		// it is precisely how a shadow stack page is marked. That is the
+		// one encoding the extension repurposes, and it is what makes such
+		// a page unwritable by an ordinary store on hardware that has the
+		// extension and a page fault on hardware that does not.
+		const bool ss_page = Extensions.ZICFISS
+		                  && !(pte & PTE_R) && (pte & PTE_W) && (pte & PTE_V);
+		if (!(pte & PTE_V) || (!ss_page && !(pte & PTE_R) && (pte & PTE_W))) {
 			// Invalid, or the reserved W=1/R=0 encoding.
 			cause = fault_cause(type);
 			tval = vaddr;
@@ -617,16 +624,37 @@ bool mmu_translate(Registers &regs, Memory &mem, uint64_t vaddr, AccessType type
 		a = pte_ppn(pte) * PAGESIZE;
 	}
 
+	// A shadow stack page is the W=1 R=0 encoding, and the permissions run
+	// the opposite way round from every other page: only a shadow stack
+	// instruction may touch it for writing, an ordinary store may not, and
+	// an ordinary load may -- reading return addresses is harmless, and
+	// unwinders do it. A shadow stack instruction aimed at any *other*
+	// page is equally wrong, since that is how it would be tricked into
+	// writing somewhere useful.
+	const bool is_ss_page = Extensions.ZICFISS && !(pte & PTE_R) && (pte & PTE_W);
+
 	bool perm_ok;
 	switch (type) {
 	case AccessType::Fetch: perm_ok = (pte & PTE_X); break;
-	case AccessType::Load:  perm_ok = (pte & PTE_R) || (mxr && (pte & PTE_X)); break;
-	case AccessType::Store: perm_ok = (pte & PTE_W); break;
+	case AccessType::Load:  perm_ok = (pte & PTE_R) || (mxr && (pte & PTE_X))
+	                                || is_ss_page; break;
+	case AccessType::Store: perm_ok = (pte & PTE_W) && !is_ss_page; break;
 	case AccessType::Amo:   perm_ok = (pte & PTE_R) && (pte & PTE_W); break;
-	case AccessType::CacheBlock: perm_ok = (pte & PTE_R) || (pte & PTE_W); break;
+	case AccessType::CacheBlock: perm_ok = ((pte & PTE_R) || (pte & PTE_W))
+	                                    && !is_ss_page; break;
+	case AccessType::ShadowStack: perm_ok = is_ss_page; break;
 	default:                perm_ok = false; break;
 	}
 	if (!perm_ok) {
+		// Reaching the wrong kind of page is an *access* fault rather than
+		// a page fault: the mapping is not the problem and repairing it is
+		// not the answer, which is the same reasoning PMP denials follow.
+		if (type == AccessType::ShadowStack || (is_ss_page && type != AccessType::Fetch)) {
+			cause = access_fault_cause(type == AccessType::ShadowStack
+			                           ? AccessType::Store : type);
+			tval = vaddr;
+			return false;
+		}
 		cause = fault_cause(type);
 		tval = vaddr;
 		return false;

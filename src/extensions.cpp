@@ -63,6 +63,9 @@ void parse_march(const std::string &march)
 	if (march.find("ssstateen") != std::string::npos) Extensions.SSSTATEEN = true;
 	if (march.find("ssnpm") != std::string::npos || march.find("smnpm") != std::string::npos
 	    || march.find("sspm") != std::string::npos) Extensions.SSNPM = true;
+	if (march.find("zkr") != std::string::npos) Extensions.ZKR = true;
+	if (march.find("zicfilp") != std::string::npos) Extensions.ZICFILP = true;
+	if (march.find("zicfiss") != std::string::npos) Extensions.ZICFISS = true;
 	// "h" as a single letter, the way misa spells it. Checked against the
 	// base-letter loop below rather than a token search, since "h" appears
 	// inside plenty of multi-letter names ("zfh", "zihintpause").

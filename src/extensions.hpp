@@ -89,6 +89,26 @@ struct ExtensionConfig {
 	bool SSCOFPMF = true;
 	bool SSSTATEEN = true;
 
+	// Zkr: the entropy source. One CSR, `seed`, and no instructions -- but
+	// it is not a plain register. Reading it *consumes* entropy, so a
+	// read-only access to it is illegal rather than harmless, and which
+	// modes may reach it at all is controlled from mseccfg. Off by default
+	// like H: a machine that does not claim an entropy source should not
+	// answer as though it had one.
+	bool ZKR = false;
+
+	// Zicfilp: landing pads. Every indirect jump arms an expectation that
+	// the next instruction is an `lpad`, and anything else is a
+	// software-check exception. Off by default -- turning it on changes
+	// what ordinary indirect jumps do.
+	bool ZICFILP = false;
+
+	// Zicfiss: the shadow stack. Adds `ssp`, four instructions that hide
+	// inside Zimop/Zcmop encodings when the extension is off, and a page
+	// permission -- W without R, otherwise reserved -- that means "shadow
+	// stack". Off by default for the same reason.
+	bool ZICFISS = false;
+
 	// Base ISA width, not an optional extension. Registers/Memory always
 	// store values in 64-bit containers regardless of this flag: RV32
 	// mode just means every integer op computes at 32-bit width and

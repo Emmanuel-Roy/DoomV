@@ -6,6 +6,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include "ext_ssstateen.hpp"
+#include "ext_zicfilp.hpp"
+#include "ext_zicfiss.hpp"
 #include "ext_zicntr.hpp"
 #include "riscv_decoder.hpp"
 #include "riscv_core.hpp"
@@ -395,7 +397,8 @@ constexpr uint64_t SSTATUS_FS  = 3ull << 13;
 constexpr uint64_t SSTATUS_VS  = 3ull << 9;
 constexpr uint64_t SSTATUS_UXL = 3ull << 32;
 constexpr uint64_t SSTATUS_SD  = 1ull << 63;
-constexpr uint64_t SSTATUS_MASK = MSTATUS_SIE | MSTATUS_SPIE | MSTATUS_SPP
+constexpr uint64_t SSTATUS_SPELP = 1ull << 23;
+constexpr uint64_t SSTATUS_MASK = SSTATUS_SPELP | MSTATUS_SIE | MSTATUS_SPIE | MSTATUS_SPP
                                 | (1ull << 18) | (1ull << 19)   // SUM, MXR
                                 | SSTATUS_FS | SSTATUS_VS | SSTATUS_UXL | SSTATUS_SD;
 
@@ -570,6 +573,68 @@ bool is_rv32_high_half(uint16_t csr)
 	}
 }
 
+
+// Zkr's `seed`. Not a plain CSR: reading it consumes entropy from the
+// source, so the architecture makes a *read-only* access to it illegal --
+// csrrs/csrrc with rs1=x0, and the immediate forms with uimm=0, are exactly
+// the encodings that would read without writing, and all of them trap. Only
+// a read-modify-write form may touch it, which is what guarantees the
+// caller acknowledged consuming what it read.
+//
+// mseccfg gates who may reach it at all: SSEED for S-mode, USEED for
+// U-mode, and M-mode always. A guest is a special case -- see
+// seed_denial_is_virtual.
+constexpr uint16_t CSR_SEED     = 0x015;
+constexpr uint16_t CSR_MSECCFG  = 0x747;
+constexpr uint64_t MSECCFG_USEED = 1ull << 8;
+constexpr uint64_t MSECCFG_SSEED = 1ull << 9;
+
+bool seed_access_permitted(Registers &regs, bool writing)
+{
+	// A pure read is illegal at every privilege, M-mode included.
+	if (!writing) return false;
+
+	PrivMode priv = regs.get_priv();
+	if (priv == PrivMode::M) return true;
+
+	// Any virtual mode is refused here and handled as a virtual
+	// instruction below, so the hypervisor can supply entropy of its own
+	// choosing rather than letting a guest drain the machine's source.
+	if (Extensions.H && regs.get_virt()) return false;
+
+	uint64_t seccfg = regs.read_csr(CSR_MSECCFG);
+	if (priv == PrivMode::S) return (seccfg & MSECCFG_SSEED) != 0;
+	return (seccfg & MSECCFG_USEED) != 0;
+}
+
+// A guest refused `seed` gets a virtual instruction only when the machine
+// would otherwise have allowed it -- mseccfg.SSEED set. With SSEED clear
+// the refusal is the machine's and stays illegal, and a read-only form is
+// illegal in a guest exactly as it is anywhere else: no hypervisor can
+// emulate an encoding that is wrong on its face.
+bool seed_denial_is_virtual(Registers &regs, bool writing)
+{
+	if (!Extensions.ZKR || !Extensions.H || !regs.get_virt()) return false;
+	if (!writing) return false;
+	return (regs.read_csr(CSR_MSECCFG) & MSECCFG_SSEED) != 0;
+}
+
+// What a read returns. Bits 31:30 are OPST: ES16 (0b10) means "sixteen bits
+// of entropy in 15:0", which is the only status this source ever reports --
+// there is no seeding delay to model and no failure to report. The bits
+// themselves come from a counter-driven mixer rather than a real noise
+// source, which is honest for an emulator: entropy that survives a save
+// state is not entropy, and nothing here pretends otherwise.
+uint64_t read_seed(Memory &mem)
+{
+	uint64_t t = mem.get_timer().get_mtime();
+	uint64_t x = t * 6364136223846793005ull + 1442695040888963407ull;
+	x ^= x >> 33;
+	x *= 0xff51afd7ed558ccdull;
+	x ^= x >> 33;
+	return (0b10ull << 30) | (x & 0xFFFF);
+}
+
 bool RiscvCore::csr_access_permitted(Registers &regs, uint16_t csr, bool writing)
 {
 	if (writing && ((csr >> 10) & 0x3) == 0x3) return false;
@@ -637,6 +702,16 @@ bool RiscvCore::csr_access_permitted(Registers &regs, uint16_t csr, bool writing
 	// bit in mstateen0 controls access to the state a newer extension adds,
 	// and senvcfg/henvcfg are that state. Enforcing it only on the
 	// state-enable registers left the thing being enabled unguarded.
+	if (Extensions.ZKR && csr == CSR_SEED && !seed_access_permitted(regs, writing))
+		return false;
+
+	// ssp exists only while shadow stacks are enabled for the current mode.
+	// A mode that cannot execute the instructions has no business holding
+	// the pointer they use, and software probes exactly this to discover
+	// whether the extension is available to it.
+	if (Extensions.ZICFISS && csr == cfiss::CSR_SSP && !cfiss::enabled(regs))
+		return false;
+
 	// srmcfg is Ssqosid's resource-control register. It is HS-level state a
 	// guest has no business reaching -- the whole point is that the
 	// hypervisor assigns quality-of-service identities to its guests, not
@@ -847,6 +922,7 @@ uint64_t RiscvCore::read_csr_effective(Registers &regs, Memory &mem, uint16_t cs
 	// GEILEN is zero: no guest external interrupt file exists, so both
 	// registers that describe one read as zero however they were written.
 	if (Extensions.H && (csr == CSR_HGEIE || csr == CSR_HGEIP)) return 0;
+	if (Extensions.ZKR && csr == CSR_SEED) return read_seed(mem);
 	if (Extensions.H && csr == CSR_VSSTATUS_N) return read_vsstatus(regs);
 	if (Extensions.H && csr == 0x204) return read_vsie(regs);
 	if (Extensions.H && csr == 0x244) return read_vsip(regs, mem);
@@ -1068,6 +1144,14 @@ void RiscvCore::raise_illegal_instruction(Registers &regs, uint64_t tval)
 	enter_trap(regs, CAUSE_ILLEGAL_INSN, tval);
 }
 
+// Cause 18. tval names which check failed rather than holding an address:
+// 2 for a landing-pad violation, 3 for a shadow-stack one. pc still sits on
+// the offending instruction, which is what the handler wants to see.
+void RiscvCore::raise_software_check(Registers &regs, uint64_t tval)
+{
+	enter_trap(regs, 18, tval);
+}
+
 void RiscvCore::enter_trap(Registers &regs, uint64_t cause, uint64_t tval, bool is_interrupt)
 {
 	uint64_t pc = regs.get_pc();
@@ -1120,6 +1204,17 @@ void RiscvCore::enter_trap(Registers &regs, uint64_t cause, uint64_t tval, bool 
 		uint64_t vs_cause = cause;
 		if (is_interrupt) vs_cause = (cause & (1ull << 63)) | (cause_bit - 1);
 
+		// ELP is live hart state at the moment of the trap, so it is
+		// stashed in the target mode's SPELP and cleared. An interrupt
+		// landing between an indirect jump and its lpad would otherwise
+		// disarm the check silently -- exactly when it matters most.
+		if (Extensions.ZICFILP) {
+			uint64_t vss = regs.read_csr(0x200);
+			vss = regs.elp ? (vss | cfilp::STATUS_SPELP) : (vss & ~cfilp::STATUS_SPELP);
+			regs.write_csr(0x200, vss);
+			regs.elp = false;
+		}
+
 		regs.write_csr(0x241, pc);       // vsepc
 		regs.write_csr(0x242, vs_cause); // vscause
 		regs.write_csr(0x243, tval);     // vstval
@@ -1140,6 +1235,12 @@ void RiscvCore::enter_trap(Registers &regs, uint64_t cause, uint64_t tval, bool 
 	}
 
 	if (to_s) {
+		if (Extensions.ZICFILP) {
+			uint64_t st = regs.read_csr(CSR_MSTATUS);
+			st = regs.elp ? (st | cfilp::STATUS_SPELP) : (st & ~cfilp::STATUS_SPELP);
+			regs.write_csr(CSR_MSTATUS, st);
+			regs.elp = false;
+		}
 		regs.write_csr(CSR_SEPC, pc);
 		regs.write_csr(CSR_SCAUSE, cause);
 		regs.write_csr(CSR_STVAL, tval);
@@ -1207,6 +1308,12 @@ void RiscvCore::enter_trap(Registers &regs, uint64_t cause, uint64_t tval, bool 
 		return;
 	}
 
+	if (Extensions.ZICFILP) {
+		uint64_t st = regs.read_csr(CSR_MSTATUS);
+		st = regs.elp ? (st | cfilp::STATUS_MPELP) : (st & ~cfilp::STATUS_MPELP);
+		regs.write_csr(CSR_MSTATUS, st);
+		regs.elp = false;
+	}
 	regs.write_csr(CSR_MEPC, pc);
 	regs.write_csr(CSR_MCAUSE, cause);
 	regs.write_csr(CSR_MTVAL, tval);
@@ -1429,6 +1536,13 @@ void RiscvCore::exec_32ZICSR(const DecodedInstruction &instr, Registers &regs, M
 			const uint16_t epc_csr    = vs ? hyp::CSR_VSEPC_ADDR    : CSR_SEPC;
 
 			uint64_t mstatus = regs.read_csr(status_csr);
+			// ELP comes back from SPELP, and SPELP is left clear -- the
+			// same one-shot discipline SPIE and SPP follow, so a second
+			// return cannot re-arm an expectation the first one consumed.
+			if (Extensions.ZICFILP) {
+				regs.elp = (mstatus & cfilp::STATUS_SPELP) != 0;
+				mstatus &= ~cfilp::STATUS_SPELP;
+			}
 			mstatus = (mstatus & MSTATUS_SPIE) ? (mstatus | MSTATUS_SIE) : (mstatus & ~MSTATUS_SIE);
 			mstatus |= MSTATUS_SPIE; // SPIE reset to 1 on return, per spec
 			PrivMode target = (mstatus & MSTATUS_SPP) ? PrivMode::S : PrivMode::U;
@@ -1454,6 +1568,10 @@ void RiscvCore::exec_32ZICSR(const DecodedInstruction &instr, Registers &regs, M
 		}
 		case 0x302: { // MRET
 			uint64_t mstatus = regs.read_csr(CSR_MSTATUS);
+			if (Extensions.ZICFILP) {
+				regs.elp = (mstatus & cfilp::STATUS_MPELP) != 0;
+				mstatus &= ~cfilp::STATUS_MPELP;
+			}
 			mstatus = (mstatus & MSTATUS_MPIE) ? (mstatus | MSTATUS_MIE) : (mstatus & ~MSTATUS_MIE);
 			mstatus |= MSTATUS_MPIE; // MPIE reset to 1 on return, per spec
 			PrivMode target = (PrivMode)((mstatus & MSTATUS_MPP) >> 11);
@@ -1573,6 +1691,18 @@ void RiscvCore::exec_32ZICSR(const DecodedInstruction &instr, Registers &regs, M
 			return;
 		}
 
+		if (Extensions.ZICFISS && csr == cfiss::CSR_SSP
+		    && cfiss::denial_is_virtual(regs)) {
+			enter_trap(regs, hyp::CAUSE_VIRTUAL_INSTRUCTION, instr.raw);
+			return;
+		}
+
+		if (Extensions.ZKR && csr == CSR_SEED
+		    && seed_denial_is_virtual(regs, writes)) {
+			enter_trap(regs, hyp::CAUSE_VIRTUAL_INSTRUCTION, instr.raw);
+			return;
+		}
+
 		// srmcfg from any virtual mode is the hypervisor's to emulate --
 		// it is HS-level state, and the guest asking for it is exactly
 		// the case the hypervisor wants to see.
@@ -1678,6 +1808,21 @@ void RiscvCore::exec_32ZICSR(const DecodedInstruction &instr, Registers &regs, M
 	                         || (Extensions.H && csr == 0x60A))) {
 		constexpr uint64_t PMM = 3ull << 32;
 		if (((updated >> 32) & 0x3) == 1) updated = (updated & ~PMM) | (old & PMM);
+	}
+
+	// An envcfg bit for an extension this hart does not have reads as zero.
+	// That is how software discovers what is missing: the bits are WARL,
+	// and a probe writes all ones and sees which survive. Leaving LPE or
+	// SSE writable on a hart with no landing pads or shadow stack would
+	// have software enable a protection that then does not happen -- worse
+	// than not offering it, because the enable appears to succeed.
+	{
+		constexpr uint64_t ENVCFG_LPE = 1ull << 2;
+		constexpr uint64_t ENVCFG_SSE = 1ull << 3;
+		if (csr == CSR_MENVCFG || csr == 0x10A || (Extensions.H && csr == 0x60A)) {
+			if (!Extensions.ZICFILP) updated &= ~ENVCFG_LPE;
+			if (!Extensions.ZICFISS) updated &= ~ENVCFG_SSE;
+		}
 	}
 
 	// CBIE is WARL in all three envcfg registers, and henvcfg additionally

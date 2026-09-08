@@ -144,6 +144,12 @@ public:
 	// legal for explicit accesses and wrong for these two.
 	uint64_t pending_htinst = 0;
 
+	// Zicfilp's expected-landing-pad bit. Live hart state rather than a
+	// CSR: it is armed by an indirect jump and disarmed by the `lpad` that
+	// follows, and it only becomes visible in a register when a trap saves
+	// it into the trapping mode's xPELP. See ext_zicfilp.hpp.
+	bool elp = false;
+
 private:
 	uint64_t x[32];
 	double f[32];
