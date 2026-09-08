@@ -157,6 +157,30 @@ constexpr uint64_t MENVCFG_STCE = 1ull << 63;
 constexpr uint64_t MSTATUS_GVA = 1ull << 38;
 constexpr uint64_t MSTATUS_MPV = 1ull << 39;
 
+// Whether a trap's tval holds a guest *virtual* address, which is what
+// hstatus.GVA and mstatus.GVA report. True for the faults whose tval is an
+// address in the guest's own address space; false for ECALL, breakpoint
+// and illegal instruction, whose tval is not an address at all.
+//
+// Both trap paths use this so they cannot drift apart: a guest fault that
+// is delegated reports GVA in hstatus, and the same fault left undelegated
+// reports it in mstatus, and a hypervisor reading either has to see the
+// same answer.
+inline bool tval_is_guest_va(uint64_t cause_bit, bool is_interrupt)
+{
+	if (is_interrupt) return false;
+	switch (cause_bit) {
+	case 0: case 1:            // instruction misaligned / access fault
+	case 4: case 5:            // load misaligned / access fault
+	case 6: case 7:            // store/AMO misaligned / access fault
+	case 12: case 13: case 15: // page faults
+	case 20: case 21: case 23: // guest-page faults
+		return true;
+	default:
+		return false;
+	}
+}
+
 constexpr uint64_t CAUSE_S_EXTERNAL = 9;
 constexpr uint64_t CAUSE_S_TIMER    = 5;
 constexpr uint64_t CAUSE_S_SOFTWARE = 1;
@@ -648,6 +672,21 @@ void RiscvCore::enter_trap(Registers &regs, uint64_t cause, uint64_t tval, bool 
 				hstatus = (from == PrivMode::S) ? (hstatus | (1ull << 8))
 				                                : (hstatus & ~(1ull << 8)); // SPVP
 			}
+
+			// GVA says whether stval holds a guest *virtual* address. The
+			// hypervisor needs it to know how to read stval at all: for a
+			// fault it is an address in the guest's own address space and
+			// means nothing without the guest's page tables, while for an
+			// ECALL or an illegal instruction stval is not an address and
+			// GVA must read zero.
+			//
+			// It is written on every trap to HS, not only when set: leaving
+			// it alone would let a stale 1 from an earlier fault make the
+			// hypervisor read a non-address as a guest pointer.
+			static constexpr uint64_t HSTATUS_GVA_BIT = 1ull << 6;
+			bool gva = was_virt && tval_is_guest_va(cause_bit, is_interrupt);
+			hstatus = gva ? (hstatus | HSTATUS_GVA_BIT) : (hstatus & ~HSTATUS_GVA_BIT);
+
 			hyp::write_hstatus(regs, hstatus);
 			regs.set_virt(false);
 		}
@@ -676,6 +715,12 @@ void RiscvCore::enter_trap(Registers &regs, uint64_t cause, uint64_t tval, bool 
 	// eventual MRET whether the mode it is returning to was virtual.
 	if (Extensions.H) {
 		mstatus = was_virt ? (mstatus | MSTATUS_MPV) : (mstatus & ~MSTATUS_MPV);
+		// GVA has an M-mode copy for exactly the same reason it has an
+		// HS-mode one, and it was defined here and never written. A guest
+		// fault that is not delegated lands in M with mtval holding a guest
+		// virtual address, and nothing said so.
+		bool mgva = was_virt && tval_is_guest_va(cause_bit, is_interrupt);
+		mstatus = mgva ? (mstatus | MSTATUS_GVA) : (mstatus & ~MSTATUS_GVA);
 	}
 	regs.write_csr(CSR_MSTATUS, mstatus);
 
