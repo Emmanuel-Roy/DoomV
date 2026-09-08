@@ -14,8 +14,8 @@ if ($LASTEXITCODE -ne 0) {
     throw "WSL distribution '$Distro' is unavailable. Install it first with: wsl --install -d $Distro"
 }
 $WslRepo = '/mnt/' + $Repo.Substring(0, 1).ToLowerInvariant() + $Repo.Substring(2).Replace('\', '/')
-$args = @('-d', $Distro, '-u', 'root', '--', 'bash', "$WslRepo/scripts/install_wsl.sh", $WslRepo)
-if ($SkipVerification) { $args += '--skip-verification' }
-& wsl.exe @args
+$wslArgs = @('-d', $Distro, '-u', 'root', '--', 'bash', "$WslRepo/scripts/install_wsl.sh", $WslRepo)
+if ($SkipVerification) { $wslArgs += '--skip-verification' }
+& wsl.exe @wslArgs
 if ($LASTEXITCODE -ne 0) { throw "WSL toolchain installation failed ($LASTEXITCODE)." }
 Write-Host 'WSL and RISC-V toolchain are ready.'
