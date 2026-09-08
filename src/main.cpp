@@ -14,6 +14,7 @@ int main(int argc, char *argv[])
 	uint64_t sig_begin = 0, sig_end = 0;
 	bool have_sig = false;
 	std::string opensbi_path, kernel_path, dtb_path, initrd_path;
+	uint64_t tohost_addr = 0;
 	for (int i = 1; i < argc; i++) {
 		std::string arg = argv[i];
 		if (arg.rfind("-march=", 0) == 0) {
@@ -27,6 +28,10 @@ int main(int argc, char *argv[])
 			sig_begin = std::stoull(range.substr(0, colon), nullptr, 16);
 			sig_end = std::stoull(range.substr(colon + 1), nullptr, 16);
 			have_sig = true;
+		} else if (arg.rfind("-tohost=", 0) == 0) {
+			// Stop when the guest stores nonzero to this address. Every
+			// bare-metal RISC-V test suite ends that way.
+			tohost_addr = std::stoull(arg.substr(8), nullptr, 16);
 		} else if (arg.rfind("-opensbi=", 0) == 0) {
 			opensbi_path = arg.substr(9);
 		} else if (arg.rfind("-kernel=", 0) == 0) {
@@ -85,6 +90,7 @@ int main(int argc, char *argv[])
 	}
 	if (have_breakpoint) system.add_breakpoint(breakpoint);
 	if (have_sig) system.set_signature_range(sig_begin, sig_end, "signature.log");
+	if (tohost_addr) system.watch_tohost(tohost_addr);
 
 	system.run();
 	return 0;

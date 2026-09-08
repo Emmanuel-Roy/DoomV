@@ -231,6 +231,11 @@ void Memory::write32(uint64_t addr, uint32_t val)
 
 void Memory::write64(uint64_t addr, uint64_t val)
 {
+	// A nonzero store to tohost ends the test. Only the first is kept: a
+	// harness that keeps running would otherwise see the value overwritten
+	// by whatever the test does on its way out.
+	if (tohost_addr && addr == tohost_addr && val != 0 && tohost_value == 0)
+		tohost_value = val;
 	write32(addr + 0, (uint32_t)(val & 0xFFFFFFFFu));
 	write32(addr + 4, (uint32_t)(val >> 32));
 }

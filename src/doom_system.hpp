@@ -39,6 +39,8 @@ public:
 	// the only two threads and this is the only thing they share besides
 	// the snapshot and the key queue.
 	std::atomic<bool> resume_requested{false};
+	void watch_tohost(uint64_t addr);
+
 	bool pending_illegal = false;
 	uint64_t pending_illegal_tval = 0;
 	void resume_from_halt();

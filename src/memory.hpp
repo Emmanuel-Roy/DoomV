@@ -97,7 +97,22 @@ public:
 	//
 	// The whole access has to be inside one region; an access straddling the
 	// end of RAM is a fault even though its first byte is fine.
+	// HTIF tohost: every RISC-V bare-metal test suite signals completion by
+	// storing to a symbol called `tohost` -- 1 for pass, (code<<1)|1 for a
+	// failing test number. DoomV had no way to notice, so a test could only
+	// be stopped by breaking on an address read out of its symbol table,
+	// which works for suites that export a `pass` label and not for the
+	// ones that export only `tohost`.
+	//
+	// Watching the address makes every suite runnable the same way, and is
+	// how the reference models do it.
+	void watch_tohost(uint64_t addr) { tohost_addr = addr; tohost_value = 0; }
+	uint64_t tohost_written() const { return tohost_value; }
+
 	bool is_backed(uint64_t addr, unsigned size) const;
+
+	uint64_t tohost_addr = 0;
+	uint64_t tohost_value = 0;
 
 	static constexpr uint32_t INSTR_PER_MS = 1200;
 	void step_instructions(uint32_t count);

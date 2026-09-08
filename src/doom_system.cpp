@@ -215,6 +215,18 @@ void DoomSystem::step()
 	uint32_t recorded_instr = (result.decoded.length == 2) ? (instr & 0xFFFF) : instr;
 	regs.record_history(pc, recorded_instr, result.decoded);
 
+	// A test that signals completion through HTIF stops here, with its
+	// signature dumped exactly as a breakpoint would. This is what lets a
+	// suite that exports only `tohost` -- no `pass` label to break on -- be
+	// run at all.
+	if (memory.tohost_written()) {
+		debugger.halted = true;
+		debugger.dump_log(regs, memory, "crash.log");
+		if (has_sig_range) debugger.dump_signature(memory, sig_begin, sig_end, sig_path.c_str());
+		memory.step_instructions(1);
+		return;
+	}
+
 	if (debugger.should_halt(pc, result.illegal)) {
 		if (result.illegal) {
 			// Remember what to raise on resume. recorded_instr is the
@@ -239,6 +251,11 @@ void DoomSystem::step()
 	}
 
 	memory.step_instructions(1);
+}
+
+void DoomSystem::watch_tohost(uint64_t addr)
+{
+	memory.watch_tohost(addr);
 }
 
 void DoomSystem::publish_snapshot()
