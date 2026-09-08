@@ -126,13 +126,25 @@ for t in "${TESTS[@]}"; do
 	# like a collision. Serialise on a lock directory; mkdir is atomic even
 	# over a Windows filesystem, where flock is not dependable.
 	LOCK="$ROOT/.signature.lock"
+	# A lock left behind by a killed run is broken rather than waited out:
+	# without that, every later run stalled the full 600 seconds on every
+	# test before giving up.
 	for _ in $(seq 1 600); do
 		mkdir "$LOCK" 2>/dev/null && break
+		if [ -d "$LOCK" ] && [ -z "$(find "$LOCK" -maxdepth 0 -mmin -10 2>/dev/null)" ]; then
+			rmdir "$LOCK" 2>/dev/null
+			continue
+		fi
 		sleep 1
 	done
 
 	( cd "$ROOT" && rm -f signature.log crash.log &&
-	  timeout 180 ./riscv_doom.exe tools/doom/doombuild/DOOM1.WAD \
+	  # -ng: no SDL window, and the process exits as soon as it reaches
+	  # the halt address. Without it a finished test sat in its render
+	  # loop until the timeout expired, so every one of these suites cost
+	  # its full 180 seconds whether it passed or not. The timeout stays
+	  # as the backstop for a test that never reaches the halt address.
+	  timeout 180 ./riscv_doom.exe -ng tools/doom/doombuild/DOOM1.WAD \
 		"tools/verification/tests/differential/vector/$t.elf" -march="$(march_for "$t")" \
 		-sig="$BEG:$END" -break="0x$HALT" >/dev/null 2>&1 )
 
