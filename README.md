@@ -158,25 +158,76 @@ is to just not need to do anything.
 
 ## Correctness
 
-I didn't want "it draws pixels that look like Doom" to be the bar for
-correct. So partway through, I built [spike](https://github.com/riscv-software-src/riscv-isa-sim)
-(the reference RISC-V ISA simulator) from source as a golden model, and ran
-DoomV against the official [riscv-arch-test](https://github.com/riscv-non-isa/riscv-arch-test)
-suite — the same compliance tests real silicon gets validated against —
-comparing signature dumps instruction-for-instruction.
+"It draws pixels that look like Doom" is not a correctness bar, so this
+is measured against the architecture instead of against itself.
 
-That process actually found real bugs: FP results that should've been the
-canonical quiet NaN were leaking NaN payloads straight from the host FPU,
-and one float-to-unsigned-64 conversion had undefined behavior on inputs at
-the top of the range. Both are fixed. The full I/M/A/C/Zifencei suite
-currently passes 115/127 applicable tests, with the remaining 12 being
-tests for sub-extensions (Zcb, Zbb, Zba) DoomV was never trying to
-implement in the first place. F/D passes the applicable suite as well. V
-has no formal arch-test suite upstream yet, so it's cross-checked by hand
-instead — breakpoint, full register/memory dump, compare against spike.
+**Sail is the golden reference.** The [Sail RISC-V model](https://github.com/riscv/sail-riscv)
+is generated from the same source the architecture is defined in, rather
+than being an independent reimplementation, and it is the only model
+riscv-arch-test ships an RVA23S64 configuration for -- there is no spike
+RVA23S64 config at all. spike is still run behind `--ref spike`, because an
+independent implementation disagreeing is a signal even when it turns out
+to be the one that is wrong, but it does not decide anything.
 
-The harness lives in `tools/verification/tests/differential/` if you want to see how any of that
-works or run it yourself.
+### Live results
+
+| suite | what it is | result |
+| --- | --- | --- |
+| riscv-arch-test RVA23S64 | the certification suite, 663 tests, signature-diffed against Sail | **663 / 663** |
+| differential | 19 hand-written suites, 639 cases, diffed against Sail | **19 / 19** |
+| damo-rv-priv-ats | hypervisor, the only H coverage that exists anywhere | 200 / 251 assertions in `Hypervisor_CSR`, rest in progress |
+| Linux | OpenSBI + 6.12 + busybox | boots to an interactive shell |
+| DOOM | bare-metal, no OS | plays |
+
+Reproduce all of it with one command:
+
+```sh
+tools/verification/verify.sh          # build, then every suite
+tools/verification/verify.sh --quick  # skip the two slow suites
+tools/verification/verify.sh archtest # just one
+```
+
+First time only, to build the reference model and fetch the suites:
+
+```sh
+tools/verification/tests/archtest/setup.sh          # toolchain, Sail 0.13.1, act
+tools/verification/tests/archtest/gen_reference.sh  # compile tests + Sail signatures
+tools/verification/tests/suites/fetch.sh            # precompiled third-party suites
+```
+
+### What that process actually found
+
+110 bugs, written up individually in [docs/BUGS.md](docs/BUGS.md). A few
+that say something about the method:
+
+* **Floating point had to stop using the host FPU.** Three ordinary bugs
+  took the D and F families from 103 failures to 78, and then it stopped
+  moving -- because RMM (round-to-nearest-ties-away) has no x86 encoding at
+  all and was being approximated by round-to-nearest-even, wrong on every
+  exact tie, and because host exception flags are unreliable on this
+  machine. F/D now compute in Berkeley SoftFloat, which is what spike uses
+  and why Sail and spike agree with each other. 103 failures to zero.
+* **The hand-written suites passed the whole time.** All 19 matched Sail
+  while 123 certification tests failed. They never fed a signalling NaN to
+  `fcvt.d.s`, never exercised RMM, never hit a tie. Where an established
+  suite covers the ground, it is better evidence than anything written to
+  match one's own implementation.
+* **Linux was never actually booting.** "238 lines to /bin/sh" was the
+  emulator halting on an illegal instruction, which looks identical to a
+  clean boot because the log simply stops. Making illegal instructions trap
+  exposed it: userspace issued a `vsetivli`, the hart correctly called it
+  illegal because the device tree never mentioned V, and the kernel turned
+  that into SIGILL and killed init.
+* **Whole features were missing and nothing noticed.** PMP did not exist.
+  `mstatus.MPRV`, `mstatus.SD`, `mstatus.TVM`, `hstatus.VTSR`/`VTVM`/`VTW`
+  were defined bits that nothing consulted. Physical memory attributes were
+  unchecked, so a page-table walk off the end of RAM read zeros, saw an
+  invalid PTE, and reported a *page* fault where the architecture requires
+  an *access* fault.
+
+The harness lives in `tools/verification/`. `tests/differential/` is the
+hand-written suites, `tests/archtest/` drives riscv-arch-test, and
+`tests/suites/` runs the precompiled third-party suites.
 
 ## Code layout
 
