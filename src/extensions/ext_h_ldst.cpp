@@ -52,8 +52,13 @@ DecodedInstruction Decoder::decode_h_ldst(uint32_t raw_instr) const
 	instr.rs2    = (raw_instr >> 20) & 0x1F;
 	instr.funct7 = (raw_instr >> 25) & 0x7F;
 
-	if (instr.funct3 == 0) { // hfence.vvma / hfence.gvma
-		instr.mnemonic = (instr.funct7 == 0x11) ? "HFENCE.VVMA" : "HFENCE.GVMA";
+	if (instr.funct3 == 0) { // hfence.* / hinval.*
+		switch (instr.funct7) {
+		case 0x11: instr.mnemonic = "HFENCE.VVMA"; break;
+		case 0x13: instr.mnemonic = "HINVAL.VVMA"; break;
+		case 0x33: instr.mnemonic = "HINVAL.GVMA"; break;
+		default:   instr.mnemonic = "HFENCE.GVMA"; break;
+		}
 		return instr;
 	}
 
@@ -103,7 +108,8 @@ void RiscvCore::exec_H(const DecodedInstruction &instr, Registers &regs, Memory 
 		// stage, which is the hypervisor's own business and nothing TVM
 		// claims. The cause is 2, not 22 -- HS-mode is not virtualised,
 		// so there is no hypervisor below to emulate this for it.
-		if (instr.funct7 == 0x31 && regs.get_priv() == PrivMode::S
+		if ((instr.funct7 == 0x31 || instr.funct7 == 0x33)
+		    && regs.get_priv() == PrivMode::S
 		    && (regs.read_csr(0x300) & (1ull << 20))) { // mstatus.TVM
 			raise_illegal_instruction(regs, instr.raw);
 			return;
@@ -145,6 +151,20 @@ void RiscvCore::exec_H(const DecodedInstruction &instr, Registers &regs, Memory 
 	                          : AccessType::Load;
 
 	if (!mmu_translate(regs, mem, addr, type, paddr, cause, tval, /*as_guest=*/true)) {
+		// hlvx borrows the *permission* of a fetch, not its identity. It is
+		// still a load instruction, so a failure has to be reported as a
+		// load fault -- a hypervisor that took an instruction-page-fault
+		// here would go looking for a bad pc, when what actually failed is
+		// the address in rs1. Asking the MMU for Fetch is what gets the
+		// execute-permission check; this maps the answer back.
+		if (is_hlvx) {
+			switch (cause) {
+			case 12: cause = 13; break; // instruction page fault -> load
+			case 20: cause = 21; break; // instruction guest-page fault -> load
+			case 1:  cause = 5;  break; // instruction access fault -> load
+			default: break;
+			}
+		}
 		enter_trap(regs, cause, tval);
 		return;
 	}

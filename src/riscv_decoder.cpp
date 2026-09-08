@@ -175,6 +175,13 @@ Extension Decoder::classify(uint32_t raw_instr) const
 			// shares its funct7 with hsv.b -- funct3 is what separates
 			// them, which is why this test is inside the funct3==0 arm.
 			if (Extensions.H && (f7 == 0x11 || f7 == 0x31)) return Extension::H;
+			// hinval.vvma (0x13) and hinval.gvma (0x33) are the Svinval
+			// forms of those two fences and carry the same privilege
+			// rules. They were decoded nowhere at all, so a guest could
+			// issue one and have it quietly succeed -- the exact hole
+			// closing SINVAL.VMA was meant to prevent, one funct7 over.
+			if (Extensions.H && Extensions.SVINVAL && (f7 == 0x13 || f7 == 0x33))
+				return Extension::H;
 			uint8_t rs2 = (raw_instr >> 20) & 0x1F;
 			if (f7 == 0x0B) return Extensions.SVINVAL ? Extension::SVINVAL : Extension::ILLEGAL;
 			if (f7 == 0x0C && ((raw_instr >> 15) & 0x1F) == 0 && (rs2 == 0 || rs2 == 1))

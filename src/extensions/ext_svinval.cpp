@@ -43,6 +43,16 @@ void RiscvCore::exec_SVINVAL(const DecodedInstruction &instr, Registers &regs, M
 	// no-ops here is beside the point: what a lower privilege level is
 	// allowed to *attempt* is the observable part.
 	if (regs.get_priv() == PrivMode::U) {
+		// In VU-mode the exception is a *virtual* instruction. The rule is
+		// general to the H extension: an instruction refused only because
+		// the privilege is too low, but which HS-mode could have run,
+		// belongs to the hypervisor to emulate or refuse -- so the guest's
+		// own supervisor gets a chance to see it rather than a bare cause
+		// 2 that says the instruction does not exist.
+		if (Extensions.H && regs.get_virt()) {
+			enter_trap(regs, 22, instr.raw);
+			return;
+		}
 		raise_illegal_instruction(regs, instr.raw);
 		return;
 	}

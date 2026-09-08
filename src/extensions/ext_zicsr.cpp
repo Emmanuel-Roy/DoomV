@@ -114,6 +114,8 @@ constexpr uint16_t CSR_MIE      = 0x304;
 constexpr uint16_t CSR_MIP      = 0x344;
 constexpr uint16_t CSR_MENVCFG  = 0x30A;
 constexpr uint16_t CSR_STIMECMP = 0x14D; // Sstc, RV64 only (no stimecmph split)
+constexpr uint16_t CSR_VSTIMECMP = 0x24D; // the guest's, reached as stimecmp when V=1
+constexpr uint16_t CSR_HTIMEDELTA = 0x605;
 constexpr uint16_t CSR_TIME     = 0xC01; // unprivileged, read-only mtime alias -- see the read-dispatch comment below
 constexpr uint16_t CSR_MISELECT = 0x350;
 constexpr uint16_t CSR_MIREG    = 0x351;
@@ -231,6 +233,23 @@ bool stip_from_sstc(Registers &regs, Memory &mem)
 	return mem.get_timer().get_mtime() >= regs.read_csr(CSR_STIMECMP);
 }
 
+// The guest's half of Sstc. vstimecmp is compared against the guest's own
+// clock -- time + htimedelta -- not the host's, because that is the
+// timeline the guest schedules against; comparing against raw mtime fires
+// the guest's timer at the wrong moment by exactly the offset the
+// hypervisor installed to hide its own uptime.
+//
+// henvcfg.STCE gates this the way menvcfg.STCE gates the host's, and it is
+// itself gated by menvcfg.STCE, so M-mode switching Sstc off switches it
+// off for the guest too.
+bool vstip_from_sstc(Registers &regs, Memory &mem)
+{
+	if (!(regs.read_csr(CSR_MENVCFG) & MENVCFG_STCE)) return false;
+	if (!(regs.read_csr(0x60A) & MENVCFG_STCE)) return false;  // henvcfg.STCE
+	uint64_t guest_time = mem.get_timer().get_mtime() + regs.read_csr(CSR_HTIMEDELTA);
+	return guest_time >= regs.read_csr(CSR_VSTIMECMP);
+}
+
 uint64_t compute_mip(Registers &regs, Memory &mem)
 {
 	uint64_t raw = regs.read_csr(CSR_MIP) & MIP_SHADOW_MASK;
@@ -249,6 +268,10 @@ uint64_t compute_mip(Registers &regs, Memory &mem)
 		// the guest's external interrupt file is genuinely asserting.
 		uint64_t hvip = regs.read_csr(CSR_HVIP) & HVIP_WMASK;
 		mip |= hvip;
+
+		// The guest's timer is a hardware source for VSTIP, so it ORs with
+		// whatever the hypervisor injected rather than replacing it.
+		if (vstip_from_sstc(regs, mem)) mip |= MIP_VSTIP;
 
 		// SGEIP is not injectable at all: it is the OR of the guest
 		// external interrupts the hypervisor has enabled, and says "one
@@ -526,6 +549,18 @@ bool RiscvCore::csr_access_permitted(Registers &regs, uint16_t csr, bool writing
 
 	if (counters::is_counter_csr(csr) && !counters::counter_permitted(regs, csr))
 		return false;
+
+	// Sstc from a guest. Reaching vstimecmp needs henvcfg.STCE -- the
+	// hypervisor's say over whether its guest gets a timer of its own --
+	// and hcounteren.TM, because a guest that cannot read `time` has no
+	// business programming a compare against it. Both refusals are the
+	// hypervisor's, so exec_32ZICSR turns them into cause 22.
+	if (Extensions.H && regs.get_virt() && csr == 0x24D) {
+		constexpr uint64_t STCE = 1ull << 63;
+		if (!(regs.read_csr(CSR_MENVCFG) & STCE)) return false;
+		if (!(regs.read_csr(0x60A) & STCE)) return false;
+		if (!(regs.read_csr(0x606) & (1ull << 1))) return false;  // hcounteren.TM
+	}
 
 	// mstatus.TVM closes satp to S-mode, reads included. Together with the
 	// SFENCE.VMA trap it gives a hypervisor a complete view of a guest
@@ -1204,8 +1239,14 @@ void RiscvCore::exec_32ZICSR(const DecodedInstruction &instr, Registers &regs, M
 		if (instr.funct7 == 0b0001001 && instr.rd == 0) {
 			// SFENCE.VMA is a supervisor instruction: attempting it from
 			// U-mode is illegal regardless of TVM, and DoomV let it through.
+			// From VU-mode the exception is a virtual instruction instead
+			// -- HS-mode could have run this, so it is the hypervisor's to
+			// emulate or refuse rather than something that does not exist.
 			if (regs.get_priv() == PrivMode::U) {
-				raise_illegal_instruction(regs, instr.raw);
+				if (Extensions.H && regs.get_virt())
+					enter_trap(regs, hyp::CAUSE_VIRTUAL_INSTRUCTION, instr.raw);
+				else
+					raise_illegal_instruction(regs, instr.raw);
 				return;
 			}
 
@@ -1422,6 +1463,13 @@ void RiscvCore::exec_32ZICSR(const DecodedInstruction &instr, Registers &regs, M
 		// been refused by its hypervisor, which can emulate the read.
 		if (counters::is_counter_csr(csr)
 		    && counters::counter_denial_is_virtual(regs, csr)) {
+			enter_trap(regs, hyp::CAUSE_VIRTUAL_INSTRUCTION, instr.raw);
+			return;
+		}
+		// And for the guest's timer compare. stimecmp has already been
+		// redirected to vstimecmp by this point, so keying on the VS
+		// number is what actually catches a guest's access.
+		if (Extensions.H && regs.get_virt() && csr == 0x24D) {
 			enter_trap(regs, hyp::CAUSE_VIRTUAL_INSTRUCTION, instr.raw);
 			return;
 		}
