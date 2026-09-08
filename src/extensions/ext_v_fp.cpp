@@ -32,39 +32,66 @@ namespace {
 // the g* wrappers below, which convert back to f16 to compute. Computing in
 // double and narrowing once at the end would round twice, and with an
 // 11-bit significand that is routine rather than a corner case.
+// Half-precision elements travel through `double`, and the conversion has to
+// be lossless in *both* directions -- which the ordinary f16<->f64 helpers
+// are not. h_to_f64_bits maps every NaN to the canonical double NaN,
+// discarding the f16 payload and the sign, so a round trip turned any NaN
+// into 0x7E00. That is wrong in three places at once:
+//
+//   * an element *move* (the slides, merge, vfmv) must copy bit patterns
+//     verbatim, payload included -- it is a copy, not an operation;
+//   * fsgnj and fclass are pure bit manipulation, and a classify that
+//     cannot see the payload cannot tell a quiet NaN from a signalling one;
+//   * arithmetic loses the invalid *flag*: the result would be canonicalised
+//     by the architecture anyway, but an sNaN operand has to raise invalid,
+//     and it had already been quieted before the operation saw it.
+//
+// So NaNs carry their exact 16-bit pattern in the low bits of a double NaN.
+// Both directions are written here and nothing else produces these values,
+// so the encoding only has to be self-consistent: exponent all ones and a
+// nonzero mantissa make it a genuine double NaN, and the low sixteen bits
+// hold the half unchanged. Finite values and infinities go through the
+// ordinary conversion, which is already exact for them.
+inline bool h_is_nan_bits(uint16_t h) { return (h & 0x7C00) == 0x7C00 && (h & 0x03FF); }
+
+inline double h_to_d(uint16_t h)
+{
+	if (h_is_nan_bits(h)) return f64_from_bits(0x7FF8000000000000ull | (uint64_t)h);
+	uint8_t f = 0;
+	return f64_from_bits(fp16::h_to_f64_bits(h, f));
+}
+
+inline uint16_t d_to_h(double v)
+{
+	const uint64_t b = bits_from_f64(v);
+	if ((b & 0x7FF0000000000000ull) == 0x7FF0000000000000ull
+	    && (b & 0x000FFFFFFFFFFFFFull)) {
+		const uint16_t stored = (uint16_t)b;
+		// A double NaN that carries one of ours gives the half back
+		// exactly; any other double NaN -- one that arrived from a wider
+		// format -- becomes the canonical half NaN, which is what the
+		// architecture asks for.
+		return h_is_nan_bits(stored) ? stored : 0x7E00;
+	}
+	uint8_t f = 0;
+	return fp16::f64_bits_to_h(b, 0, f);
+}
+
 double read_felem(Registers &regs, int base, int sew, uint64_t i)
 {
 	if (sew == 64) return f64_from_bits(read_velem(regs, base, 64, i));
-	if (sew == 16) {
-		uint8_t f = 0;
-		return f64_from_bits(fp16::h_to_f64_bits((uint16_t)read_velem(regs, base, 16, i), f));
-	}
+	if (sew == 16) return h_to_d((uint16_t)read_velem(regs, base, 16, i));
 	return (double)f32_from_bits((uint32_t)read_velem(regs, base, 32, i));
 }
 void write_felem(Registers &regs, int base, int sew, uint64_t i, double v)
 {
 	if (sew == 64) write_velem(regs, base, 64, i, bits_from_f64(v));
-	else if (sew == 16) {
-		// Exact by construction: v is the result of an f16 operation, so
-		// narrowing it back cannot round. A mode still has to be named.
-		uint8_t f = 0;
-		write_velem(regs, base, 16, i, fp16::f64_bits_to_h(bits_from_f64(v), 0, f));
-	}
+	else if (sew == 16) write_velem(regs, base, 16, i, d_to_h(v));
 	else write_velem(regs, base, 32, i, bits_from_f32((float)v));
 }
 
-// The f16 bit pattern of a value that came from an f16 element, and back.
-// Exact in both directions for the reason above.
-inline uint16_t as_h(double v)
-{
-	uint8_t f = 0;
-	return fp16::f64_bits_to_h(bits_from_f64(v), 0, f);
-}
-inline double from_h(uint16_t h)
-{
-	uint8_t f = 0;
-	return f64_from_bits(fp16::h_to_f64_bits(h, f));
-}
+inline uint16_t as_h(double v)  { return d_to_h(v); }
+inline double from_h(uint16_t h) { return h_to_d(h); }
 
 double fbinop_d(double a, double b, char op, uint8_t rm, Registers &regs) { return fp_binop(a, b, op, rm, regs); }
 float  fbinop_f(float a, float b, char op, uint8_t rm, Registers &regs) { return fp_binop(a, b, op, rm, regs); }
@@ -230,11 +257,8 @@ void exec_v_fp(const DecodedInstruction &instr, Registers &regs)
 	// sign-injection, min/max and the arithmetic alike.
 	auto read_fscalar = [&](int w) -> double {
 		if (w == 64) return regs.read_f(instr.rs1);
-		if (w == 16) {
-			uint8_t f = 0;
-			return f64_from_bits(fp16::h_to_f64_bits(
-				fp16::unbox_f16(bits_from_f64(regs.read_f(instr.rs1))), f));
-		}
+		if (w == 16)
+			return h_to_d(fp16::unbox_f16(bits_from_f64(regs.read_f(instr.rs1))));
 		return (double)read_f32_reg(regs, instr.rs1);
 	};
 	auto op2 = [&](uint64_t i) -> double {
@@ -247,11 +271,9 @@ void exec_v_fp(const DecodedInstruction &instr, Registers &regs)
 			double v = read_felem(regs, instr.rs2, sew, 0);
 			if (sew == 64) regs.write_f(instr.rd, v);
 			else if (sew == 16) {
-				// Written NaN-boxed, the way every half-precision producer
-				// leaves an f register.
-				uint8_t f = 0;
-				regs.write_f(instr.rd, f64_from_bits(fp16::box_f16(
-					fp16::f64_bits_to_h(bits_from_f64(v), 0, f))));
+				// NaN-boxed, the way every half-precision producer leaves an
+				// f register.
+				regs.write_f(instr.rd, f64_from_bits(fp16::box_f16(d_to_h(v))));
 			}
 			else write_f32_reg(regs, instr.rd, (float)v);
 		} else if (vl > 0) {
@@ -325,16 +347,23 @@ void exec_v_fp(const DecodedInstruction &instr, Registers &regs)
 		// type for: 16-bit goes through the software conversion, 32 and 64
 		// use the host float and double directly.
 		auto read_f = [&](int vreg, int esew, uint64_t i) -> double {
-			if (esew != 16) return read_felem(regs, vreg, esew, i);
-			uint8_t fl = 0;
-			double d = f64_from_bits(fp16::h_to_f64_bits((uint16_t)read_velem(regs, vreg, 16, i), fl));
-			regs.or_fflags(fl);
-			return d;
+			// No flag is raised for merely *reading* an element -- the
+			// operation raises what it raises. The old path set invalid
+			// here for an sNaN operand and then lost the operand itself.
+			return read_felem(regs, vreg, esew, i);
 		};
 		auto write_f = [&](int vreg, int esew, uint64_t i, double v, int rm) {
 			if (esew != 16) { write_felem(regs, vreg, esew, i, v); return; }
+			// A narrowing write does round, so this one keeps the real
+			// conversion and its flags rather than the lossless encoding.
+			const uint64_t b = bits_from_f64(v);
+			if ((b & 0x7FF0000000000000ull) == 0x7FF0000000000000ull
+			    && (b & 0x000FFFFFFFFFFFFFull)) {
+				write_velem(regs, vreg, 16, i, d_to_h(v));
+				return;
+			}
 			uint8_t fl = 0;
-			uint16_t h = fp16::f64_bits_to_h(bits_from_f64(v), rm, fl);
+			uint16_t h = fp16::f64_bits_to_h(b, rm, fl);
 			regs.or_fflags(fl);
 			write_velem(regs, vreg, 16, i, h);
 		};
@@ -545,11 +574,8 @@ void exec_v_fp(const DecodedInstruction &instr, Registers &regs)
 			// widened on the way in like a vector element would be.
 			auto narrow2 = [&](uint64_t i) -> double {
 				if (is_vv) return read_felem(regs, instr.rs1, sew, i);
-				if (sew == 16) {
-					uint8_t f = 0;
-					return f64_from_bits(fp16::h_to_f64_bits(
-						fp16::unbox_f16(bits_from_f64(regs.read_f(instr.rs1))), f));
-				}
+				if (sew == 16)
+					return h_to_d(fp16::unbox_f16(bits_from_f64(regs.read_f(instr.rs1))));
 				return (double)read_f32_reg(regs, instr.rs1);
 			};
 			if (funct6 == 0x31 || funct6 == 0x33) { // vfwredusum.vs / vfwredosum.vs (OPFVV only)
