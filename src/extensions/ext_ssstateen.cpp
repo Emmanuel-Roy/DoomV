@@ -68,13 +68,45 @@ namespace stateen {
 // the honest answer for DoomV is the one that matches what it has.
 constexpr uint64_t STATEEN0_M_WMASK = (1ull << 63) | (1ull << 62);
 constexpr uint64_t STATEEN_M_WMASK  = 0;
-constexpr uint64_t STATEEN_SH_WMASK = 0;
+// sstateen* holds nothing on this hart: U-mode has no state-enable
+// register below it to aggregate, and none of the state sstateen's other
+// bits would gate (Zcmt's jump table, Zfinx, Sdtrig context) exists here.
+constexpr uint64_t STATEEN_S_WMASK  = 0;
+// hstateen0 implements what mstateen0 implements. It has to: SE0 is the
+// hypervisor's gate over its guest's sstateen, and the code below reads
+// that bit to decide access. With hstateen hardwired to zero, the gate
+// could never be opened, so a guest was refused sstateen unconditionally
+// and the bit was checked but unreachable -- a rule enforced against a
+// value nothing could set.
+constexpr uint64_t STATEEN0_H_WMASK = (1ull << 63) | (1ull << 62);
+constexpr uint64_t STATEEN_H_WMASK  = 0;
 
 uint64_t wmask_for(uint16_t csr)
 {
 	if (csr == CSR_MSTATEEN0) return STATEEN0_M_WMASK;
 	if (csr > CSR_MSTATEEN0 && csr <= CSR_MSTATEEN0 + 3) return STATEEN_M_WMASK;
-	return STATEEN_SH_WMASK; // sstateen* and hstateen*
+	if (csr == CSR_HSTATEEN0) return STATEEN0_H_WMASK;
+	if (csr > CSR_HSTATEEN0 && csr <= CSR_HSTATEEN0 + 3) return STATEEN_H_WMASK;
+	return STATEEN_S_WMASK;
+}
+
+// A bit is read-only zero at one level when the same bit is zero at the
+// level above. That is what makes the hierarchy a withholding mechanism
+// rather than three independent registers: M clearing a bit takes it away
+// from HS *and* from the guest, with no way for either to put it back.
+uint64_t enclosing_mask(Registers &regs, uint16_t csr)
+{
+	if (csr >= CSR_HSTATEEN0 && csr <= CSR_HSTATEEN0 + 3)
+		return regs.read_csr((uint16_t)(CSR_MSTATEEN0 + (csr - CSR_HSTATEEN0)));
+	if (csr >= CSR_SSTATEEN0 && csr <= CSR_SSTATEEN0 + 3) {
+		int i = csr - CSR_SSTATEEN0;
+		uint64_t m = regs.read_csr((uint16_t)(CSR_MSTATEEN0 + i));
+		// A guest's view is narrowed again by the hypervisor's register.
+		if (Extensions.H && regs.get_virt())
+			m &= regs.read_csr((uint16_t)(CSR_HSTATEEN0 + i));
+		return m;
+	}
+	return ~0ull;
 }
 
 bool is_stateen_csr(uint16_t csr)
@@ -86,12 +118,16 @@ bool is_stateen_csr(uint16_t csr)
 
 uint64_t read_stateen(Registers &regs, uint16_t csr)
 {
-	return regs.read_csr(csr) & wmask_for(csr);
+	return regs.read_csr(csr) & wmask_for(csr) & enclosing_mask(regs, csr);
 }
 
 void write_stateen(Registers &regs, uint16_t csr, uint64_t value)
 {
-	regs.write_csr(csr, value & wmask_for(csr));
+	// Bits the level above has cleared are read-only zero, so a write
+	// cannot set them -- but it must not clear the ones already set
+	// either, since those are simply not this register's to touch.
+	uint64_t writable = wmask_for(csr) & enclosing_mask(regs, csr);
+	regs.write_csr(csr, (regs.read_csr(csr) & ~writable) | (value & writable));
 }
 
 // Whether a lower privilege level may reach a given stateen register.
@@ -122,6 +158,29 @@ bool stateen_access_permitted(Registers &regs, uint16_t csr)
 		uint64_t hstateen = regs.read_csr((uint16_t)(CSR_HSTATEEN0 + index));
 		if (!(hstateen & (1ull << 63))) return false;
 	}
+	return true;
+}
+
+// Which exception a denied access raises. The two gates answer
+// differently, and the difference is the whole point of having both: a
+// guest refused by *mstateen* has been refused by the machine, and gets an
+// illegal instruction; a guest refused by *hstateen* has been refused by
+// its hypervisor, and gets a virtual instruction, which is the exception
+// the hypervisor can catch and emulate on the guest's behalf. Reporting
+// cause 2 for the second kind tells the guest it did something impossible
+// when in fact its supervisor was simply not willing.
+bool stateen_denial_is_virtual(Registers &regs, uint16_t csr)
+{
+	if (!Extensions.H || !regs.get_virt()) return false;
+
+	int index;
+	if (csr >= CSR_SSTATEEN0 && csr <= CSR_SSTATEEN0 + 3) index = csr - CSR_SSTATEEN0;
+	else if (csr >= CSR_HSTATEEN0 && csr <= CSR_HSTATEEN0 + 3) index = csr - CSR_HSTATEEN0;
+	else return false;
+
+	// M-mode's refusal takes precedence: if mstateen closed it, hstateen
+	// never got a say, and the guest is not being denied by its host.
+	if (!(regs.read_csr((uint16_t)(CSR_MSTATEEN0 + index)) & (1ull << 63))) return false;
 	return true;
 }
 

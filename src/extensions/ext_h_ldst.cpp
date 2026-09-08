@@ -92,6 +92,22 @@ void RiscvCore::exec_H(const DecodedInstruction &instr, Registers &regs, Memory 
 			raise_illegal_instruction(regs, instr.raw);
 			return;
 		}
+		// mstatus.TVM closes HFENCE.GVMA to HS-mode for the same reason it
+		// closes hgatp: both manage the second stage, and M-mode
+		// withholding control of guest translation has to withhold all of
+		// it, not just the register. A hypervisor that could still
+		// invalidate G-stage entries would be able to observe and disturb
+		// a mapping M-mode had taken over.
+		//
+		// HFENCE.VVMA is not covered: it invalidates the *guest's* first
+		// stage, which is the hypervisor's own business and nothing TVM
+		// claims. The cause is 2, not 22 -- HS-mode is not virtualised,
+		// so there is no hypervisor below to emulate this for it.
+		if (instr.funct7 == 0x31 && regs.get_priv() == PrivMode::S
+		    && (regs.read_csr(0x300) & (1ull << 20))) { // mstatus.TVM
+			raise_illegal_instruction(regs, instr.raw);
+			return;
+		}
 		regs.set_pc(regs.get_pc() + instr.length);
 		return;
 	}

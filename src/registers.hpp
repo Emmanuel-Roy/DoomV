@@ -124,6 +124,16 @@ public:
 	uint16_t csr_history_at(int index) const; // 0 = most recently accessed
 	int csr_history_count() const;
 
+	// The guest physical address of a G-stage fault, set by the MMU and
+	// consumed by the trap path. It cannot be written straight to a CSR at
+	// the point of the fault, because which CSR it belongs in is not known
+	// until delegation has been resolved: htval when the trap is taken to
+	// HS-mode, mtval2 when it is taken to M. Writing htval unconditionally
+	// left mtval2 at zero for every undelegated guest page fault, and a
+	// firmware handler that forwards such a trap by copying mtval2 into
+	// htval then overwrote the one correct value with that zero.
+	uint64_t pending_gpa = 0;
+
 private:
 	uint64_t x[32];
 	double f[32];
@@ -132,6 +142,7 @@ private:
 	PrivMode priv;
 	bool virt = false; // the H extension's V bit -- see get_virt()
 	uint64_t csr[4096];
+
 	uint8_t frm;
 	uint8_t fflags;
 

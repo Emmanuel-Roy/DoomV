@@ -261,11 +261,30 @@ make
 it's free to redistribute. Point it at your own `DOOM.WAD`/`DOOM2.WAD` if
 you own a copy, and rebuild the guest ELF from `tools/doom/doombuild/` to match.
 
-Useful flags:
-- `-march=rv64imafdc_zicsr_zifencei` — override the enabled extension set
-- `-break=<hex_pc>` — halt and dump full CPU state at a given PC
-- `-sig=<hex_begin>:<hex_end>` — dump a memory range on halt (what the
-  arch-test harness uses to pull signatures)
+### Command-line options
+
+```
+riscv_doom.exe <wad> <elf> [options]                      # bare-metal / test ELF
+riscv_doom.exe -opensbi=<f> -kernel=<f> -dtb=<f> -initrd=<f> [options]   # Linux
+```
+
+| Option | Meaning |
+| --- | --- |
+| `-ng` | Headless: no SDL window, and the process exits as soon as the guest stops. Aliases: `-nogui`, `-headless`, `--headless`. |
+| `-march=<isa>` | Override the enabled extension set, e.g. `rv64imafdc_zicsr_zifencei`. Without it a Linux boot gets the full RVA23S64 profile and everything else gets the `rv64imafdc_zicsr` default. |
+| `-break=<hex_pc>` | Halt and dump full CPU state when the pc reaches this address. |
+| `-sig=<hex_begin>:<hex_end>` | Dump this memory range to `signature.log` on halt — how the arch-test harness pulls signatures. |
+| `-tohost=<hex_addr>` | Stop when the guest stores a nonzero word to this address, and write the value to `tohost.log`. This is how every bare-metal RISC-V suite reports its verdict, and it is the only stop signal for suites that export no signature symbols. |
+| `-opensbi=<path>` | OpenSBI firmware ELF (`fw_jump.elf`). Any of the four Linux options selects Linux-boot mode. |
+| `-kernel=<path>` | Kernel `Image`. |
+| `-dtb=<path>` | Flattened device tree. |
+| `-initrd=<path>` | Initramfs cpio archive. |
+
+`-ng` is what makes the conformance suites practical. With a window open a
+finished test never exits on its own and has to be killed from outside, so
+every test cost its full timeout whether it passed or not; headless, the
+whole 663-test arch-test run takes about 40 seconds and the 43-group
+hypervisor suite about 10.
 
 Key bindings live in `controls.json` if you want to remap them.
 

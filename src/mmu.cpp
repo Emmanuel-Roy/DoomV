@@ -1,4 +1,6 @@
 #include "mmu.hpp"
+#include <cstdlib>
+#include <cstdio>
 #include "pmp.hpp"
 #include "registers.hpp"
 #include "memory.hpp"
@@ -11,11 +13,36 @@ constexpr uint16_t CSR_MSTATUS = 0x300; // sstatus is a masked view of the same 
 // mstatus.MPP -- same translation, same permission checks. Fetch is never
 // affected.
 constexpr uint64_t MSTATUS_MPRV = 1ull << 17;
+constexpr uint64_t MSTATUS_MPV  = 1ull << 39; // the MPP privilege was virtual
 
 constexpr uint64_t MSTATUS_SUM = 1ull << 18;
 constexpr uint64_t MSTATUS_MXR = 1ull << 19;
 
 constexpr uint64_t SATP_MODE_SV39 = 8ull;
+constexpr uint64_t SATP_MODE_SV48 = 9ull;
+constexpr uint64_t SATP_MODE_SV57 = 10ull;
+
+// How many page-table levels a satp/hgatp MODE selects, or 0 for a mode
+// this hart does not implement. The three differ only in depth: each step
+// up adds one level and nine more bits of virtual address, and every level
+// below the root is identical. Writing the walk against this number rather
+// than against Sv39's three is what lets one loop serve all three -- the
+// previous code hardcoded three levels and, for any other mode, returned
+// the virtual address *untranslated*, which is not a fault but a silent
+// bypass of the entire page table.
+inline int mode_levels(uint64_t mode)
+{
+	switch (mode) {
+	case SATP_MODE_SV39: return 3;
+	case SATP_MODE_SV48: return 4;
+	case SATP_MODE_SV57: return 5;
+	default:             return 0;
+	}
+}
+
+// Virtual address width for a mode: nine bits per level plus the 12-bit
+// page offset. 39, 48 and 57 -- which is where the names come from.
+inline int mode_va_bits(int levels) { return 12 + 9 * levels; }
 constexpr uint64_t PAGESIZE = 4096;
 constexpr int PTESIZE = 8;
 
@@ -47,6 +74,36 @@ constexpr uint16_t CSR_HGATP      = 0x680; // the second-stage root
 constexpr uint16_t CSR_HTVAL      = 0x643; // faulting guest physical address
 constexpr uint64_t MENVCFG_PBMTE  = 1ull << 62;
 constexpr uint64_t MENVCFG_ADUE   = 1ull << 61;
+constexpr uint16_t CSR_HENVCFG    = 0x60A;
+
+// Svadu: whether *this* stage updates A/D in hardware rather than
+// faulting. The two behaviours are Svade (fault, so the supervisor sets
+// the bit and retries) and Svadu (hardware sets it and the access
+// proceeds); RVA23S64 mandates Svade and allows Svadu on top of it, and
+// the choice is per-stage rather than per-hart.
+//
+// menvcfg.ADUE governs the stages HS-mode owns -- its own S-stage and the
+// G-stage. henvcfg.ADUE governs a guest's VS-stage, and is itself
+// writable only while menvcfg.ADUE is set, so M-mode clearing one bit
+// puts every stage back to Svade at once.
+inline bool adue_enabled(Registers &regs, bool vs_stage)
+{
+	if (!(regs.read_csr(CSR_MENVCFG) & MENVCFG_ADUE)) return false;
+	if (!vs_stage) return true;
+	return (regs.read_csr(CSR_HENVCFG) & MENVCFG_ADUE) != 0;
+}
+
+// The bits this access needs set in the PTE. A is required by every
+// access; D additionally by anything that writes. CacheBlock is
+// deliberately absent from the D set: it writes nothing, so it neither
+// requires nor sets D.
+inline uint64_t ad_bits_needed(AccessType type, bool implicit)
+{
+	uint64_t need = PTE_A;
+	if (!implicit && (type == AccessType::Store || type == AccessType::Amo))
+		need |= PTE_D;
+	return need;
+}
 
 constexpr uint64_t CAUSE_INSTR_PAGE_FAULT = 12;
 constexpr uint64_t CAUSE_LOAD_PAGE_FAULT  = 13;
@@ -117,36 +174,52 @@ bool gstage_translate(Registers &regs, Memory &mem, uint64_t gpa, AccessType typ
 		pa = gpa;
 		return true;
 	}
-	if (mode != SATP_MODE_SV39) { // only Sv39x4 is implemented
+	const int levels = mode_levels(mode);
+	if (levels == 0) { // a MODE this hart does not implement
 		pa = gpa;
 		return true;
 	}
 
-	// The guest physical address space is 41 bits wide. Anything above that
-	// cannot be described by the root table and faults rather than
-	// wrapping.
-	if (gpa >> 41) {
-		cause = guest_fault_cause(type);
-		// htval carries the guest physical address, shifted right by two;
-		// stval keeps the guest *virtual* address, which the caller
-		// restores. The hypervisor needs both -- the VA to tell the guest
-		// what it touched, the GPA to know which page to back -- and they
-		// are different numbers, so one field cannot serve for both.
-		regs.write_csr(CSR_HTVAL, gpa >> 2);
+	// Every failure below owes the hypervisor two different numbers, and
+	// writing only one of them is the bug this closes. htval carries the
+	// guest *physical* address, shifted right by two; stval keeps the
+	// guest *virtual* address, which the caller restores. The hypervisor
+	// needs both -- the VA to tell the guest what it touched, the GPA to
+	// know which page to back -- so one field cannot serve for both.
+	//
+	// It is a lambda because there are six ways out of this function and
+	// three of them used to forget: an invalid PTE, a misaligned
+	// superpage and a walk that ran off the bottom all reported a guest
+	// page fault with htval left at whatever the last one had put there,
+	// which the trap path then cleared to zero. The hypervisor was told a
+	// page was missing and not which page.
+	auto gfault = [&](uint64_t c) {
+		cause = c;
+		// Stashed rather than written to htval here: the trap path picks
+		// htval or mtval2 once it knows where the trap is going.
+		regs.pending_gpa = gpa;
 		tval = gpa;
 		return false;
-	}
-
-	uint64_t vpn[3] = {
-		(gpa >> 12) & 0x1FF,
-		(gpa >> 21) & 0x1FF,
-		(gpa >> 30) & 0x7FF, // 11 bits at the root, not 9
 	};
+
+	// The guest physical address space is 9 bits per level plus the 12-bit
+	// offset, and two bits wider again at the root: the x4 in Sv39x4 is a
+	// root table four pages wide, indexed by 11 bits instead of 9. That is
+	// 41 bits for Sv39x4, 50 for Sv48x4 and 59 for Sv57x4. Anything above
+	// that cannot be described by the root table and faults rather than
+	// wrapping.
+	const int gpa_bits = mode_va_bits(levels) + 2;
+	if (gpa >> gpa_bits) return gfault(guest_fault_cause(type));
+
+	uint64_t vpn[5] = {0, 0, 0, 0, 0};
+	for (int i = 0; i < levels; i++) vpn[i] = (gpa >> (12 + 9 * i)) & 0x1FF;
+	vpn[levels - 1] = (gpa >> (12 + 9 * (levels - 1))) & 0x7FF; // 11 at the root
 
 	uint64_t a = (hgatp & 0xFFFFFFFFFFFull) * PAGESIZE;
 	uint64_t pte = 0;
 	int level = -1;
-	for (int i = 2; i >= 0; i--) {
+	uint64_t leaf_pte_addr = 0;   // for Svadu's write-back
+	for (int i = levels - 1; i >= 0; i--) {
 		uint64_t pte_addr = a + vpn[i] * PTESIZE;
 		// The walk's own reads are subject to physical memory attributes.
 		// Without this the read silently returns zero, the PTE looks
@@ -158,17 +231,16 @@ bool gstage_translate(Registers &regs, Memory &mem, uint64_t gpa, AccessType typ
 			return false;
 		}
 		pte = mem.read64(pte_addr);
-		if (!(pte & PTE_V) || (!(pte & PTE_R) && (pte & PTE_W))) {
-			cause = guest_fault_cause(type);
-			tval = gpa;
-			return false;
-		}
-		if ((pte & PTE_R) || (pte & PTE_X)) { level = i; break; }
-		if (i == 0) {
-			cause = guest_fault_cause(type);
-			tval = gpa;
-			return false;
-		}
+		if (!(pte & PTE_V) || (!(pte & PTE_R) && (pte & PTE_W)))
+			return gfault(guest_fault_cause(type));
+		if ((pte & PTE_R) || (pte & PTE_X)) { level = i; leaf_pte_addr = pte_addr; break; }
+		// A non-leaf PTE is a pointer and nothing else; A, D, U and the
+		// Svpbmt memory-type bits belong to leaves, and carrying one here
+		// is a reserved encoding.
+		if ((pte & (PTE_A | PTE_D | PTE_U))
+		    || (Extensions.SVPBMT && (pte & PTE_PBMT)))
+			return gfault(guest_fault_cause(type));
+		if (i == 0) return gfault(guest_fault_cause(type));
 		a = pte_ppn(pte) * PAGESIZE;
 	}
 
@@ -178,15 +250,7 @@ bool gstage_translate(Registers &regs, Memory &mem, uint64_t gpa, AccessType typ
 	// guest at all, which makes it a configuration error rather than a
 	// permission the hypervisor could have intended.
 	if (!(pte & PTE_U)) {
-		cause = guest_fault_cause(type);
-		// htval carries the guest physical address, shifted right by two;
-		// stval keeps the guest *virtual* address, which the caller
-		// restores. The hypervisor needs both -- the VA to tell the guest
-		// what it touched, the GPA to know which page to back -- and they
-		// are different numbers, so one field cannot serve for both.
-		regs.write_csr(CSR_HTVAL, gpa >> 2);
-		tval = gpa;
-		return false;
+		return gfault(guest_fault_cause(type));
 	}
 
 	// MXR belongs to the hypervisor's own sstatus here, not the guest's.
@@ -209,27 +273,26 @@ bool gstage_translate(Registers &regs, Memory &mem, uint64_t gpa, AccessType typ
 	// original access was: fetching a PTE needs the page holding it to be
 	// readable, not executable or writable.
 	if (implicit) perm_ok = (pte & PTE_R) != 0;
-	if (!perm_ok || !(pte & PTE_A)
-	    || ((type == AccessType::Store || type == AccessType::Amo) && !implicit && !(pte & PTE_D))) {
-		cause = guest_fault_cause(type);
-		// htval carries the guest physical address, shifted right by two;
-		// stval keeps the guest *virtual* address, which the caller
-		// restores. The hypervisor needs both -- the VA to tell the guest
-		// what it touched, the GPA to know which page to back -- and they
-		// are different numbers, so one field cannot serve for both.
-		regs.write_csr(CSR_HTVAL, gpa >> 2);
-		tval = gpa;
-		return false;
+	if (!perm_ok) return gfault(guest_fault_cause(type));
+
+	// A/D on the G-stage, governed by menvcfg.ADUE alone: this stage is
+	// the hypervisor's own mapping, so the guest's henvcfg has no say over
+	// it. With ADUE clear the behaviour is Svade and a missing bit faults.
+	{
+		const uint64_t need = ad_bits_needed(type, implicit);
+		if ((pte & need) != need) {
+			if (!adue_enabled(regs, false) || leaf_pte_addr == 0
+			    || !mem.is_backed(leaf_pte_addr, PTESIZE))
+				return gfault(guest_fault_cause(type));
+			pte |= need;
+			mem.write64(leaf_pte_addr, pte);
+		}
 	}
 
 	uint64_t ppn_full = pte_ppn(pte);
 	if (level > 0) {
 		uint64_t low_mask = (1ull << (9 * level)) - 1;
-		if (ppn_full & low_mask) {
-			cause = guest_fault_cause(type);
-			tval = gpa;
-			return false;
-		}
+		if (ppn_full & low_mask) return gfault(guest_fault_cause(type));
 	}
 	uint64_t low_bits = 12 + 9 * level;
 	pa = (ppn_full << 12) | (gpa & ((1ull << low_bits) - 1));
@@ -322,13 +385,36 @@ bool mmu_translate(Registers &regs, Memory &mem, uint64_t vaddr, AccessType type
 	// execute in HS-mode on the guest's behalf, so the permission bits come
 	// from hstatus.SPVP rather than from the current mode. A real VS access
 	// is already running at the guest's own privilege.
-	const bool virt_access = Extensions.H && (as_guest || regs.get_virt());
-	uint64_t satp = regs.read_csr(virt_access ? CSR_VSATP : CSR_SATP);
+	// Which privilege, and which *world*, this access is made in. Neither
+	// is simply "the current one":
+	//
+	//   MPRV makes an M-mode load or store run at mstatus.MPP, which is
+	//     how M-mode reaches memory the way the mode it interrupted would
+	//     have. Fetches are never affected.
+	//   MPV extends that to virtualisation: with MPV set, the borrowed
+	//     privilege was a *guest* one, so the access goes through both
+	//     stages -- the guest's vsatp and then hgatp -- rather than
+	//     through satp. Reading MPRV without MPV made such an access use
+	//     the hypervisor's own mapping at the guest's privilege, which is
+	//     a different address, silently.
+	//
+	// So the two have to be resolved before the world is decided, not
+	// after: virt_access used to be computed first and MPV never entered
+	// into it.
 	PrivMode eff_priv = regs.get_priv();
-	if (!virt_access && type != AccessType::Fetch) {
+	bool mprv_virt = false;
+	if (type != AccessType::Fetch && regs.get_priv() == PrivMode::M) {
 		uint64_t st = regs.read_csr(CSR_MSTATUS);
-		if (st & MSTATUS_MPRV) eff_priv = (PrivMode)((st >> 11) & 3);
+		if (st & MSTATUS_MPRV) {
+			eff_priv = (PrivMode)((st >> 11) & 3);
+			// MPP=M is not a guest privilege however MPV reads: M-mode
+			// borrowing M-mode's view is still a direct physical access.
+			mprv_virt = Extensions.H && (st & MSTATUS_MPV) != 0
+			            && eff_priv != PrivMode::M;
+		}
 	}
+	const bool virt_access = Extensions.H && (as_guest || regs.get_virt() || mprv_virt);
+	uint64_t satp = regs.read_csr(virt_access ? CSR_VSATP : CSR_SATP);
 	if (as_guest) {
 		// hstatus.SPVP says whether the guest was in VS or VU -- an hlv
 		// must be checked against the guest's supervisor/user permission
@@ -350,16 +436,24 @@ bool mmu_translate(Registers &regs, Memory &mem, uint64_t vaddr, AccessType type
 		paddr = vaddr;
 		return true;
 	}
-	if (mode != SATP_MODE_SV39) {
-		// Sv48/Sv57 not implemented; nothing sets a MODE other than 0/8 yet.
+	const int levels = mode_levels(mode);
+	if (levels == 0) {
+		// A MODE this hart does not implement. satp's MODE is WARL and
+		// rejects these on write, so reaching here means the field was
+		// set by something that bypassed that check.
 		paddr = vaddr;
 		return true;
 	}
 
-	// Sv39 VAs must be canonical -- bits 63:39 all equal bit 38 (i.e. a
-	// sign-extended 39-bit value). A non-canonical VA faults before the
-	// walk even begins on real hardware.
-	uint64_t sext_check = (uint64_t)((int64_t)(vaddr << 25) >> 25);
+	// The VA must be canonical: the bits above the mode's width all equal
+	// the top translated bit, i.e. the address is a sign-extended value of
+	// that width -- 39 bits for Sv39, 48 for Sv48, 57 for Sv57. A
+	// non-canonical VA faults before the walk even begins on real
+	// hardware, which is what stops the unused top of the address space
+	// from aliasing the bottom.
+	const int va_bits = mode_va_bits(levels);
+	const int sext_shift = 64 - va_bits;
+	uint64_t sext_check = (uint64_t)((int64_t)(vaddr << sext_shift) >> sext_shift);
 	if (sext_check != vaddr) {
 		cause = fault_cause(type);
 		tval = vaddr;
@@ -379,16 +473,17 @@ bool mmu_translate(Registers &regs, Memory &mem, uint64_t vaddr, AccessType type
 	// what the guest could reach.
 	PrivMode priv = eff_priv;
 
-	uint64_t vpn[3] = {
-		(vaddr >> 12) & 0x1FF,
-		(vaddr >> 21) & 0x1FF,
-		(vaddr >> 30) & 0x1FF,
-	};
+	uint64_t vpn[5] = {0, 0, 0, 0, 0};
+	for (int i = 0; i < levels; i++) vpn[i] = (vaddr >> (12 + 9 * i)) & 0x1FF;
 
 	uint64_t a = (satp & 0xFFFFFFFFFFFull) * PAGESIZE;
 	uint64_t pte = 0;
 	int level = -1;
-	for (int i = 2; i >= 0; i--) {
+	// Where the leaf PTE was read from, so Svadu can write A/D back into
+	// it. This is the *physical* address after any G-stage placement, not
+	// the guest physical one the walk indexed with.
+	uint64_t leaf_pte_addr = 0;
+	for (int i = levels - 1; i >= 0; i--) {
 		uint64_t pte_addr = a + vpn[i] * PTESIZE;
 		// In a guest walk this address is a guest physical one, so the
 		// second stage has to place it before the PTE can be read. This
@@ -434,6 +529,7 @@ bool mmu_translate(Registers &regs, Memory &mem, uint64_t vaddr, AccessType type
 		}
 		if ((pte & PTE_R) || (pte & PTE_X)) {
 			level = i; // leaf
+			leaf_pte_addr = pte_addr;
 			break;
 		}
 
@@ -486,24 +582,45 @@ bool mmu_translate(Registers &regs, Memory &mem, uint64_t vaddr, AccessType type
 		}
 	}
 
-	// Faulting on a clear A (or a clear D on a write) rather than setting
-	// the bit in hardware is Svade -- one of the two behaviours RVA23
-	// permits here, and the one this machine implements. It is not a
-	// shortcut: the alternative, Svadu, is what the *other* half of the
-	// profile allows, and a hart is required to pick one and be consistent.
+	// A and D. Two behaviours are architecturally permitted and this hart
+	// implements both, selected by envcfg.ADUE:
 	//
-	// Linux handles both. It reads the choice out of the DT and, for an
-	// Svade hart, pre-sets A/D when it installs a PTE and re-walks in the
-	// fault handler -- which is why the boot path here works without ever
-	// needing hardware update. Implementing Svadu later would mean setting
-	// the bits atomically with respect to the walk, not just assigning them.
-	if (!(pte & PTE_A)) { cause = fault_cause(type); tval = vaddr; return false; }
-	// CacheBlock is deliberately absent: it writes nothing, so it neither
-	// requires nor sets D. It does still require A, checked just above.
-	if ((type == AccessType::Store || type == AccessType::Amo) && !(pte & PTE_D)) {
-		cause = fault_cause(type);
-		tval = vaddr;
-		return false;
+	//   Svade (ADUE=0, and what RVA23S64 mandates) faults on a clear A, or
+	//     on a clear D for a write, and leaves it to the supervisor to set
+	//     the bit and retry. Linux reads the choice out of the DT and, for
+	//     an Svade hart, pre-sets A/D when it installs a PTE, which is why
+	//     the boot path here never needed hardware update.
+	//   Svadu (ADUE=1) sets the missing bits in the PTE itself and lets the
+	//     access proceed.
+	//
+	// The update is a write to the page table, so it is subject to the same
+	// permission checks the walk's reads were -- and, in a guest walk, it
+	// must land on the *physical* address the G-stage placed the PTE at,
+	// not on the guest physical address the walk indexed with. Getting
+	// that wrong writes A into whatever the hypervisor happens to have at
+	// that guest physical address.
+	{
+		const uint64_t need = ad_bits_needed(type, false);
+		if ((pte & need) != need) {
+			if (!adue_enabled(regs, virt_access) || leaf_pte_addr == 0
+			    || !mem.is_backed(leaf_pte_addr, PTESIZE)) {
+				cause = fault_cause(type);
+				tval = vaddr;
+				return false;
+			}
+			// The store answers to PMP exactly as the walk's reads did:
+			// this is the hardware's own access, made at supervisor
+			// privilege whoever asked for it.
+			if (Extensions.SMPMP
+			    && !pmp::check(regs, leaf_pte_addr, PTESIZE, pmp::ACC_STORE,
+			                   (uint8_t)PrivMode::S)) {
+				cause = access_fault_cause(type);
+				tval = vaddr;
+				return false;
+			}
+			pte |= need;
+			mem.write64(leaf_pte_addr, pte);
+		}
 	}
 
 	// Svpbmt: bits 62:61 select a memory type. This machine has no caches

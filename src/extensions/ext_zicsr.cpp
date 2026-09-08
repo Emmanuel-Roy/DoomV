@@ -3,6 +3,8 @@
 // EBREAK are the only things in this project that ever trigger one.
 #include "ext_h.hpp"
 #include "ext_sscofpmf.hpp"
+#include <cstdio>
+#include <cstdlib>
 #include "ext_ssstateen.hpp"
 #include "ext_zicntr.hpp"
 #include "riscv_decoder.hpp"
@@ -352,9 +354,9 @@ uint64_t compute_misa()
 // satp.MODE is WARL (Write Any, Read Legal): real hardware that doesn't
 // implement a given paging mode clamps an unsupported MODE write so a
 // readback never reports support that isn't really there. mmu.cpp only
-// implements MODE 0 (bare) and 8 (Sv39) -- everything else used to just
-// fall through to plain csr[] storage, meaning a write of an unsupported
-// mode read back exactly as written.
+// implements MODE 0 (bare), 8 (Sv39), 9 (Sv48) and 10 (Sv57) -- everything
+// else must not read back, since a write that sticks is how software
+// discovers what a hart supports.
 //
 // Linux's own set_satp_mode() (arch/riscv/mm/init.c) relies on exactly
 // this WARL behavior to autodetect paging depth: it writes a candidate
@@ -371,8 +373,16 @@ uint64_t compute_misa()
 // satp.MODE=0xa (Sv57) already active.
 void write_satp_warl(Registers &regs, uint16_t csr, uint64_t value)
 {
+	// 0 (Bare), 8 (Sv39), 9 (Sv48) and 10 (Sv57) are all implemented now,
+	// so all four stick. Sv48 and Sv57 were rejected here for as long as
+	// the walk only knew three levels -- rejecting them was the right
+	// answer while that was true, because it is what made Linux's probe
+	// fall back to a mode that worked. It is the wrong answer now: the
+	// walk is written against the level count, the deeper modes translate,
+	// and refusing them would report less than the hart can do.
 	uint64_t mode = value >> 60;
-	if (mode != 0 && mode != 8) return; // reject the whole write, not just the MODE field -- matches real WARL clamping
+	if (mode != 0 && mode != 8 && mode != 9 && mode != 10)
+		return; // reject the whole write, not just the MODE field -- matches real WARL clamping
 	regs.write_csr(csr, value);
 }
 
@@ -680,8 +690,16 @@ void RiscvCore::enter_trap(Registers &regs, uint64_t cause, uint64_t tval, bool 
 			// one. Here it is only cleared for the causes that have no
 			// second-stage address to report, so a stale value from an
 			// earlier fault cannot be mistaken for a fresh one.
-			if (cause != 20 && cause != 21 && cause != 23)
-				regs.write_csr(0x643, 0);
+			// htval carries the guest physical address of a G-stage
+			// fault, shifted right by two, while stval keeps the guest
+			// *virtual* one -- the hypervisor needs both, and one field
+			// cannot serve for both. For any other cause there is no
+			// second-stage address to report, and htval is cleared so a
+			// stale value from an earlier fault cannot be mistaken for a
+			// fresh one.
+			bool has_gpa = !is_interrupt
+			            && (cause_bit == 20 || cause_bit == 21 || cause_bit == 23);
+			regs.write_csr(0x643, has_gpa ? (regs.pending_gpa >> 2) : 0);
 
 			// A trap from a guest into HS-mode leaves virtual mode.
 			// SPVP records the guest's own privilege, so the
@@ -744,6 +762,16 @@ void RiscvCore::enter_trap(Registers &regs, uint64_t cause, uint64_t tval, bool 
 	}
 	regs.write_csr(CSR_MSTATUS, mstatus);
 
+	if (Extensions.H) {
+		// mtval2 is htval's M-mode counterpart, and it was never written.
+		// A guest page fault that the hypervisor has not been delegated
+		// lands here, and firmware that forwards such a trap -- by copying
+		// mtval2 into htval and entering the HS handler -- was copying a
+		// zero over the only correct value the fault had produced.
+		bool m_has_gpa = !is_interrupt
+		              && (cause_bit == 20 || cause_bit == 21 || cause_bit == 23);
+		regs.write_csr(0x34B, m_has_gpa ? (regs.pending_gpa >> 2) : 0);
+	}
 	if (Extensions.H) regs.set_virt(false); // M-mode is never virtual
 	regs.set_priv(PrivMode::M);
 	// Direct mode only (mtvec[1:0] ignored) -- vectored mode's cause-indexed
@@ -1006,6 +1034,16 @@ void RiscvCore::exec_32ZICSR(const DecodedInstruction &instr, Registers &regs, M
 	bool writes = (instr.funct3 & 0x3) == 0b01 || instr.rs1 != 0;
 
 	if (!csr_access_permitted(regs, csr, writes)) {
+		// A guest refused by its hypervisor's state-enable gate gets a
+		// virtual instruction, not an illegal one -- the hypervisor set
+		// that gate and is entitled to be told when the guest hits it.
+		// Only hstateen produces this; a refusal from mstateen is the
+		// machine's, and stays cause 2.
+		if (Extensions.SSSTATEEN && stateen::is_stateen_csr(csr)
+		    && stateen::stateen_denial_is_virtual(regs, csr)) {
+			enter_trap(regs, hyp::CAUSE_VIRTUAL_INSTRUCTION, instr.raw);
+			return;
+		}
 		// tval is the whole instruction for an illegal-instruction trap,
 		// which is what a handler needs to work out which CSR was refused.
 		raise_illegal_instruction(regs, instr.raw);

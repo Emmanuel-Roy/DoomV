@@ -29,7 +29,11 @@ int main(int argc, char *argv[])
 			sig_begin = std::stoull(range.substr(0, colon), nullptr, 16);
 			sig_end = std::stoull(range.substr(colon + 1), nullptr, 16);
 			have_sig = true;
-		} else if (arg == "-nogui") {
+		} else if (arg == "-ng" || arg == "-nogui" || arg == "-headless" || arg == "--headless") {
+			// No SDL window, and the process exits when the guest stops
+			// instead of sitting in a render loop. -ng is the short form
+			// the suites use; the longer spellings are kept because they
+			// are what the flag is called in the harnesses and the docs.
 			headless = true;
 		} else if (arg.rfind("-tohost=", 0) == 0) {
 			// Stop when the guest stores nonzero to this address. Every
@@ -72,7 +76,7 @@ int main(int argc, char *argv[])
 		            "_sscofpmf_ssstateen_ssnpm_smnpm");
 	}
 	if (linux_boot && (opensbi_path.empty() || kernel_path.empty() || dtb_path.empty() || initrd_path.empty())) {
-		std::cout << "Usage: " << argv[0] << " -opensbi=<path> -kernel=<path> -dtb=<path> -initrd=<path> [-march=...] [-break=<hex_pc>]\n";
+		std::cout << "Usage: " << argv[0] << " -opensbi=<path> -kernel=<path> -dtb=<path> -initrd=<path> [-march=...] [-break=<hex_pc>] [-ng]\n";
 		return -1;
 	}
 
@@ -85,8 +89,8 @@ int main(int argc, char *argv[])
 		}
 	} else {
 		if (positional.size() < 2) {
-			std::cout << "Usage: " << argv[0] << " <wad_path> <elf_path> [-march=rv64imafdc_zicsr] [-break=<hex_pc>] [-sig=<hex_begin>:<hex_end>]\n"
-			          << "   or: " << argv[0] << " -opensbi=<path> -kernel=<path> -dtb=<path> -initrd=<path> [-march=...] [-break=<hex_pc>]\n";
+			std::cout << "Usage: " << argv[0] << " <wad_path> <elf_path> [-march=rv64imafdc_zicsr] [-break=<hex_pc>] [-sig=<hex_begin>:<hex_end>] [-ng]\n"
+			          << "   or: " << argv[0] << " -opensbi=<path> -kernel=<path> -dtb=<path> -initrd=<path> [-march=...] [-break=<hex_pc>] [-ng]\n";
 			return -1;
 		}
 		if (!system.init(positional[0].c_str(), positional[1].c_str())) {

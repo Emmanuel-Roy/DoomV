@@ -13,5 +13,8 @@ bool is_stateen_csr(uint16_t csr);
 uint64_t read_stateen(Registers &regs, uint16_t csr);
 void write_stateen(Registers &regs, uint16_t csr, uint64_t value);
 bool stateen_access_permitted(Registers &regs, uint16_t csr);
+// Whether a denial came from the hypervisor's gate rather than the
+// machine's -- cause 22 instead of cause 2.
+bool stateen_denial_is_virtual(Registers &regs, uint16_t csr);
 
 } // namespace stateen
