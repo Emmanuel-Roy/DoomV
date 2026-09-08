@@ -92,7 +92,13 @@ bool counter_denial_is_virtual(Registers &regs, uint16_t csr)
 	// M-mode's refusal takes precedence: if mcounteren closed it, the
 	// hypervisor never got a say and the guest is not being denied by it.
 	if (!(regs.read_csr(CSR_MCOUNTEREN) & bit)) return false;
-	return (regs.read_csr(CSR_HCOUNTEREN) & bit) == 0;
+
+	// Past that, every refusal inside a guest is virtual -- hcounteren's
+	// obviously, but scounteren's too. A counter is unprivileged state,
+	// and VU-mode reaching for one it cannot have is not "no such
+	// register": it is an access the hypervisor is positioned to satisfy,
+	// which is what cause 22 means and cause 2 does not.
+	return true;
 }
 
 } // namespace counters

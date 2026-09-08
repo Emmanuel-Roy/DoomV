@@ -637,6 +637,18 @@ bool RiscvCore::csr_access_permitted(Registers &regs, uint16_t csr, bool writing
 	// bit in mstateen0 controls access to the state a newer extension adds,
 	// and senvcfg/henvcfg are that state. Enforcing it only on the
 	// state-enable registers left the thing being enabled unguarded.
+	// srmcfg is Ssqosid's resource-control register. It is HS-level state a
+	// guest has no business reaching -- the whole point is that the
+	// hypervisor assigns quality-of-service identities to its guests, not
+	// the other way round -- so a virtual mode never gets it, and below M
+	// it needs mstateen0's own bit for the extension.
+	if (csr == 0x181) {
+		if (Extensions.H && regs.get_virt()) return false;
+		if (Extensions.SSSTATEEN && regs.get_priv() != PrivMode::M
+		    && !(regs.read_csr(stateen::CSR_MSTATEEN0) & (1ull << 55)))
+			return false;
+	}
+
 	if (Extensions.SSSTATEEN && (csr == 0x10A || (Extensions.H && csr == 0x60A))
 	    && regs.get_priv() != PrivMode::M) {
 		constexpr uint64_t ENVCFG = 1ull << 62;
@@ -1561,6 +1573,28 @@ void RiscvCore::exec_32ZICSR(const DecodedInstruction &instr, Registers &regs, M
 			return;
 		}
 
+		// srmcfg from any virtual mode is the hypervisor's to emulate --
+		// it is HS-level state, and the guest asking for it is exactly
+		// the case the hypervisor wants to see.
+		if (Extensions.H && regs.get_virt() && csr == 0x181) {
+			enter_trap(regs, hyp::CAUSE_VIRTUAL_INSTRUCTION, instr.raw);
+			return;
+		}
+
+		// An envcfg refused by hstateen0 was refused by the hypervisor,
+		// not by the machine, and takes cause 22 for the same reason a
+		// refused state-enable register does. mstateen0 closing it first
+		// stays illegal: the machine said no and no one is underneath.
+		if (Extensions.SSSTATEEN && Extensions.H && regs.get_virt()
+		    && (csr == 0x10A || csr == 0x60A)) {
+			constexpr uint64_t ENVCFG = 1ull << 62;
+			if ((regs.read_csr(stateen::CSR_MSTATEEN0) & ENVCFG)
+			    && !(regs.read_csr(stateen::CSR_HSTATEEN0) & ENVCFG)) {
+				enter_trap(regs, hyp::CAUSE_VIRTUAL_INSTRUCTION, instr.raw);
+				return;
+			}
+		}
+
 		// A VU-mode access to a supervisor CSR is a virtual instruction
 		// too. VU sits below its own guest supervisor, and the register it
 		// reached for is one VS-mode may have -- so the exception is the
@@ -1640,7 +1674,7 @@ void RiscvCore::exec_32ZICSR(const DecodedInstruction &instr, Registers &regs, M
 	// seeing what it gets, so storing 1 and privately treating it as "off"
 	// tells the prober this hart implements a length it does not. Retaining
 	// the previous legal field is the ordinary WARL response.
-	if (Extensions.SSNPM && (csr == CSR_MENVCFG || csr == 0x10A
+	if (Extensions.SSNPM && (csr == CSR_MENVCFG || csr == 0x10A || csr == 0x747
 	                         || (Extensions.H && csr == 0x60A))) {
 		constexpr uint64_t PMM = 3ull << 32;
 		if (((updated >> 32) & 0x3) == 1) updated = (updated & ~PMM) | (old & PMM);

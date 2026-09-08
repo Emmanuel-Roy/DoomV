@@ -75,6 +75,7 @@ constexpr uint16_t CSR_HTVAL      = 0x643; // faulting guest physical address
 constexpr uint64_t MENVCFG_PBMTE  = 1ull << 62;
 constexpr uint64_t MENVCFG_ADUE   = 1ull << 61;
 constexpr uint16_t CSR_HENVCFG    = 0x60A;
+constexpr uint16_t CSR_MSECCFG    = 0x747; // Smmpm's PMM lives here
 
 // Svadu: whether *this* stage updates A/D in hardware rather than
 // faulting. The two behaviours are Svade (fault, so the supervisor sets
@@ -377,7 +378,12 @@ int pointer_mask_len(Registers &regs, PrivMode eff_priv, bool eff_virt)
 	case PrivMode::U: pmm = (regs.read_csr(CSR_SENVCFG) >> 32) & 0x3; break;
 	case PrivMode::S: pmm = eff_virt ? ((regs.read_csr(CSR_HENVCFG) >> 32) & 0x3)
 	                                 : ((regs.read_csr(CSR_MENVCFG) >> 32) & 0x3); break;
-	default: return 0; // M-mode masking is Smmpm, which RVA23 does not mandate
+	// M-mode's own masking is Smmpm, and its field lives in mseccfg rather
+	// than in an envcfg -- there is no mode above M to hold one. It is the
+	// same three-value encoding as everywhere else. Returning zero here
+	// meant an M-mode handler using a tagged pointer faulted on the tag,
+	// including one reached through MPRV with MPP=M.
+	default: pmm = (regs.read_csr(CSR_MSECCFG) >> 32) & 0x3; break;
 	}
 	switch (pmm) {
 	case 2: return 7;
