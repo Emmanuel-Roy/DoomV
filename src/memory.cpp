@@ -203,6 +203,55 @@ uint32_t Memory::take_fb_write_count()
 	return count;
 }
 
+// HTIF, checked after any store that lands on the tohost word.
+//
+// The check is here rather than in write64 because the width of the store
+// is not ours to assume: a test may write the port with sd, or with two sw
+// halves, and a 64-bit-only hook sees neither the second kind's exit nor
+// its console traffic. It reads the word back out of memory instead of
+// looking at the value passed in, so both spellings arrive at the same
+// place.
+//
+// The word is device(63:56) | command(55:48) | payload(47:0):
+//
+//   device 1, command 1  console write. The guest then *waits for the host
+//                        to clear tohost* before sending the next byte, so
+//                        with nothing answering it spins on its first
+//                        character -- which looks like a hang in the
+//                        emulator rather than an unimplemented handshake.
+//   device 0, command 0  exit, when payload bit 0 is set. The code is the
+//                        rest of the payload: 1 means pass, (n<<1)|1 names
+//                        failing subtest n.
+void Memory::check_tohost()
+{
+	// Re-entrancy guard, and it is load-bearing rather than defensive.
+	// Acknowledging a console write means storing zero to the port, and
+	// those stores come straight back here. Clearing the low half first
+	// leaves the high half still reading device 1 / command 1, so the
+	// re-entered call sees a console packet with a zero payload, prints a
+	// NUL, clears again, and never stops -- an infinite loop that looks
+	// like the guest hanging.
+	if (!tohost_addr || htif_busy) return;
+	htif_busy = true;
+	struct Guard { bool &b; ~Guard() { b = false; } } guard{htif_busy};
+	uint64_t v = (uint64_t)read32(tohost_addr) | ((uint64_t)read32(tohost_addr + 4) << 32);
+	if (v == 0) return;
+
+	const uint8_t device = (uint8_t)(v >> 56);
+	const uint8_t command = (uint8_t)(v >> 48);
+
+	if (device == 1 && command == 1) {
+		std::putchar((int)(v & 0xFF));
+		std::fflush(stdout);
+		// Acknowledging is the whole protocol.
+		write32(tohost_addr + 0, 0);
+		write32(tohost_addr + 4, 0);
+		return;
+	}
+	if (device == 0 && command == 0 && (v & 1) && tohost_value == 0)
+		tohost_value = v;
+}
+
 void Memory::write32(uint64_t addr, uint32_t val)
 {
 	// Unlike the byte-addressable devices below (RAM/framebuffer/debug
@@ -227,42 +276,20 @@ void Memory::write32(uint64_t addr, uint32_t val)
 	write8(addr + 1, (val >> 8) & 0xFF);
 	write8(addr + 2, (val >> 16) & 0xFF);
 	write8(addr + 3, (val >> 24) & 0xFF);
+	// Evaluated only after the *high* half lands. write64 decomposes into
+	// two 32-bit stores, low first, so checking on the low one reads the
+	// new payload against a stale upper word: a console packet whose
+	// character happens to be odd then looks like device 0, command 0 with
+	// bit 0 set -- an exit, with the character as its code. That is exactly
+	// how the first version read a carriage return as "subtest 6 failed".
+	if (tohost_addr && addr == tohost_addr + 4) check_tohost();
 }
 
 void Memory::write64(uint64_t addr, uint64_t val)
 {
-	// tohost is not only the exit channel. It is a full HTIF port, and the
-	// word is device(63:56) | command(55:48) | payload(47:0): device 1 is
-	// the console, so a test that prints writes here too. Treating the
-	// first nonzero store as the verdict reads a character as a result --
-	// the damo hypervisor tests print, and every one of them looked like a
-	// failure whose reported code was a carriage return.
-	//
-	// The exit is device 0, command 0, with bit 0 of the payload set; the
-	// code is the rest of the payload, so 1 means pass and (n<<1)|1 names
-	// failing subtest n.
-	if (tohost_addr && addr == tohost_addr && tohost_value == 0
-	    && (val >> 48) == 0 && (val & 1))
-		tohost_value = val;
 	write32(addr + 0, (uint32_t)(val & 0xFFFFFFFFu));
 	write32(addr + 4, (uint32_t)(val >> 32));
 
-	// The console half of HTIF. A test that prints sends device 1,
-	// command 1, with the character in the payload, and then *waits for the
-	// host to clear tohost* before sending the next one. With nothing
-	// answering, the guest spins on its first character and never reaches
-	// its own exit -- which is exactly how the damo hypervisor tests
-	// behaved here: running forever, producing nothing, looking like a hang
-	// in the emulator rather than an unimplemented handshake.
-	//
-	// Acknowledging is the whole protocol: print the byte and zero tohost.
-	if (tohost_addr && addr == tohost_addr && ((val >> 56) & 0xFF) == 1
-	    && ((val >> 48) & 0xFF) == 1) {
-		std::putchar((int)(val & 0xFF));
-		std::fflush(stdout);
-		write32(addr + 0, 0);
-		write32(addr + 4, 0);
-	}
 }
 
 bool Memory::load_elf(const char *path)

@@ -223,6 +223,15 @@ void DoomSystem::step()
 		debugger.halted = true;
 		debugger.dump_log(regs, memory, "crash.log");
 		if (has_sig_range) debugger.dump_signature(memory, sig_begin, sig_end, sig_path.c_str());
+		// The verdict goes in its own file rather than being read back out
+		// of the tohost word: acknowledging a console write zeroes that
+		// word, so by the time anything looks at memory the value is gone.
+		// A harness watching for this file also gets a stop signal that
+		// does not depend on a signature range existing.
+		{
+			std::ofstream f("tohost.log");
+			if (f) f << std::hex << memory.tohost_written() << std::endl;
+		}
 		memory.step_instructions(1);
 		return;
 	}

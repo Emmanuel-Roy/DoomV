@@ -72,3 +72,8 @@ build/
 # Sail instruction traces, generated on demand when diffing execution
 # against DoomV to locate a divergence. Large and reproducible.
 tools/verification/tests/archtest/sail_trace*.txt
+
+# HTIF verdict and console transcripts from the third-party suites.
+tohost.log
+tools/verification/tests/suites/out/
+tools/verification/tests/suites/ref/

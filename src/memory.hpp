@@ -107,12 +107,14 @@ public:
 	// Watching the address makes every suite runnable the same way, and is
 	// how the reference models do it.
 	void watch_tohost(uint64_t addr) { tohost_addr = addr; tohost_value = 0; }
+	void check_tohost();
 	uint64_t tohost_written() const { return tohost_value; }
 
 	bool is_backed(uint64_t addr, unsigned size) const;
 
 	uint64_t tohost_addr = 0;
 	uint64_t tohost_value = 0;
+	bool htif_busy = false;   // see Memory::check_tohost
 
 	static constexpr uint32_t INSTR_PER_MS = 1200;
 	void step_instructions(uint32_t count);
