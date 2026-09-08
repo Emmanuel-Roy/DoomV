@@ -24,6 +24,16 @@ public:
 	uint32_t read32(uint64_t offset) const;
 	void write32(uint64_t offset, uint32_t val);
 
+	// A device asserting its interrupt line. Until virtio there were no
+	// such devices here -- the UART is polled and the timer goes through
+	// the CLINT -- so the only way a source ever became pending was a
+	// guest writing setipnum, which is the software-triggered path. A real
+	// peripheral does not write its own controller; it raises a wire, and
+	// this is that wire. The forwarding is identical, and deliberately
+	// shares the same implementation, because a source the domain has not
+	// configured or enabled must be dropped just as silently either way.
+	void assert_source(uint32_t source);
+
 private:
 	Imsic &s_file;
 

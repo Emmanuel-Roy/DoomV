@@ -3,6 +3,7 @@
 #include "imsic.hpp"
 #include "aplic.hpp"
 #include "uart.hpp"
+#include "virtio_blk.hpp"
 #include <cstdint>
 #include <mutex>
 #include <vector>
@@ -37,7 +38,12 @@ public:
 	// (FW_TEXT_START + 0x2200000) is ~34MB in, before the ~23MB kernel
 	// Image or any of Linux's own runtime allocation.
 	static constexpr uint64_t RAM_BASE  = 0x80000000;
-	static constexpr uint64_t RAM_SIZE  = 256 * 1024 * 1024;
+	// 1GB. 256MB was ample for a busybox initramfs and is not enough for a
+	// distribution: an Ubuntu rootfs wants room for the kernel, the page
+	// cache it reads through, and systemd's own working set, and the
+	// failure mode of being short is an OOM kill of init rather than
+	// anything that names memory as the problem.
+	static constexpr uint64_t RAM_SIZE  = 1024ull * 1024 * 1024;
 	static constexpr uint64_t WAD_BASE  = RAM_BASE + RAM_SIZE;
 	static constexpr uint64_t WAD_SIZE  = 20 * 1024 * 1024;
 
@@ -52,6 +58,12 @@ public:
 	static constexpr uint64_t IMSIC_M_BASE = 0x24000000;
 	static constexpr uint64_t IMSIC_S_BASE = 0x28000000;
 	static constexpr uint64_t IMSIC_SIZE   = 0x1000;
+
+	// virtio over MMIO. One slot is enough for a root disk; the address
+	// follows the QEMU-virt convention so a device tree written against
+	// that layout needs no adjusting, and so does anyone reading it.
+	static constexpr uint64_t VIRTIO_BASE = 0x10008000;
+	static constexpr uint64_t VIRTIO_SIZE = 0x1000;
 
 	Memory();
 
@@ -135,6 +147,7 @@ public:
 	// Exposed for DoomSystem's console-key input routing (Stage 4) to push
 	// typed bytes into the UART's RX ring.
 	Uart &get_uart() { return uart; }
+	VirtioBlk &get_disk() { return disk; }
 
 private:
 	// RAM and WAD are contiguous (RAM_BASE..RAM_BASE+RAM_SIZE == WAD_BASE),
@@ -154,6 +167,8 @@ private:
 	uint32_t tick_counter;  // instr_count / INSTR_PER_MS -- what MMIO_TICK exposes
 	uint32_t ms_accum;      // instructions banked toward the next tick_counter++ (avoids a divide every instruction)
 	uint32_t fb_write_count;
+
+	VirtioBlk disk;
 
 	// Declaration order matters here: aplic's constructor takes a
 	// reference to imsic_s, so imsic_s must finish constructing first --

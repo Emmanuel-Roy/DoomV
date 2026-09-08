@@ -15,6 +15,7 @@ int main(int argc, char *argv[])
 	bool have_sig = false;
 	std::string opensbi_path, kernel_path, dtb_path, initrd_path;
 	uint64_t tohost_addr = 0;
+	std::string disk_path;
 	bool headless = false;
 	for (int i = 1; i < argc; i++) {
 		std::string arg = argv[i];
@@ -47,6 +48,11 @@ int main(int argc, char *argv[])
 			dtb_path = arg.substr(5);
 		} else if (arg.rfind("-initrd=", 0) == 0) {
 			initrd_path = arg.substr(8);
+		} else if (arg.rfind("-disk=", 0) == 0) {
+			// A raw disk image, attached as virtio-blk. This is what lets a
+			// real distribution root filesystem be mounted rather than
+			// unpacked into RAM as an initramfs.
+			disk_path = arg.substr(6);
 		} else {
 			positional.push_back(arg);
 		}
@@ -75,22 +81,30 @@ int main(int argc, char *argv[])
 		            "_zimop_zcmop_zawrs_zfa_zfh_svinval_svnapot_svpbmt"
 		            "_sscofpmf_ssstateen_ssnpm_smnpm");
 	}
-	if (linux_boot && (opensbi_path.empty() || kernel_path.empty() || dtb_path.empty() || initrd_path.empty())) {
-		std::cout << "Usage: " << argv[0] << " -opensbi=<path> -kernel=<path> -dtb=<path> -initrd=<path> [-march=...] [-break=<hex_pc>] [-ng]\n";
+	// An initramfs is no longer required: with -disk= the kernel can mount a
+	// real root filesystem instead, which is the whole point of having a
+	// block device. The other three are still mandatory -- there is no
+	// booting without firmware, a kernel and a device tree.
+	if (linux_boot && (opensbi_path.empty() || kernel_path.empty() || dtb_path.empty())) {
+		std::cout << "Usage: " << argv[0] << " -opensbi=<path> -kernel=<path> -dtb=<path> -initrd=<path> [-march=...] [-break=<hex_pc>] [-ng] [-disk=<img>]\n";
 		return -1;
 	}
 
 	DoomSystem system;
 	// Before init: init is what opens the window.
 	if (headless) system.set_headless();
+	if (!disk_path.empty() && !system.attach_disk(disk_path)) {
+		std::cout << "cannot open disk image: " << disk_path << "\n";
+		return -1;
+	}
 	if (linux_boot) {
 		if (!system.init_linux_boot(opensbi_path.c_str(), kernel_path.c_str(), dtb_path.c_str(), initrd_path.c_str())) {
 			return -1;
 		}
 	} else {
 		if (positional.size() < 2) {
-			std::cout << "Usage: " << argv[0] << " <wad_path> <elf_path> [-march=rv64imafdc_zicsr] [-break=<hex_pc>] [-sig=<hex_begin>:<hex_end>] [-ng]\n"
-			          << "   or: " << argv[0] << " -opensbi=<path> -kernel=<path> -dtb=<path> -initrd=<path> [-march=...] [-break=<hex_pc>] [-ng]\n";
+			std::cout << "Usage: " << argv[0] << " <wad_path> <elf_path> [-march=rv64imafdc_zicsr] [-break=<hex_pc>] [-sig=<hex_begin>:<hex_end>] [-ng] [-disk=<img>]\n"
+			          << "   or: " << argv[0] << " -opensbi=<path> -kernel=<path> -dtb=<path> -initrd=<path> [-march=...] [-break=<hex_pc>] [-ng] [-disk=<img>]\n";
 			return -1;
 		}
 		if (!system.init(positional[0].c_str(), positional[1].c_str())) {

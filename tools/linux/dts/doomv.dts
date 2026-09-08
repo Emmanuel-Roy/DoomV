@@ -129,7 +129,7 @@
 	memory@80000000 {
 		device_type = "memory";
 		// Matches Memory::RAM_BASE/RAM_SIZE (src/memory.hpp).
-		reg = <0x0 0x80000000 0x0 0x10000000>;
+		reg = <0x0 0x80000000 0x0 0x40000000>;   // 1GB -- see Memory::RAM_SIZE
 	};
 
 	soc {
@@ -205,7 +205,7 @@
 		// depends on msicfg. riscv,num-sources=31 matches
 		// Aplic::NUM_SOURCES=32 (source 0 is never used; sources 1..31
 		// are the 31 real ones -- src/aplic.hpp).
-		aplic@c000000 {
+		aplic: aplic@c000000 {
 			compatible = "riscv,aplic";
 			reg = <0x0 0x0c000000 0x0 0x4000>;
 			riscv,num-sources = <31>;
@@ -227,6 +227,24 @@
 		serial@10000100 {
 			compatible = "ns16550a";
 			reg = <0x0 0x10000100 0x0 0x100>;
+		};
+
+		// virtio over MMIO, one slot, backed by whatever -disk= names.
+		// This is what lets a real root filesystem be *mounted* rather
+		// than unpacked into RAM: an initramfs is fine for busybox and
+		// hopeless for a distribution.
+		//
+		// Unlike the UART above, this one does need its interrupt wired.
+		// The driver submits a request and sleeps; without the completion
+		// interrupt reaching it, the first read of the superblock never
+		// returns and the boot stops with no message. interrupts = <1 4>
+		// is source 1 (VirtioBlk::IRQ) with the APLIC's level-high
+		// encoding, and the two cells match aplic's #interrupt-cells.
+		virtio_mmio@10008000 {
+			compatible = "virtio,mmio";
+			reg = <0x0 0x10008000 0x0 0x1000>;
+			interrupt-parent = <&aplic>;
+			interrupts = <1 4>;
 		};
 	};
 };

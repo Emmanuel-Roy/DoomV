@@ -58,14 +58,18 @@ void Aplic::write32(uint64_t offset, uint32_t val)
 		return;
 	}
 	if (offset == OFF_SETIPNUM) {
-		uint32_t n = val;
-		if (n == 0 || n >= NUM_SOURCES) return; // not an implemented source
-		if (sourcecfg[n] == 0) return;          // source inactive (SM == 0)
-		if (!(domaincfg & DOMAINCFG_IE)) return; // domain-wide delivery disabled
-		// Forward as an MSI: write the configured EIID to the target
-		// IMSIC file's pending set, same effect a real bus write to
-		// seteipnum_le would have (Hart Index/Guest Index ignored --
-		// single hart, no H-extension).
-		s_file.set_pending(target[n] & TARGET_EIID_MASK);
+		assert_source(val);
 	}
+}
+
+void Aplic::assert_source(uint32_t n)
+{
+	if (n == 0 || n >= NUM_SOURCES) return; // not an implemented source
+	if (sourcecfg[n] == 0) return;          // source inactive (SM == 0)
+	if (!(domaincfg & DOMAINCFG_IE)) return; // domain-wide delivery disabled
+	// Forward as an MSI: write the configured EIID to the target IMSIC
+	// file's pending set, same effect a real bus write to seteipnum_le
+	// would have (Hart Index/Guest Index ignored -- single hart, no
+	// H-extension).
+	s_file.set_pending(target[n] & TARGET_EIID_MASK);
 }

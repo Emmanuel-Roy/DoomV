@@ -291,13 +291,16 @@ def main() -> int:
                 counts["fail"] += 1
                 k = d[0]
                 problems.append(f"{elf.name}: {len(d)}/{n} words differ, first [{k}] "
-                                f"sail={r[k]:016x} doomv={g[k]:016x}")
+                                f"sail={r[k]:016x} doomv={g[k]:016x} "
+                                f"-- see out/{con.name}")
             else:
                 counts["pass"] += 1
                 dut.unlink()
+                con.unlink(missing_ok=True)
         else:
             counts["pass"] += 1
             dut.unlink()
+            con.unlink(missing_ok=True)
 
         print(progress(i, len(elfs), counts), end="", flush=True)
     print("\n" + "=" * 62)

@@ -13,6 +13,11 @@ DoomSystem::DoomSystem() : decoder(core, regs, memory)
 {
 }
 
+bool DoomSystem::attach_disk(const std::string &path)
+{
+	return memory.get_disk().open(path, /*read_only=*/false);
+}
+
 bool DoomSystem::init(const char *wad_path, const char *elf_path)
 {
 	if (!headless && !gui.init()) return false;
@@ -52,7 +57,11 @@ bool DoomSystem::init_linux_boot(const char *sbi_path, const char *kernel_path, 
 	// tools/linux/rootfs/README.md).
 	if (!memory.load_blob(kernel_path, Memory::RAM_BASE + 0x200000)) return false;
 	if (!memory.load_blob(dtb_path, Memory::RAM_BASE + 0x2200000)) return false;
-	if (!memory.load_blob(initrd_path, Memory::RAM_BASE + 0x2300000)) return false;
+	// Optional now: with a virtio disk attached the kernel mounts a real
+	// root filesystem instead, and there is no initramfs to place.
+	if (initrd_path && initrd_path[0]
+	    && !memory.load_blob(initrd_path, Memory::RAM_BASE + 0x2300000))
+		return false;
 
 	regs.set_pc(Memory::RAM_BASE);
 	regs.write_x(10, 0);                                // a0: hart id

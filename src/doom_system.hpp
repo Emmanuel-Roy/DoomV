@@ -47,6 +47,12 @@ public:
 	// reason a finished test has to be killed from outside.
 	void set_headless() { headless = true; }
 
+	// Attach a raw image as the virtio-blk backing store. Returns false if
+	// it cannot be opened, which main reports rather than booting a machine
+	// whose disk silently reads as zeros -- a failure that surfaces much
+	// later as an unbootable filesystem.
+	bool attach_disk(const std::string &path);
+
 	bool headless = false;
 	// Set by the CPU thread once a run has stopped *and* its crash log and
 	// signature are on disk. debugger.halted is not a substitute: it is

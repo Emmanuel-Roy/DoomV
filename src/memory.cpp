@@ -152,6 +152,7 @@ uint32_t Memory::read32(uint64_t addr)
 	}
 	if (addr >= CLINT_BASE && addr < CLINT_BASE + CLINT_SIZE) return timer.read32(addr - CLINT_BASE);
 	if (addr >= APLIC_BASE && addr < APLIC_BASE + APLIC_SIZE) return aplic.read32(addr - APLIC_BASE);
+	if (addr >= VIRTIO_BASE && addr < VIRTIO_BASE + VIRTIO_SIZE) return disk.read32(addr - VIRTIO_BASE);
 	if (addr >= IMSIC_M_BASE && addr < IMSIC_M_BASE + IMSIC_SIZE) return 0; // seteipnum_le reads as zero, per spec
 	if (addr >= IMSIC_S_BASE && addr < IMSIC_S_BASE + IMSIC_SIZE) return 0;
 
@@ -263,6 +264,13 @@ void Memory::write32(uint64_t addr, uint32_t val)
 	// MMIO_INPUT/MMIO_TICK ahead of its own RAM fast path.
 	if (addr >= CLINT_BASE && addr < CLINT_BASE + CLINT_SIZE) { timer.write32(addr - CLINT_BASE, val); return; }
 	if (addr >= APLIC_BASE && addr < APLIC_BASE + APLIC_SIZE) { aplic.write32(addr - APLIC_BASE, val); return; }
+	// A virtio register write can start I/O, which needs to read
+	// descriptors out of guest memory and raise an interrupt -- hence the
+	// device taking both back rather than being self-contained.
+	if (addr >= VIRTIO_BASE && addr < VIRTIO_BASE + VIRTIO_SIZE) {
+		disk.write32(addr - VIRTIO_BASE, val, *this, aplic);
+		return;
+	}
 	if (addr >= IMSIC_M_BASE && addr < IMSIC_M_BASE + IMSIC_SIZE) {
 		if (addr - IMSIC_M_BASE == 0) imsic_m.set_pending(val); // seteipnum_le
 		return;
