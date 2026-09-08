@@ -95,6 +95,16 @@ struct ExtensionConfig {
 	// modes may reach it at all is controlled from mseccfg. Off by default
 	// like H: a machine that does not claim an entropy source should not
 	// answer as though it had one.
+	// The crypto bitmanip trio. Off by default like the other optional
+	// extensions: they add instructions in encodings that are otherwise
+	// illegal, so claiming them changes what an unknown encoding does.
+	// Full half-precision arithmetic. Zfhmin is mandatory and separate;
+	// this is the expansion option on top of it, so it implies Zfhmin.
+	bool ZFH = false;
+	bool ZBC = false;
+	bool ZBKB = false;
+	bool ZBKX = false;
+
 	bool ZKR = false;
 
 	// Zicfilp: landing pads. Every indirect jump arms an expectation that

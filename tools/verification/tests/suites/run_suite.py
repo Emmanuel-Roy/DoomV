@@ -67,7 +67,7 @@ from archtest import (elf_symbols, read_sail_sig, read_doomv_sig,  # noqa: E402
 # reporting them absent is the honest configuration; the tests have
 # "not implemented" paths for exactly this case. Enable them with
 # -march=..._zicfilp_zicfiss to exercise the implementation.
-SUITE_MARCH = MARCH + "_zkr_zicfilp_zicfiss"
+SUITE_MARCH = MARCH + "_zkr_zicfilp_zicfiss_zbc_zbkb_zbkx_zfh"
 
 # The Sail build and the config have to be a matched pair: a config
 # generated for one model release fails the schema check of another, which

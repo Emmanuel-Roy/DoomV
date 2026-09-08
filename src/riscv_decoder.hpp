@@ -15,6 +15,12 @@ enum class Extension {
 	ZBA,
 	ZBB,
 	ZBS,
+	// The crypto bitmanip trio -- see ext_zbkb.cpp. Separate flags because
+	// -march can name one without the others, even though Zkn and Zks pull
+	// them in together.
+	ZBC,
+	ZBKB,
+	ZBKX,
 	ZICOND,
 	ZIHINTPAUSE,
 	ZIHINTNTL,
@@ -26,6 +32,9 @@ enum class Extension {
 	ZAWRS,
 	ZFA,
 	ZFHMIN,
+	// Full half-precision arithmetic, the expansion option on top of
+	// Zfhmin -- see ext_zfh.cpp.
+	ZFH,
 	SVINVAL,
 	H,
 	ILLEGAL,
@@ -92,6 +101,8 @@ private:
 	DecodedInstruction decode_zba(uint32_t raw_instr) const;
 	DecodedInstruction decode_zbb(uint32_t raw_instr) const;
 	DecodedInstruction decode_zbs(uint32_t raw_instr) const;
+	DecodedInstruction decode_zbkb(uint32_t raw_instr) const;
+	DecodedInstruction decode_zfh(uint32_t raw_instr) const;
 	DecodedInstruction decode_zicond(uint32_t raw_instr) const;
 	DecodedInstruction decode_zifencei(uint32_t raw_instr) const;
 	DecodedInstruction decode_zihintpause(uint32_t raw_instr) const;

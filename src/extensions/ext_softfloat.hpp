@@ -85,6 +85,13 @@ inline void end(Registers &regs)
 // SoftFloat carries its own float32_t/float64_t structs so that a host
 // float is never accidentally substituted for one. These convert at the
 // boundary, where DoomV still holds raw bit patterns in the register file.
+// Half joins for the same reason single and double did: SoftFloat's f16
+// routines are exact and the hand-written narrowing in ext_fp16.hpp only
+// ever covered conversion, which is all Zfhmin needs. Full Zfh arithmetic
+// would have meant writing a second rounding implementation, and the one
+// lesson of the F/D work is that rounding written twice rounds differently.
+inline float16_t f16(uint16_t bits) { float16_t v; v.v = bits; return v; }
+inline uint16_t bits(float16_t v)   { return (uint16_t)v.v; }
 inline float32_t f32(uint32_t bits) { float32_t v; v.v = bits; return v; }
 inline float64_t f64(uint64_t bits) { float64_t v; v.v = bits; return v; }
 inline uint32_t bits(float32_t v)   { return (uint32_t)v.v; }

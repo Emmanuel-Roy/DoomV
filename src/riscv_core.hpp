@@ -29,6 +29,8 @@ public:
 	void exec_ZBA(const DecodedInstruction &instr, Registers &regs, Memory &mem);
 	void exec_ZBB(const DecodedInstruction &instr, Registers &regs, Memory &mem);
 	void exec_ZBS(const DecodedInstruction &instr, Registers &regs, Memory &mem);
+	void exec_ZBKB(const DecodedInstruction &instr, Registers &regs, Memory &mem);
+	void exec_ZFH(const DecodedInstruction &instr, Registers &regs, Memory &mem);
 	void exec_ZICOND(const DecodedInstruction &instr, Registers &regs, Memory &mem);
 	void exec_ZIHINTPAUSE(const DecodedInstruction &instr, Registers &regs, Memory &mem);
 	void exec_ZIHINTNTL(const DecodedInstruction &instr, Registers &regs, Memory &mem);

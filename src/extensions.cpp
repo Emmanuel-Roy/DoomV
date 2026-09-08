@@ -56,6 +56,14 @@ void parse_march(const std::string &march)
 	// "zfh" also matches inside "zfhmin"; both imply the minimal set, and
 	// full Zfh arithmetic is not implemented (see extensions.hpp).
 	if (march.find("zfh") != std::string::npos) Extensions.ZFHMIN = true;
+	// "zfh" also matches inside "zfhmin", so full Zfh has to be recognised
+	// by its absence: the bare name enables the arithmetic, the "min" form
+	// does not. Zfh implies Zfhmin either way.
+	{
+		size_t p = march.find("zfh");
+		if (p != std::string::npos && march.compare(p, 6, "zfhmin") != 0)
+			Extensions.ZFH = true;
+	}
 	if (march.find("svinval") != std::string::npos) Extensions.SVINVAL = true;
 	if (march.find("svnapot") != std::string::npos) Extensions.SVNAPOT = true;
 	if (march.find("svpbmt") != std::string::npos) Extensions.SVPBMT = true;
@@ -63,6 +71,16 @@ void parse_march(const std::string &march)
 	if (march.find("ssstateen") != std::string::npos) Extensions.SSSTATEEN = true;
 	if (march.find("ssnpm") != std::string::npos || march.find("smnpm") != std::string::npos
 	    || march.find("sspm") != std::string::npos) Extensions.SSNPM = true;
+	// Zkn and Zks are umbrella names that imply the bitmanip pieces: Zkn
+	// pulls in Zbkb and Zbkx, Zks pulls in Zbkb, Zbkx and Zbc. Naming a
+	// piece directly works too.
+	if (march.find("zbc") != std::string::npos) Extensions.ZBC = true;
+	if (march.find("zbkb") != std::string::npos) Extensions.ZBKB = true;
+	if (march.find("zbkx") != std::string::npos) Extensions.ZBKX = true;
+	if (march.find("zkn") != std::string::npos)
+		Extensions.ZBKB = Extensions.ZBKX = true;
+	if (march.find("zks") != std::string::npos)
+		Extensions.ZBKB = Extensions.ZBKX = Extensions.ZBC = true;
 	if (march.find("zkr") != std::string::npos) Extensions.ZKR = true;
 	if (march.find("zicfilp") != std::string::npos) Extensions.ZICFILP = true;
 	if (march.find("zicfiss") != std::string::npos) Extensions.ZICFISS = true;

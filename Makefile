@@ -22,7 +22,7 @@ SRCS = src/main.cpp src/doom_system.cpp src/memory.cpp src/registers.cpp \
        src/debugger.cpp src/gui.cpp \
        src/controls.cpp src/extensions.cpp \
        src/extensions/ext_i.cpp src/extensions/ext_m.cpp src/extensions/ext_a.cpp \
-       src/extensions/ext_c.cpp src/extensions/ext_zba.cpp src/extensions/ext_zbb.cpp \
+       src/extensions/ext_c.cpp src/extensions/ext_zba.cpp src/extensions/ext_zbb.cpp src/extensions/ext_zbkb.cpp src/extensions/ext_zfh.cpp \
        src/extensions/ext_zbs.cpp src/extensions/ext_zicond.cpp src/extensions/ext_zcb.cpp \
        src/extensions/ext_zihintpause.cpp src/extensions/ext_zihintntl.cpp \
        src/extensions/ext_zimop.cpp src/extensions/ext_zcmop.cpp \

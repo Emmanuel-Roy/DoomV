@@ -47,7 +47,14 @@ Extension Decoder::classify(uint32_t raw_instr) const
 			case 0b010000: return Extension::I;   // SRAI
 			case 0b011000: return Extension::ZBB; // rori
 			case 0b001010: return Extension::ZBB; // orc.b
-			case 0b011010: return Extension::ZBB; // rev8
+			case 0b011010:
+				// rev8 and Zbkb's brev8 share this funct6 and differ only
+				// in the immediate's rs2 field: 11000 reverses the bytes,
+				// 00111 reverses the bits inside each byte. They are
+				// complementary operations, which is why they were given
+				// neighbouring encodings rather than separate ones.
+				return ((raw_instr >> 20) & 0x1F) == 0b00111
+				       ? Extension::ZBKB : Extension::ZBB;
 			case 0b010010: return Extension::ZBS; // bexti
 			default: return Extension::ILLEGAL;
 			}
@@ -112,18 +119,28 @@ Extension Decoder::classify(uint32_t raw_instr) const
 			return Extension::ILLEGAL;
 		case 0b0010000: // sh1add/sh2add/sh3add
 			return (funct3 == 0b010 || funct3 == 0b100 || funct3 == 0b110) ? Extension::ZBA : Extension::ILLEGAL;
-		case 0b0000101: // min/minu/max/maxu
-			return (funct3 >= 0b100) ? Extension::ZBB : Extension::ILLEGAL;
+		case 0b0000101: // min/minu/max/maxu (Zbb), and Zbc's clmul family
+			// The same funct7 carries both, split by funct3: Zbb took the
+			// high half (0b100..0b111) and Zbc has 001/010/011.
+			if (funct3 >= 0b100) return Extension::ZBB;
+			if (funct3 == 0b001 || funct3 == 0b010 || funct3 == 0b011)
+				return Extension::ZBC;
+			return Extension::ILLEGAL;
 		case 0b0110000: // rol/ror
 			return (funct3 == 0b001 || funct3 == 0b101) ? Extension::ZBB : Extension::ILLEGAL;
 		case 0b0100100: // bclr/bext
 			return (funct3 == 0b001 || funct3 == 0b101) ? Extension::ZBS : Extension::ILLEGAL;
 		case 0b0110100: // binv
 			return (funct3 == 0b001) ? Extension::ZBS : Extension::ILLEGAL;
+		case 0b0000100: // Zbkb pack/packh
+			if (funct3 == 0b100 || funct3 == 0b111) return Extension::ZBKB;
+			return Extension::ILLEGAL;
 		case 0b0000111: // Zicond czero.eqz/czero.nez
 			return (funct3 == 0b101 || funct3 == 0b111) ? Extension::ZICOND : Extension::ILLEGAL;
-		case 0b0010100: // bset
-			return (funct3 == 0b001) ? Extension::ZBS : Extension::ILLEGAL;
+		case 0b0010100: // bset (Zbs), and Zbkx's crossbar permutations
+			if (funct3 == 0b001) return Extension::ZBS;
+			if (funct3 == 0b010 || funct3 == 0b100) return Extension::ZBKX;
+			return Extension::ILLEGAL;
 		default: return Extension::ILLEGAL;
 		}
 	}
@@ -135,9 +152,14 @@ Extension Decoder::classify(uint32_t raw_instr) const
 		case 0b0000000: return Extension::I;
 		case 0b0100000: // SUBW/SRAW
 			return (funct3 == 0b000 || funct3 == 0b101) ? Extension::I : Extension::ILLEGAL;
-		case 0b0000100: // add.uw (Zba) / zext.h (Zbb) -- same funct7, split by funct3
+		case 0b0000100: // add.uw (Zba) / zext.h (Zbb) / packw (Zbkb)
 			if (funct3 == 0b000) return Extension::ZBA;
-			if (funct3 == 0b100) return Extension::ZBB;
+			if (funct3 == 0b100) {
+				// zext.h *is* packw with rs2 = x0, and Zbb owns that
+				// spelling. Any other rs2 is a real packw.
+				uint8_t rs2 = (raw_instr >> 20) & 0x1F;
+				return rs2 == 0 ? Extension::ZBB : Extension::ZBKB;
+			}
 			return Extension::ILLEGAL;
 		case 0b0010000: // sh{1,2,3}add.uw
 			return (funct3 == 0b010 || funct3 == 0b100 || funct3 == 0b110) ? Extension::ZBA : Extension::ILLEGAL;
@@ -212,6 +234,8 @@ Extension Decoder::classify(uint32_t raw_instr) const
 	case 0b1000111: // FMSUB
 	case 0b1001011: // FNMSUB
 	case 0b1001111: // FNMADD -- funct2 (bits 26:25) splits single/double, same as OP-FP's funct7 bit0
+		// funct2 is the same format field as OP-FP's funct7 low bits.
+		if (Extensions.ZFH && ((raw_instr >> 25) & 0x3) == 0b10) return Extension::ZFH;
 		return (((raw_instr >> 25) & 0x3) == 0b01) ? Extension::D : Extension::F;
 	case 0b1010011: { // OP-FP: almost every op's funct7 has single at an even value, double at +1 --
 		// except FCVT.S.D/FCVT.D.S (0x20/0x21), which the spec lists under D since both widths are involved.
@@ -239,10 +263,19 @@ Extension Decoder::classify(uint32_t raw_instr) const
 			switch (funct7) {
 			case 0x20: case 0x21: if (rs2 == 2) return Extension::ZFHMIN; break;
 			case 0x22: if (rs2 == 0 || rs2 == 1) return Extension::ZFHMIN; break;
-			case 0x72: case 0x7A: if (rs2 == 0) return Extension::ZFHMIN; break;
+			// 0x72 carries both fmv.x.h and Zfh's fclass.h, told apart by
+			// funct3: 000 moves the bits, 001 classifies. Claiming the
+			// whole funct7 for Zfhmin made fclass.h execute as a bit move.
+			case 0x72: if (rs2 == 0 && f3 == 0) return Extension::ZFHMIN; break;
+			case 0x7A: if (rs2 == 0) return Extension::ZFHMIN; break;
 			default: break;
 			}
 		}
+		// Every half op is its single counterpart's funct7 with the format
+		// field (bits 26:25) set to 0b10, so the whole extension routes on
+		// one test -- after Zfa and Zfhmin above, which claim particular
+		// rs2 values inside some of the same funct7s.
+		if (Extensions.ZFH && (funct7 & 0x3) == 0b10) return Extension::ZFH;
 		if (funct7 == 0b0100000 || funct7 == 0b0100001) return Extension::D;
 		return (funct7 & 0x1) ? Extension::D : Extension::F;
 	}
@@ -286,6 +319,7 @@ DecodedInstruction Decoder::decode(uint32_t raw_instr, Extension ext) const
 	case 0b1010011: // OP-FP
 		if (ext == Extension::ZFHMIN) return decode_zfhmin(raw_instr);
 		if (ext == Extension::ZFA) return decode_zfa(raw_instr);
+		if (ext == Extension::ZFH) return decode_zfh(raw_instr);
 		return ((ext == Extension::D) ? decode_d(raw_instr) : decode_f(raw_instr));
 	case 0b1010111: // OP-V
 		return decode_v(raw_instr);
@@ -296,6 +330,8 @@ DecodedInstruction Decoder::decode(uint32_t raw_instr, Extension ext) const
 		if (ext == Extension::ZBA) return decode_zba(raw_instr);
 		if (ext == Extension::ZBB) return decode_zbb(raw_instr);
 		if (ext == Extension::ZBS) return decode_zbs(raw_instr);
+		if (ext == Extension::ZBC || ext == Extension::ZBKB
+		    || ext == Extension::ZBKX) return decode_zbkb(raw_instr);
 		if (ext == Extension::ZICOND) return decode_zicond(raw_instr);
 		if (ext == Extension::ZICBOP) return decode_zicbop(raw_instr);
 		if (ext == Extension::ZIFENCEI) return decode_zifencei(raw_instr);
@@ -349,6 +385,10 @@ DispatchResult Decoder::decode_and_dispatch(uint64_t pc, uint32_t raw_word)
 		       || (instr.ext == Extension::ZBA && Extensions.ZBA)
 		       || (instr.ext == Extension::ZBB && Extensions.ZBB)
 		       || (instr.ext == Extension::ZBS && Extensions.ZBS)
+		       || (instr.ext == Extension::ZFH && Extensions.ZFH)
+		       || (instr.ext == Extension::ZBC && Extensions.ZBC)
+		       || (instr.ext == Extension::ZBKB && Extensions.ZBKB)
+		       || (instr.ext == Extension::ZBKX && Extensions.ZBKX)
 		       || (instr.ext == Extension::ZICOND && Extensions.ZICOND)
 		       || (instr.ext == Extension::ZIHINTPAUSE && Extensions.ZIHINTPAUSE)
 		       || (instr.ext == Extension::ZIHINTNTL && Extensions.ZIHINTNTL)
@@ -440,6 +480,14 @@ DispatchResult Decoder::decode_and_dispatch(uint64_t pc, uint32_t raw_word)
 		break;
 	case Extension::ZBS:
 		core.exec_ZBS(instr, regs, mem);
+		break;
+	case Extension::ZFH:
+		core.exec_ZFH(instr, regs, mem);
+		break;
+	case Extension::ZBC:
+	case Extension::ZBKB:
+	case Extension::ZBKX:
+		core.exec_ZBKB(instr, regs, mem);
 		break;
 	case Extension::ZICOND:
 		core.exec_ZICOND(instr, regs, mem);
