@@ -1,11 +1,42 @@
-# DoomV: from host startup to DOOM, OpenSBI and Linux
+# How DoomV boots DOOM and Linux
 
-Source baseline: `6b37ec0675cb052e4821c227a7b4c57af89b280f`.
+Original inventory: `6b37ec0`. Boot entry, extension defaults and debugger
+behavior rechecked at `c7d881b`. This guide explains source behavior; it does
+not report a fresh successful boot.
 
-Companions: [ISA and CSR reference](ISA_EXTENSIONS.md) · [devices and architecture](DEVICES_AND_ARCHITECTURE.md).
+[Documentation home](README.md) · [ISA reference](ISA_EXTENSIONS.md) · [Devices and architecture](DEVICES_AND_ARCHITECTURE.md)
+
+DoomV supplies a machine; the guest supplies the program that runs on it.
+For DOOM, that program owns the machine directly. For Linux, firmware first
+prepares an environment in which a kernel can manage applications.
+
+## The boot sequence at a glance
+
+```mermaid
+flowchart TD
+    CLI["Host main: select workload and ISA"] --> DOOM["Load DOOM ELF and WAD"]
+    CLI --> LINUX["Load firmware, Image, DTB and initramfs"]
+    DOOM --> START["Guest _start: stack and BSS"]
+    START --> GAME["doomgeneric: game loop, pixels and keys"]
+    LINUX --> SBI["OpenSBI in M mode"]
+    SBI --> KERNEL["Linux in S mode: paging, drivers and files"]
+    KERNEL --> SHELL["BusyBox shell in U mode"]
+```
+
+Both branches use the same C++ instruction interpreter. Loading an ELF does
+not execute its functions on the host: DoomV reads guest instructions and
+updates simulated registers and memory one operation at a time.
+
+For a first read, follow the DOOM startup, then the Linux placement and handoff
+sections. Use the diagnosis table after you know the last stage that worked.
 
 ## Contents
 
+- [The boot sequence at a glance](#the-boot-sequence-at-a-glance)
+- [Three addresses that must not be confused](#three-addresses-that-must-not-be-confused)
+- [The firmware-to-kernel contract](#the-firmware-to-kernel-contract)
+- [A console character, end to end](#a-console-character-end-to-end)
+- [What counts as a successful boot](#what-counts-as-a-successful-boot)
 - [Two boot paths](#two-boot-paths)
 - [Build inputs and pinned dependencies](#build-inputs-and-pinned-dependencies)
 - [Host startup and instruction execution](#host-startup-and-instruction-execution)
@@ -203,7 +234,7 @@ The [project DTS](../tools/linux/dts/doomv.dts) describes:
 
 `compatible` selects a driver; `reg` supplies physical ranges. `interrupts-extended` connects a device to an interrupt controller and cause. A phandle such as `&imsic_s` is a reference between nodes; it does not create an actual wire in the C++ model. The backing device code must implement what the node advertises.
 
-Linux may prefer `riscv,isa-base` plus `riscv,isa-extensions` over the older `riscv,isa` string. Both are present. V is deliberately absent because it is opt-in; H is also not part of this normal Linux boot. No host code regenerates these properties from runtime flags.
+Linux may prefer `riscv,isa-base` plus `riscv,isa-extensions` over the older `riscv,isa` string. DoomV keeps both forms in the DTB and currently lists V in both, so Linux can enable vector state for userspace. H is not part of this normal Linux boot. The DTB is static: changing `-march` at launch does not rewrite its ISA claims, so a restricted runtime configuration can disagree with what Linux was told the hart supports.
 
 ## OpenSBI: reset to supervisor handoff
 
@@ -269,7 +300,95 @@ An interactive prompt and successful input/output are stronger evidence than an 
 | Firmware console and kernel driver config | Early output, regular console and shell input |
 | DTB and initramfs | Machine discovery, boot arguments and initial userspace files |
 
-H and V are not prerequisites for this supplied single-hart Linux path. A particular userspace can impose additional ISA requirements, so “Linux booted” does not prove arbitrary distro binaries or every RVA23 option are supported.
+H is not required by this single-hart Linux workload. V needs more careful
+treatment: Linux does not universally require it, but this checkout's Linux
+launch default explicitly enables V. The device tree advertises vector
+capability, and userspace may use it. Disabling V while keeping those claims
+can make init receive an illegal-instruction fault. See the Linux branch in
+[main.cpp](../src/main.cpp).
+
+A successful boot therefore proves something about one combination of
+firmware, kernel, userspace, device tree and enabled extensions. It does not
+establish compatibility with every RISC-V distribution.
+
+## Three addresses that must not be confused
+
+Consider the kernel `Image` loaded at `0x80200000`:
+
+| Address | Who uses it? | What it identifies |
+|---|---|---|
+| Host pointer | The C++ emulator | A byte in the host allocation backing guest RAM |
+| Guest physical address, such as `0x80200000` | The emulated bus and firmware | A location in DoomV's physical address map |
+| Guest virtual address after paging is enabled | The kernel or a user process | An address translated through guest page tables |
+
+The host loader puts bytes into backing RAM. Later, the guest kernel writes
+page tables and changes `satp`. That changes which physical bytes a virtual
+address selects; it does not copy the kernel to a new host allocation.
+
+This distinction helps diagnose the first failure after enabling paging.
+If the bytes are present at the physical load address, inspect the virtual
+PC, `satp` readback and page-table permissions before rebuilding the image.
+See [the loader](../src/memory.cpp) and [the walker](../src/mmu.cpp).
+
+## The firmware-to-kernel contract
+
+For its ordinary RV64 supervisor entry, Linux expects a hart ID in `a0`, a
+device-tree address in `a1`, paging disabled (`satp = 0`), and a kernel placed
+on a 2-MiB boundary. These are boot interface requirements, not a consequence
+of the ELF format. See the [Linux 6.12 boot requirements](https://www.kernel.org/doc/html/v6.12/arch/riscv/boot.html).
+
+In DoomV, `init_linux_boot` initially sets `a0 = 0` and `a1 = 0x82200000`, then
+starts the firmware at `0x80000000`. OpenSBI prepares the supervisor handoff;
+the raw kernel is already loaded at `0x80200000`. The firmware entry and
+kernel entry are two different transitions, even though both pass a hart ID
+and a device-tree pointer. The source is
+[DoomSystem::init_linux_boot](../src/doom_system.cpp).
+
+The image layout leaves 32 MiB between the kernel load address and the DTB.
+Since the host loads those blobs separately, check actual file sizes: a
+kernel image reaching the DTB can be overwritten when the DTB is loaded.
+Likewise, the DTB has 1 MiB before the initramfs at `0x82300000`. Those gaps
+are layout constraints, not automatic collision checks in the loader.
+
+## A console character, end to end
+
+There are two privilege crossings when a shell prints a character through
+the documented SBI console path:
+
+1. BusyBox requests an OS write. The U-mode ECALL enters Linux's syscall path.
+2. The kernel's SBI console driver requests a firmware service. Its S-mode
+   ECALL enters OpenSBI's M-mode handler.
+3. Firmware polls or writes the UART register interface.
+4. DoomV's `Uart::write` prints and flushes the byte to host stdout.
+
+ECALL is the transfer mechanism, not the service identifier by itself.
+For modern SBI calls, `a7` selects an extension and `a6` a function; arguments
+use `a0`–`a5`. Legacy SBI v0.1 calls follow their older convention. The pinned
+console setup described above uses that legacy path, so do not apply the
+modern function-ID rule blindly. See the [SBI calling convention](https://github.com/riscv-non-isa/riscv-sbi-doc/blob/master/src/binary-encoding.adoc).
+
+For input, type into the SDL window. `DoomSystem::run` translates its keypresses
+and supplies UART receive bytes; this path does not read the host terminal's
+stdin. The kernel and firmware must also successfully service input before
+an interactive shell is established. Trace
+[doom_system.cpp](../src/doom_system.cpp), [uart.cpp](../src/uart.cpp), and the
+[console configuration notes](../tools/linux/linux/README.md).
+
+## What counts as a successful boot
+
+| Evidence | What it establishes | What still needs checking |
+|---|---|---|
+| An OpenSBI banner | Firmware executed and produced output | Kernel handoff and userspace |
+| Kernel initialization messages | Some kernel paths and console output worked | Initramfs, user-mode execution and input |
+| A kernel message announcing `/bin/sh` | The kernel is about to try starting init | Whether the shell actually executes |
+| A marker printed by an init script | Userspace interpreted and reached that statement | Full interactive input and workload behavior |
+| A prompt plus a successful command and output | Shell execution and a round trip through input/output | Broader application and ISA coverage |
+
+The current [smoke init](../scripts/linux_smoke_init.sh) checks the reported
+machine type and runs shell operations before printing `DOOMV_USERSPACE_OK`.
+The [boot monitor](../scripts/boot_linux.py) looks for that marker and rejects
+a kernel panic. This describes the test's criterion; this documentation pass
+did not execute it or verify the resulting images.
 
 ## Diagnosing a boot that stops progressing
 
@@ -283,9 +402,13 @@ H and V are not prerequisites for this supplied single-hart Linux path. A partic
 | Early console works, later text stops | hvc0 driver and Kconfig dependencies | Early console is not the regular console |
 | Repeated timer trap, same PC | mtime, stimecmp, stopi, timebase | Livelock can execute indefinitely without illegal instructions |
 | Kernel reaches userspace setup but no shell | Initrd bounds, cpio contents, static `/bin/sh`, console | Firmware success does not validate rootfs |
-| Debugger stops at illegal encoding | crash.log, extension flags and raw instruction | Some probes intentionally trap; F9 resumes through the pending illegal trap |
+| Debugger stops at illegal encoding | crash.log, extension flags and break-on-illegal setting | Ordinary illegal instructions now trap; a host stop requires the optional halt path or a breakpoint |
 
-Use `-break=<hex_pc>` for a known instruction boundary and `-sig=<hex_begin>:<hex_end>` to dump a physical-memory signature range on halt. The debugger is not a GDB remote server. Some source-level trap paths enter handlers immediately, whereas decoder-reported illegal instructions halt first; see the [device/debugger guide](DEVICES_AND_ARCHITECTURE.md).
+Use `-break=<hex_pc>` for a known instruction boundary and
+`-sig=<hex_begin>:<hex_end>` for a physical-memory signature on halt. The
+debugger is not a GDB remote server. Decoder-reported illegal instructions
+normally enter the architectural trap path; halting first is opt-in. See the
+[debugger explanation](DEVICES_AND_ARCHITECTURE.md#debugger-and-architectural-traps).
 
 ## Evidence and scope
 

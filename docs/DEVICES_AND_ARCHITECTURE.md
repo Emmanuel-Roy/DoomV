@@ -1,11 +1,22 @@
 # DoomV devices and system architecture
 
-Source baseline: `6b37ec0675cb052e4821c227a7b4c57af89b280f`.
+Original inventory: `6b37ec0`. Translation, UART and debugger paths rechecked
+at `c7d881b`; other register inventories retain their original review scope.
 
-Companions: [ISA/CSR reference](ISA_EXTENSIONS.md) · [boot walkthrough](BOOT_FLOW.md).
+[Documentation home](README.md) · [ISA reference](ISA_EXTENSIONS.md) · [Boot walkthrough](BOOT_FLOW.md)
+
+Read this guide as a path through the machine: an instruction produces an
+address, translation and protection decide whether it can be used, and the
+physical bus selects RAM or a device. Interrupts travel back toward the core
+through pending state and enable bits.
+
+The address map is a lookup table. The worked examples explain how to use it.
 
 ## Contents
 
+- [Worked example: one Sv39 load](#worked-example-one-sv39-load)
+- [Worked example: polling the UART](#worked-example-polling-the-uart)
+- [Why timer interrupts can prevent progress](#why-timer-interrupts-can-prevent-progress)
 - [System ownership and execution](#system-ownership-and-execution)
 - [Physical memory map](#physical-memory-map)
 - [MMIO bus and access widths](#mmio-bus-and-access-widths)
@@ -237,7 +248,84 @@ The [Debugger](../src/debugger.cpp) is a host inspection facility. It has PC bre
 
 `crash.log` includes PC, privilege, selected raw privileged CSRs, timer values, integer/FP/vector registers and a 4,096-entry instruction history. Raw `mip` shadow in a dump is not necessarily the current effective pending value. The live GUI CSR panel calls effective reads, so that difference is intentional in current paths.
 
-Decoder-reported disabled/illegal instructions halt and preserve a pending illegal-instruction value. F9 requests resume; the CPU then enters the architectural illegal-instruction trap so guest firmware can process it. By contrast, an execution helper can call `raise_illegal_instruction` directly and enter the trap immediately, so not every illegal condition uses the same host halt path.
+Decoder-reported disabled or illegal instructions normally enter the guest's
+architectural illegal-instruction handler. This allows firmware probes and
+tests to deliberately execute an invalid instruction and recover.
+
+`Debugger::should_halt` retains an optional `break_on_illegal` path. If that
+path is enabled, DoomV stops first and preserves the pending instruction
+value. F9 requests resume, after which the guest receives the trap. An
+execution helper may also raise the architectural exception directly. See
+[DoomSystem::step](../src/doom_system.cpp) and
+[Debugger::should_halt](../src/debugger.cpp).
+
+## Worked example: one Sv39 load
+
+Suppose S-mode code executes `ld a0, 0(a1)` with `a1 = 0x40001234`, Sv39
+enabled, and a valid readable mapping to physical page `0x80005000`.
+This is a worked example, not an address taken from a boot trace.
+
+Sv39 divides the virtual address into three 9-bit page-table indices and a
+12-bit byte offset. With 8-byte PTEs, each index selects one of 512 entries:
+
+| Part | Value in this example | How it is used |
+|---|---|---|
+| VPN[2], bits 38:30 | `1` | Select the root-table entry |
+| VPN[1], bits 29:21 | `0` | Select the next-level entry |
+| VPN[0], bits 20:12 | `1` | Select the final entry for a 4-KiB page |
+| Offset, bits 11:0 | `0x234` | Select bytes within the mapped physical page |
+
+The root address comes from `satp.PPN << 12`. For a three-level mapping,
+the first lookup is at `root + 1 * 8`. A non-leaf entry supplies the next
+table's physical page number. After reaching the leaf, translation combines
+`0x80005000` with `0x234`, yielding `0x80005234`.
+
+Reaching a leaf is only part of success. The walker checks validity and
+permissions; this implementation also requires the accessed bit and, for
+stores, the dirty bit. Physical backing and PMP can still deny the resulting
+access. Page-table reads themselves can fail before any leaf is reached.
+See [mmu.cpp](../src/mmu.cpp) and [pmp.cpp](../src/pmp.cpp).
+
+For this load, an invalid PTE produces cause 13 (load page fault), whereas
+denied physical access produces cause 5 (load access fault). The distinction
+tells the handler whether changing the virtual mapping is likely to help.
+The architectural background is the [RISC-V supervisor specification](https://docs.riscv.org/reference/isa/priv/supervisor.html).
+
+## Worked example: polling the UART
+
+A read of UART line status at `0x10000105` observes bit 0 (`DR`) when the
+receive queue contains data. A subsequent byte read at `0x10000100` removes
+one character. Repeatedly reading the data register is therefore a state
+change; it is not a harmless inspection of a stored RAM byte.
+
+The reverse direction is immediate: writing a byte at `0x10000100` calls
+`putchar` and flushes stdout. There is no simulated baud-rate delay. The
+transmitter-empty bits are always set, and storing an interrupt-enable value
+does not create an interrupt connection.
+
+This explains two debugging traps. A memory dump that reads a device can
+consume input, and a realistic-looking UART register value does not prove
+that all 16550 behavior exists. Check the dispatch and side effects in
+[memory.cpp](../src/memory.cpp) and [uart.cpp](../src/uart.cpp).
+
+## Why timer interrupts can prevent progress
+
+There are three separate quantities: host elapsed time, modeled timer ticks,
+and the frequency reported in the device tree. DoomV advances its timer with
+modeled execution; Linux uses the reported frequency to calculate deadlines.
+
+For a periodic rate of 250 Hz, a reported 1-GHz timebase gives
+`1,000,000,000 / 250 = 4,000,000` timer increments per interval. That says how
+the guest interprets a counter, not how fast the host computes instructions.
+
+If servicing a tick consumes more modeled increments than the interval,
+the next deadline can already be overdue when the handler returns. The core
+can keep executing instructions while useful kernel work stalls. Inspect
+`mtime`, the active compare register, interrupt enables and the repeated PC
+together; a changing instruction count alone does not prove progress.
+See [timer.cpp](../src/timer.cpp), the
+[device-tree timebase](../tools/linux/dts/doomv.dts), and
+[interrupt handling](../src/extensions/ext_zicsr.cpp).
 
 Guest EBREAK is an architectural breakpoint exception routed through trap entry. It is distinct from `-break` matching a host-maintained PC list. A host breakpoint stops before executing the instruction at that address. On resume the breakpoint remains suppressed while PC still equals that location, because the step code can query halt conditions twice. It rearms after PC moves elsewhere.
 
