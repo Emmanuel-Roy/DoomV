@@ -266,7 +266,14 @@ bool recip7_core(uint64_t v, int sew, bool sub, uint8_t rm, uint64_t &out)
 		// infinity.
 		const bool to_max = (rm == 1) || (rm == 2 && sign == 0) || (rm == 3 && sign == 1);
 		if (to_max)
-			out = (sign << (sg + e)) | ((emask >> 1) << sg) | ((1ull << sg) - 1);
+			// The largest finite magnitude: every exponent bit set except
+			// the lowest, and a full significand. `emask >> 1` is not that
+			// -- it clears the *top* bit instead of the bottom one, which
+			// for binary16 gives 0x3FFF where the answer is 0x7BFF. The
+			// difference only shows in the three rounding modes that take
+			// this branch at all, which is why five probes at
+			// round-to-nearest missed it.
+			out = (sign << (sg + e)) | ((emask & ~1ull) << sg) | ((1ull << sg) - 1);
 		else
 			out = (sign << (sg + e)) | (emask << sg);
 		return true;
