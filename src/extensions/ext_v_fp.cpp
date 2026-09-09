@@ -282,6 +282,53 @@ bool recip7_core(uint64_t v, int sew, bool sub, uint8_t rm, uint64_t &out)
 	return false;
 }
 
+
+// bf16, the brain-float format: one sign bit, eight exponent bits, seven of
+// significand. Its whole point is that it is the *top half of an f32* -- the
+// exponent range is identical, so widening is a shift and nothing else, and
+// narrowing loses only significand bits. That is why it exists: a
+// machine-learning kernel wants f32's dynamic range at half the memory
+// bandwidth, and does not care about the precision it gives up.
+//
+// Zvfbfmin adds the two conversions, Zvfbfwma the widening multiply-
+// accumulate. Both are vector-only -- there is no scalar bf16 arithmetic to
+// share with.
+inline uint32_t bf16_to_f32_bits(uint16_t b) { return (uint32_t)b << 16; }
+
+// Narrowing needs a rounding decision, and unlike every other narrowing
+// conversion it cannot overflow the exponent -- there is no exponent to
+// overflow, both formats have eight bits. So this rounds the 32-bit pattern
+// and shifts, and a carry out of the significand walks into the exponent by
+// itself, which is exactly right.
+inline uint16_t f32_bits_to_bf16(uint32_t f, uint8_t rm, Registers &regs)
+{
+	const uint32_t exp = (f >> 23) & 0xFF;
+	const uint32_t sig = f & 0x7FFFFF;
+	if (exp == 0xFF) {
+		// A NaN narrows to the destination's canonical NaN; an infinity
+		// stays an infinity. Neither is a rounding decision.
+		if (sig) return 0x7FC0;
+		return (uint16_t)((f >> 16) & 0xFF80);
+	}
+
+	const uint32_t rem = f & 0xFFFF;          // the bits being discarded
+	const bool neg = (f >> 31) != 0;
+	uint32_t out = f >> 16;
+	if (rem) {
+		regs.or_fflags(0x01);                 // inexact
+		switch (rm) {
+		case 1: break;                                            // RTZ
+		case 2: if (neg) out += 1; break;                         // RDN
+		case 3: if (!neg) out += 1; break;                        // RUP
+		case 4: if (rem >= 0x8000) out += 1; break;               // RMM
+		default:                                                  // RNE
+			if (rem > 0x8000 || (rem == 0x8000 && (out & 1))) out += 1;
+			break;
+		}
+	}
+	return (uint16_t)out;
+}
+
 double read_felem(Registers &regs, int base, int sew, uint64_t i)
 {
 	if (sew == 64) return f64_from_bits(read_velem(regs, base, 64, i));
@@ -578,6 +625,39 @@ void exec_v_fp(const DecodedInstruction &instr, Registers &regs)
 	// FPU, which has no 16-bit type.
 	if (is_vv && funct6 == 0x12 && instr.rs1 >= 0x08) {
 		uint8_t sub = instr.rs1;
+
+		// Zvfbfmin's pair. Handled ahead of the generic widening and
+		// narrowing arms because bf16 is not a width the rest of this file
+		// knows about -- it is the same sixteen bits as a half, holding a
+		// completely different format.
+		if (sub == 0x0D && sew == 16) {   // vfwcvtbf16.f.f.v
+			for_each_active(regs, vm, vl, [&](uint64_t i) {
+				const uint16_t b = (uint16_t)read_velem(regs, instr.rs2, 16, i);
+				// Widening is a shift and exact -- except for NaNs. A
+				// signalling NaN raises invalid and, like every other
+				// format conversion, the result is the destination's
+				// canonical NaN rather than the operand's payload widened.
+				uint32_t r;
+				if ((b & 0x7F80) == 0x7F80 && (b & 0x007F)) {
+					if (!(b & 0x0040)) regs.or_fflags(0x10);
+					r = 0x7FC00000u;
+				} else {
+					r = bf16_to_f32_bits(b);
+				}
+				write_velem(regs, instr.rd, 32, i, r);
+			});
+			return;
+		}
+		if (sub == 0x1D && sew == 16) {   // vfncvtbf16.f.f.w
+			const uint8_t crm = (uint8_t)sf::round_mode(rm, regs.get_frm());
+			for_each_active(regs, vm, vl, [&](uint64_t i) {
+				write_velem(regs, instr.rd, 16, i,
+				            f32_bits_to_bf16((uint32_t)read_velem(regs, instr.rs2, 32, i),
+				                             crm, regs));
+			});
+			return;
+		}
+
 		bool widening = sub < 0x10;
 		int nsew = sew;              // the narrow side
 		int wsew = sew * 2;          // the wide side
@@ -948,6 +1028,25 @@ void exec_v_fp(const DecodedInstruction &instr, Registers &regs)
 				if (vl > 0) write_felem(regs, instr.rd, wsew, 0, acc);
 				return;
 			}
+			if (funct6 == 0x3b && sew == 16) { // vfwmaccbf16.vv / .vf
+				// Both multiplicands widen exactly -- a bf16 is the top half
+				// of an f32 -- so the only rounding is the one the fused
+				// multiply-add itself performs.
+				const uint16_t fscalar = fp16::unbox_f16(bits_from_f64(regs.read_f(instr.rs1)));
+				for_each_active(regs, vm, vl, [&](uint64_t i) {
+					const uint32_t a = is_vv
+						? bf16_to_f32_bits((uint16_t)read_velem(regs, instr.rs1, 16, i))
+						: bf16_to_f32_bits(fscalar);
+					const uint32_t b = bf16_to_f32_bits((uint16_t)read_velem(regs, instr.rs2, 16, i));
+					const uint32_t c = (uint32_t)read_velem(regs, instr.rd, 32, i);
+					sf::begin(rm, regs.get_frm());
+					float32_t r = f32_mulAdd(sf::f32(a), sf::f32(b), sf::f32(c));
+					sf::end(regs);
+					write_velem(regs, instr.rd, 32, i, sf::bits(r));
+				});
+				return;
+			}
+
 			switch (funct6) {
 			case 0x30: case 0x34: for_each_active(regs, vm, vl, [&](uint64_t i) { write_felem(regs, instr.rd, wsew, i, gbinop(read_vs2w(i), narrow2(i), '+', rm, wsew, regs)); }); break;
 			case 0x32: case 0x36: for_each_active(regs, vm, vl, [&](uint64_t i) { write_felem(regs, instr.rd, wsew, i, gbinop(read_vs2w(i), narrow2(i), '-', rm, wsew, regs)); }); break;

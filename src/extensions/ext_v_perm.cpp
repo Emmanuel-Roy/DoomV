@@ -98,9 +98,18 @@ void exec_v_perm(const DecodedInstruction &instr, Registers &regs)
 				write_velem(regs, instr.rd, sew, i, read_velem(regs, instr.rs2, sew, i - offset));
 			});
 		} else { // slidedown: source indices at/past VLMAX read as 0
+			// The offset is a full 64-bit unsigned value out of an x
+			// register, so i + offset can wrap -- and a wrapped sum lands
+			// back below VLMAX and reads a real element where the answer is
+			// zero. Checking the offset against VLMAX first makes the
+			// addition safe: both terms are then below VLMAX and the sum
+			// cannot overflow.
 			for_each_active(regs, vm, vl, [&](uint64_t i) {
-				uint64_t src = i + offset;
-				uint64_t r = (src < vlmax_val) ? read_velem(regs, instr.rs2, sew, src) : 0;
+				uint64_t r = 0;
+				if (offset < vlmax_val) {
+					const uint64_t src = i + offset;
+					if (src < vlmax_val) r = read_velem(regs, instr.rs2, sew, src);
+				}
 				write_velem(regs, instr.rd, sew, i, r);
 			});
 		}
