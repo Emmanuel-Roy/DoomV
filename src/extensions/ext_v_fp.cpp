@@ -77,6 +77,204 @@ inline uint16_t d_to_h(double v)
 	return fp16::f64_bits_to_h(b, 0, f);
 }
 
+
+// vfrsqrt7 and vfrec7: the reciprocal-square-root and reciprocal estimates.
+//
+// These were approximated here with exact reciprocals, on the reasoning that
+// being more accurate than the seven bits the spec asks for cannot hurt. It
+// does hurt: the instructions are defined by a *lookup table*, not by an
+// accuracy bound, so software that uses them as the seed of a Newton
+// iteration gets a different number of correct bits than the architecture
+// promises, and a conformance test comparing against the reference sees a
+// mismatch on almost every input. "At least as accurate as required" is not
+// the same as "what the architecture says".
+//
+// Both tables and the surrounding exponent arithmetic are transcribed from
+// the Sail model's vext_fp_utils_insts.sail rather than from memory, which
+// is the same reason the differential harness exists at all -- 128 entries
+// recalled approximately would be worse than useless.
+// Both tables are indexed directly. The model writes table[127 - idx],
+// which looks like a reversal but is not: Sail vectors default to
+// *descending* index order, so its element 127 is the first literal in the
+// list and its element 0 is the last. Transcribing the literals into an
+// ascending C array and keeping the 127 - idx made every lookup read the
+// table backwards -- vfrec7(2.0) came out 0.25 instead of 0.498, an
+// exponent that happened to be right with a significand that was not.
+constexpr uint8_t RSQRT7_TABLE[128] = {
+	52, 51, 50, 48, 47, 46, 44, 43,
+	42, 41, 40, 39, 38, 36, 35, 34,
+	33, 32, 31, 30, 30, 29, 28, 27,
+	26, 25, 24, 23, 23, 22, 21, 20,
+	19, 19, 18, 17, 16, 16, 15, 14,
+	14, 13, 12, 12, 11, 10, 10,  9,
+	 9,  8,  7,  7,  6,  6,  5,  4,
+	 4,  3,  3,  2,  2,  1,  1,  0,
+	127, 125, 123, 121, 119, 118, 116, 114,
+	113, 111, 109, 108, 106, 105, 103, 102,
+	100, 99, 97, 96, 95, 93, 92, 91,
+	90, 88, 87, 86, 85, 84, 83, 82,
+	80, 79, 78, 77, 76, 75, 74, 73,
+	72, 71, 70, 70, 69, 68, 67, 66,
+	65, 64, 63, 63, 62, 61, 60, 59,
+	59, 58, 57, 56, 56, 55, 54, 53,
+};
+
+constexpr uint8_t RECIP7_TABLE[128] = {
+	127, 125, 123, 121, 119, 117, 116, 114,
+	112, 110, 109, 107, 105, 104, 102, 100,
+	99, 97, 96, 94, 93, 91, 90, 88,
+	87, 85, 84, 83, 81, 80, 79, 77,
+	76, 75, 74, 72, 71, 70, 69, 68,
+	66, 65, 64, 63, 62, 61, 60, 59,
+	58, 57, 56, 55, 54, 53, 52, 51,
+	50, 49, 48, 47, 46, 45, 44, 43,
+	42, 41, 40, 40, 39, 38, 37, 36,
+	35, 35, 34, 33, 32, 31, 31, 30,
+	29, 28, 28, 27, 26, 25, 25, 24,
+	23, 23, 22, 21, 21, 20, 19, 19,
+	18, 17, 17, 16, 15, 15, 14, 14,
+	13, 12, 12, 11, 11, 10,  9,  9,
+	 8,  8,  7,  7,  6,  5,  5,  4,
+	 4,  3,  3,  2,  2,  1,  1,  0,
+};
+
+inline void fp_fmt(int sew, int &e, int &sg)
+{
+	if (sew == 16)      { e = 5;  sg = 10; }
+	else if (sew == 32) { e = 8;  sg = 23; }
+	else                { e = 11; sg = 52; }
+}
+
+// Leading zeros counted over exactly `width` bits, which is what the
+// subnormal normalisation needs -- a 64-bit clz would count the padding.
+inline int clz_n(uint64_t v, int width)
+{
+	int n = 0;
+	for (int i = width - 1; i >= 0; i--) {
+		if ((v >> i) & 1ull) break;
+		n++;
+	}
+	return n;
+}
+
+// Element classes, on raw bits, so the estimates never go through the
+// double path -- they are bit-pattern operations and have no business
+// canonicalising a NaN on the way in.
+enum EClass { EC_SNAN, EC_QNAN, EC_INF, EC_ZERO, EC_SUB, EC_NORM };
+
+inline EClass eclassify(uint64_t v, int sew, bool &neg)
+{
+	int e, sg; fp_fmt(sew, e, sg);
+	const uint64_t sig = v & ((1ull << sg) - 1);
+	const uint64_t exp = (v >> sg) & ((1ull << e) - 1);
+	neg = ((v >> (sg + e)) & 1ull) != 0;
+	if (exp == ((1ull << e) - 1))
+		return sig == 0 ? EC_INF : ((sig >> (sg - 1)) & 1ull ? EC_QNAN : EC_SNAN);
+	if (exp == 0) return sig == 0 ? EC_ZERO : EC_SUB;
+	return EC_NORM;
+}
+
+inline uint64_t canonical_nan_bits(int sew)
+{
+	int e, sg; fp_fmt(sew, e, sg);
+	return (((1ull << e) - 1) << sg) | (1ull << (sg - 1));
+}
+
+inline uint64_t inf_bits(int sew, bool neg)
+{
+	int e, sg; fp_fmt(sew, e, sg);
+	uint64_t r = ((1ull << e) - 1) << sg;
+	if (neg) r |= 1ull << (sg + e);
+	return r;
+}
+
+uint64_t rsqrt7_core(uint64_t v, int sew, bool sub)
+{
+	int e, sg; fp_fmt(sew, e, sg);
+	const uint64_t sig = v & ((1ull << sg) - 1);
+	const uint64_t exp = (v >> sg) & ((1ull << e) - 1);
+	const uint64_t sign = (v >> (sg + e)) & 1ull;
+
+	int64_t nexp; uint64_t nsig;
+	if (sub) {
+		const int nlz = clz_n(sig, sg);
+		nexp = -(int64_t)nlz;
+		nsig = (sig << (1 + nlz)) & ((1ull << sg) - 1);
+	} else {
+		nexp = (int64_t)exp;
+		nsig = sig;
+	}
+
+	// The index is the exponent's low bit above the significand's top six --
+	// odd and even exponents need different table halves, because halving
+	// the exponent for a square root leaves a factor of two behind on one
+	// of them.
+	const unsigned idx = (unsigned)(((uint64_t)(nexp & 1) << 6)
+	                     | ((nsig >> (sg - 6)) & 0x3F));
+	const uint64_t out_sig = (uint64_t)RSQRT7_TABLE[idx] << (sg - 7);
+	const int64_t bias = (1ll << (e - 1)) - 1;
+	// Truncating division, which is what C++ does for signed operands and
+	// what the model specifies.
+	const int64_t out_exp = (3 * bias - 1 - nexp) / 2;
+	return (sign << (sg + e)) | (((uint64_t)out_exp & ((1ull << e) - 1)) << sg) | out_sig;
+}
+
+// Returns true when the result had to be forced to infinity or to the
+// largest finite magnitude -- the subnormal input whose reciprocal
+// overflows. The caller turns that into NX|OF.
+bool recip7_core(uint64_t v, int sew, bool sub, uint8_t rm, uint64_t &out)
+{
+	int e, sg; fp_fmt(sew, e, sg);
+	const uint64_t sig = v & ((1ull << sg) - 1);
+	const uint64_t exp = (v >> sg) & ((1ull << e) - 1);
+	const uint64_t sign = (v >> (sg + e)) & 1ull;
+	const int nlz = clz_n(sig, sg);
+
+	int64_t nexp; uint64_t nsig;
+	if (sub) {
+		nexp = -(int64_t)nlz;
+		nsig = (sig << (1 + nlz)) & ((1ull << sg) - 1);
+	} else {
+		nexp = (int64_t)exp;
+		nsig = sig;
+	}
+
+	const unsigned idx = (unsigned)((nsig >> (sg - 7)) & 0x7F);
+	const int64_t bias = (1ll << (e - 1)) - 1;
+	const uint64_t emask = (1ull << e) - 1;
+	const uint64_t mid_exp = (uint64_t)(2 * bias - 1 - nexp) & emask;
+	const uint64_t mid_sig = (uint64_t)RECIP7_TABLE[idx] << (sg - 7);
+
+	uint64_t out_exp, out_sig;
+	if (mid_exp == 0) {
+		// The reciprocal has landed one exponent below normal: shift the
+		// significand down and put the implicit bit back explicitly.
+		out_exp = 0;
+		out_sig = (mid_sig >> 1) | (1ull << (sg - 1));
+	} else if (mid_exp == emask) {
+		out_exp = 0;
+		out_sig = (mid_sig >> 2) | (1ull << (sg - 2));
+	} else {
+		out_exp = mid_exp;
+		out_sig = mid_sig;
+	}
+
+	if (sub && nlz > 1) {
+		// Too small to reciprocate into the format. Which way it goes is
+		// the rounding mode's decision: toward zero, or away from the
+		// sign, gives the largest finite magnitude; everything else gives
+		// infinity.
+		const bool to_max = (rm == 1) || (rm == 2 && sign == 0) || (rm == 3 && sign == 1);
+		if (to_max)
+			out = (sign << (sg + e)) | ((emask >> 1) << sg) | ((1ull << sg) - 1);
+		else
+			out = (sign << (sg + e)) | (emask << sg);
+		return true;
+	}
+	out = (sign << (sg + e)) | (out_exp << sg) | out_sig;
+	return false;
+}
+
 double read_felem(Registers &regs, int base, int sew, uint64_t i)
 {
 	if (sew == 64) return f64_from_bits(read_velem(regs, base, 64, i));
@@ -605,9 +803,65 @@ void exec_v_fp(const DecodedInstruction &instr, Registers &regs)
 			double a = read_felem(regs, instr.rs2, sew, i);
 			switch (sub) {
 			case 0x00: write_felem(regs, instr.rd, sew, i, gsqrt(a, rm, sew, regs)); break;
-			case 0x04: write_felem(regs, instr.rd, sew, i, gsqrt(1.0, rm, sew, regs) / gsqrt(a, rm, sew, regs)); break; // vfrsqrt7 (7-bit estimate) -- approximated with the exact value, always at least as accurate as the spec requires
-			case 0x05: write_felem(regs, instr.rd, sew, i, gbinop(1.0, a, '/', rm, sew, regs)); break; // vfrec7 (7-bit estimate) -- same approximation
-			case 0x10: write_velem(regs, instr.rd, sew, i, gclassify(a, sew)); break;
+			case 0x04: { // vfrsqrt7.v
+				const uint64_t raw = read_velem(regs, instr.rs2, sew, i);
+				bool neg = false;
+				uint64_t r;
+				switch (eclassify(raw, sew, neg)) {
+				case EC_SNAN: regs.or_fflags(0x10); r = canonical_nan_bits(sew); break;
+				case EC_QNAN: r = canonical_nan_bits(sew); break;
+				case EC_ZERO: regs.or_fflags(0x08); r = inf_bits(sew, neg); break;
+				case EC_INF:
+					// +inf gives +0; -inf is a negative operand and invalid.
+					if (neg) { regs.or_fflags(0x10); r = canonical_nan_bits(sew); }
+					else r = 0;
+					break;
+				default:
+					// Any negative finite operand is invalid: there is no
+					// real square root to take the reciprocal of.
+					if (neg) { regs.or_fflags(0x10); r = canonical_nan_bits(sew); }
+					else r = rsqrt7_core(raw, sew, eclassify(raw, sew, neg) == EC_SUB);
+					break;
+				}
+				write_velem(regs, instr.rd, sew, i, r);
+				break;
+			}
+			case 0x05: { // vfrec7.v
+				const uint64_t raw = read_velem(regs, instr.rs2, sew, i);
+				bool neg = false;
+				const EClass c = eclassify(raw, sew, neg);
+				uint64_t r;
+				bool abnormal = false;
+				switch (c) {
+				case EC_SNAN: regs.or_fflags(0x10); r = canonical_nan_bits(sew); break;
+				case EC_QNAN: r = canonical_nan_bits(sew); break;
+				case EC_ZERO: regs.or_fflags(0x08); r = inf_bits(sew, neg); break;
+				case EC_INF:  r = neg ? (1ull << (sew - 1)) : 0; break; // signed zero
+				default:
+					abnormal = recip7_core(raw, sew, c == EC_SUB,
+					                       (uint8_t)sf::round_mode(rm, regs.get_frm()), r);
+					break;
+				}
+				if (abnormal) regs.or_fflags(0x01 | 0x04); // NX | OF
+				write_velem(regs, instr.rd, sew, i, r);
+				break;
+			}
+			case 0x10: {
+				// Classify on raw bits, for the same reason the estimates do.
+				const uint64_t raw = read_velem(regs, instr.rs2, sew, i);
+				bool neg = false;
+				uint64_t cls;
+				switch (eclassify(raw, sew, neg)) {
+				case EC_INF:  cls = neg ? (1ull << 0) : (1ull << 7); break;
+				case EC_SNAN: cls = 1ull << 8; break;
+				case EC_QNAN: cls = 1ull << 9; break;
+				case EC_ZERO: cls = neg ? (1ull << 3) : (1ull << 4); break;
+				case EC_SUB:  cls = neg ? (1ull << 2) : (1ull << 5); break;
+				default:      cls = neg ? (1ull << 1) : (1ull << 6); break;
+				}
+				write_velem(regs, instr.rd, sew, i, cls);
+				break;
+			}
 			}
 		});
 		return;
