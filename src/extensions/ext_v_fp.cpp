@@ -90,6 +90,41 @@ void write_felem(Registers &regs, int base, int sew, uint64_t i, double v)
 	else write_velem(regs, base, 32, i, bits_from_f32((float)v));
 }
 
+// Integer <-> half conversions, at half. These have to be done at binary16
+// rather than by going through double and narrowing: an integer above 2048
+// is not exactly representable, so computing in double and rounding once at
+// the end rounds twice. And the destination is sixteen bits wide, so the
+// result saturates to *that* range -- not to 32 bits and then truncated,
+// which is what reusing the 32-bit converters did. Truncating a saturated
+// 32-bit value gives a number, and the wrong one, with no invalid flag.
+inline uint64_t h_to_int16(uint16_t h, bool uns, bool rtz, Registers &regs)
+{
+	sf::begin(rtz ? 1 : 7, regs.get_frm());   // 1 = RTZ, 7 = dynamic
+	const uint_fast8_t mode = sf::round_mode(rtz ? 1 : 7, regs.get_frm());
+	uint64_t out;
+	if (uns) {
+		uint_fast32_t v = f16_to_ui32(sf::f16(h), mode, true);
+		out = (v > 0xFFFFu) ? 0xFFFFull : (uint64_t)v;
+		if (v > 0xFFFFu) softfloat_exceptionFlags |= softfloat_flag_invalid;
+	} else {
+		int_fast32_t v = f16_to_i32(sf::f16(h), mode, true);
+		int32_t c = (v > 32767) ? 32767 : (v < -32768 ? -32768 : (int32_t)v);
+		if (v != c) softfloat_exceptionFlags |= softfloat_flag_invalid;
+		out = (uint64_t)(uint16_t)(int16_t)c;
+	}
+	sf::end(regs);
+	return out;
+}
+
+inline uint16_t int16_to_h(uint64_t raw, bool uns, Registers &regs)
+{
+	sf::begin(7, regs.get_frm());
+	float16_t r = uns ? ui32_to_f16((uint32_t)(uint16_t)raw)
+	                  : i32_to_f16((int32_t)(int16_t)(uint16_t)raw);
+	sf::end(regs);
+	return sf::bits(r);
+}
+
 inline uint16_t as_h(double v)  { return d_to_h(v); }
 inline double from_h(uint16_t h) { return h_to_d(h); }
 
@@ -390,7 +425,18 @@ void exec_v_fp(const DecodedInstruction &instr, Registers &regs)
 					write_velem(regs, instr.rd, wsew, i, xr & elem_mask(wsew));
 					break;
 				}
-				case 0x0A: case 0x0B: { // float <- int, widened
+				case 0x0A: case 0x0B:
+					if (nsew == 16) {
+						std::fesetround(old_round);
+						const uint64_t raw = read_velem(regs, instr.rs2, 16, i);
+						sf::begin(7, regs.get_frm());
+						float32_t r = (sub == 0x0A) ? ui32_to_f32((uint32_t)(uint16_t)raw)
+						                            : i32_to_f32((int32_t)(int16_t)(uint16_t)raw);
+						sf::end(regs);
+						write_velem(regs, instr.rd, 32, i, sf::bits(r));
+						break;
+					}
+					{ // float <- int, widened
 					std::fesetround(rm_default);
 					uint64_t raw = read_velem(regs, instr.rs2, nsew, i);
 					double r0 = (sub == 0x0A) ? (double)raw : (double)sext_elem(raw, nsew);
@@ -411,7 +457,34 @@ void exec_v_fp(const DecodedInstruction &instr, Registers &regs)
 				}
 			} else {
 				switch (sub) {
-				case 0x10: case 0x11: case 0x16: case 0x17: { // int <- float, narrowed
+				case 0x10: case 0x11: case 0x16: case 0x17:
+					if (nsew == 16) {
+						// The wide source is a single, the narrow result a
+						// sixteen-bit integer: convert at single and
+						// saturate to the destination, rather than
+						// truncating a 32-bit result into it.
+						std::fesetround(old_round);
+						const uint32_t wide = (uint32_t)read_velem(regs, instr.rs2, 32, i);
+						const bool uns = (sub == 0x10 || sub == 0x16);
+						const bool rtz = (sub == 0x16 || sub == 0x17);
+						sf::begin(rtz ? 1 : 7, regs.get_frm());
+						const uint_fast8_t md = sf::round_mode(rtz ? 1 : 7, regs.get_frm());
+						uint64_t outv;
+						if (uns) {
+							uint_fast32_t v = f32_to_ui32(sf::f32(wide), md, true);
+							outv = (v > 0xFFFFu) ? 0xFFFFull : (uint64_t)v;
+							if (v > 0xFFFFu) softfloat_exceptionFlags |= softfloat_flag_invalid;
+						} else {
+							int_fast32_t v = f32_to_i32(sf::f32(wide), md, true);
+							int32_t c = (v > 32767) ? 32767 : (v < -32768 ? -32768 : (int32_t)v);
+							if (v != c) softfloat_exceptionFlags |= softfloat_flag_invalid;
+							outv = (uint64_t)(uint16_t)(int16_t)c;
+						}
+						sf::end(regs);
+						write_velem(regs, instr.rd, 16, i, outv);
+						break;
+					}
+					{ // int <- float, narrowed
 					std::fesetround((sub >= 0x16) ? FE_TOWARDZERO : rm_default);
 					double src = read_f(instr.rs2, wsew, i);
 					bool uns = (sub == 0x10 || sub == 0x16);
@@ -422,7 +495,18 @@ void exec_v_fp(const DecodedInstruction &instr, Registers &regs)
 					write_velem(regs, instr.rd, nsew, i, xr & elem_mask(nsew));
 					break;
 				}
-				case 0x12: case 0x13: { // float <- int, narrowed
+				case 0x12: case 0x13:
+					if (nsew == 16) {
+						std::fesetround(old_round);
+						const uint64_t raw = read_velem(regs, instr.rs2, 32, i);
+						sf::begin(7, regs.get_frm());
+						float16_t r = (sub == 0x12) ? ui32_to_f16((uint32_t)raw)
+						                            : i32_to_f16((int32_t)(uint32_t)raw);
+						sf::end(regs);
+						write_velem(regs, instr.rd, 16, i, sf::bits(r));
+						break;
+					}
+					{ // float <- int, narrowed
 					std::fesetround(rm_default);
 					uint64_t raw = read_velem(regs, instr.rs2, wsew, i);
 					double r0 = (sub == 0x12) ? (double)raw : (double)sext_elem(raw, wsew);
@@ -478,7 +562,24 @@ void exec_v_fp(const DecodedInstruction &instr, Registers &regs)
 			// volatile results: see ext_fp_common.hpp's fp_binop comment --
 			// without it GCC can reorder the actual conversion past the
 			// fetestexcept() below, silently dropping NX.
-			if (to_int) {
+			if (sew == 16) {
+				// Half goes through SoftFloat rather than the host FPU
+				// path below, both for the saturation width and because
+				// the host path cannot express RMM at all.
+				std::fesetround(old_round);
+				if (to_int)
+					write_velem(regs, instr.rd, 16, i,
+					            h_to_int16(d_to_h(read_felem(regs, instr.rs2, 16, i)),
+					                       is_unsigned, force_rtz, regs));
+				else
+					// The unsigned flag differs by direction: 0x00/0x06 are
+					// the unsigned float-to-int forms, but going the other
+					// way it is 0x02 that is unsigned. Reusing is_unsigned
+					// here read every f.xu as signed.
+					write_velem(regs, instr.rd, 16, i,
+					            int16_to_h(read_velem(regs, instr.rs2, 16, i),
+					                       sub == 0x02, regs));
+			} else if (to_int) {
 				double src = read_felem(regs, instr.rs2, sew, i);
 				volatile uint64_t xr = is_unsigned
 					? (sew == 64 ? fcvt_to_u64(src, regs) : (uint64_t)fcvt_to_u32(src, regs))
