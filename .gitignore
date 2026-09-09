@@ -67,6 +67,13 @@ tools/verification/tests/suites/*
 !tools/verification/tests/suites/fetch.sh
 !tools/verification/tests/suites/run_suite.py
 
+.scripts.lock/
+*.doomv.sig
+tools/linux/linux/Image
+tools/linux/linux/vmlinux
+tools/linux/rootfs/initramfs.cpio
+tools/linux/dts/*.dtb
+
 # SoftFloat object files (built from the spike submodule sources).
 build/
 

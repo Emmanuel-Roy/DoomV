@@ -12,3 +12,10 @@
 /tools/vtest/**/*.py text eol=lf
 /tools/vtest/**/*.S text eol=lf
 /tools/vtest/**/*.lds text eol=lf
+
+# Keep relocated automation executable by Bash/WSL after Windows checkout.
+*.sh text eol=lf
+*.py text eol=lf
+*.S text eol=lf
+*.lds text eol=lf
+**/Makefile text eol=lf
