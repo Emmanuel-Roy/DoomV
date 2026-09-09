@@ -734,6 +734,22 @@ void exec_v_fp(const DecodedInstruction &instr, Registers &regs)
 				case 0x0C: { // vfwcvt.f.f.v -- the Zvfhmin one. Always exact:
 					// every value of the narrow format is representable in
 					// the wide one, so no rounding mode is consulted.
+					//
+					// A NaN is the exception, and not because of rounding:
+					// the result is the destination's canonical NaN rather
+					// than the operand's payload widened, and a signalling
+					// operand raises invalid. Both have to be decided from
+					// the raw source bits -- by the time the value has been
+					// through a double the host may have quieted it, and the
+					// flag is gone.
+					const uint64_t nraw = read_velem(regs, instr.rs2, nsew, i);
+					bool nneg = false;
+					const EClass nc = eclassify(nraw, nsew, nneg);
+					if (nc == EC_SNAN || nc == EC_QNAN) {
+						if (nc == EC_SNAN) regs.or_fflags(0x10);
+						write_velem(regs, instr.rd, wsew, i, canonical_nan_bits(wsew));
+						break;
+					}
 					double v = read_f(instr.rs2, nsew, i);
 					write_f(instr.rd, wsew, i, v, rm_default);
 					break;
@@ -807,6 +823,16 @@ void exec_v_fp(const DecodedInstruction &instr, Registers &regs)
 					// forces the intermediate's low bit set whenever the
 					// result is inexact.
 					int rm = (sub == 0x15) ? FE_TOWARDZERO : rm_default;
+					// Same NaN rule as the widening direction, and for the
+					// same reason it has to come off the raw bits.
+					const uint64_t wraw = read_velem(regs, instr.rs2, wsew, i);
+					bool wneg = false;
+					const EClass wc = eclassify(wraw, wsew, wneg);
+					if (wc == EC_SNAN || wc == EC_QNAN) {
+						if (wc == EC_SNAN) regs.or_fflags(0x10);
+						write_velem(regs, instr.rd, nsew, i, canonical_nan_bits(nsew));
+						break;
+					}
 					double v = read_f(instr.rs2, wsew, i);
 					if (nsew == 16) {
 						uint8_t fl = 0;
