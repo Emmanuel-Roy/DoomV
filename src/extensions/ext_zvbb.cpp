@@ -218,4 +218,64 @@ void exec_zvbb(const DecodedInstruction &instr, Registers &regs)
 	}
 }
 
+// Zvbc: vector carry-less multiply.
+//
+// The scalar Zbc pair widened to a vector, and defined only for SEW=64 --
+// which is the point of it. A 64x64 carry-less multiply produces a 128-bit
+// product, and GHASH, the authenticator in AES-GCM, is a chain of exactly
+// those over a 128-bit field. Doing them an element at a time is what makes
+// authenticated encryption fast; the scalar forms exist for CRCs, where one
+// at a time is all anyone needs.
+//
+//   OPMVV/OPMVX funct6 0x0C   vclmul.vv  / vclmul.vx    low 64 bits
+//   OPMVV/OPMVX funct6 0x0D   vclmulh.vv / vclmulh.vx   high 64 bits
+//
+// Both funct6 values are unassigned in the base vector ISA, so nothing needs
+// disambiguating -- unlike Zvbb's unary group, which lives inside base V's
+// vzext/vsext slot and is separated by vs1.
+namespace {
+
+// Multiplication in GF(2): partial products are XORed rather than added, so
+// no carry propagates. The high half collects the bits that fall off the
+// top, and i == 0 is excluded because a >> 64 is undefined rather than zero.
+uint64_t v_clmul_lo(uint64_t a, uint64_t b)
+{
+	uint64_t r = 0;
+	for (int i = 0; i < 64; i++)
+		if ((b >> i) & 1ull) r ^= a << i;
+	return r;
+}
+
+uint64_t v_clmul_hi(uint64_t a, uint64_t b)
+{
+	uint64_t r = 0;
+	for (int i = 1; i < 64; i++)
+		if ((b >> i) & 1ull) r ^= a >> (64 - i);
+	return r;
+}
+
+} // namespace
+
+void exec_zvbc(const DecodedInstruction &instr, Registers &regs)
+{
+	VType vt = decode_vtype(regs.get_vtype());
+	// SEW=64 only. Every other width is reserved, and the permissive stance
+	// the rest of this decoder takes for a reserved encoding is to retire
+	// without effect rather than trap.
+	if (vt.sew != 64) return;
+
+	const uint64_t vl = regs.get_vl();
+	const bool vm = op_v_vm(instr.funct7);
+	const bool is_vv = (instr.funct3 == 0b010);
+	const bool high = (op_v_funct6(instr.funct7) == 0x0d);
+	const uint64_t xs = regs.read_x(instr.rs1);
+
+	for_each_active(regs, vm, vl, [&](uint64_t i) {
+		const uint64_t a = read_velem(regs, instr.rs2, 64, i);
+		const uint64_t b = is_vv ? read_velem(regs, instr.rs1, 64, i) : xs;
+		write_velem(regs, instr.rd, 64, i,
+		            high ? v_clmul_hi(a, b) : v_clmul_lo(a, b));
+	});
+}
+
 } // namespace vcommon
