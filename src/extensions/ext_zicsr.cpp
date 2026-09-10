@@ -537,8 +537,44 @@ void write_sstatus(Registers &regs, uint64_t value)
 // Deliberately *not* added here: trapping on CSR numbers this machine gives
 // no meaning to. Registers::csr[] backs all 4096 addresses generically, and
 // OpenSBI's feature detection reads a spread of them to see which exist.
-// Making unknown CSRs illegal is a separate, much larger behaviour change
-// than making privilege boundaries real, and belongs in its own step.
+// Making unknown CSRs illegal across the whole address space is still a
+// much larger behaviour change than making privilege boundaries real --
+// OpenSBI probes a spread of machine and supervisor CSRs to see which trap,
+// and getting that list wrong breaks the boot rather than a test. But one
+// quarter of the space can be closed exactly, and is below.
+
+// The user-level quarter of the CSR space -- csr[9:8] == 0b00 -- is small
+// enough to enumerate, and RVA23 assigns all of nine addresses in it plus
+// the counters. Everything else there is unassigned, and an access to an
+// unassigned CSR is an illegal instruction at every privilege including M.
+//
+// This matters because the addresses that are *not* assigned include the
+// ones that used to be: 0x000-0x005 were ustatus/uie/utvec/uscratch/uepc/
+// ucause, the N extension's user-level trap registers, and N was removed
+// from the ISA. Software probing for it -- or for anything else in this
+// range -- has to see a trap, and DoomV answered from the generic csr[]
+// backing store, reporting registers this hart does not have.
+//
+// The machine, supervisor and hypervisor quarters are deliberately left
+// alone. This is the quarter where nothing in the boot path goes looking.
+bool is_unimplemented_user_csr(uint16_t csr)
+{
+	if (((csr >> 8) & 0x3) != 0) return false;   // not user-level
+
+	// The counters, and the vector CSRs that live among them.
+	if (csr >= 0xC00 && csr <= 0xC1F) return false;  // cycle/time/instret/hpm
+	if (csr >= 0xC20 && csr <= 0xC22) return false;  // vl/vtype/vlenb
+
+	switch (csr) {
+	case 0x001: case 0x002: case 0x003:              // fflags/frm/fcsr
+	case 0x008: case 0x009: case 0x00A: case 0x00F:  // vstart/vxsat/vxrm/vcsr
+	case 0x011:                                      // ssp      (Zicfiss)
+	case 0x015:                                      // seed     (Zkr)
+		return false;
+	default:
+		return true;
+	}
+}
 
 // The RV32-only "h" companions, which hold bits 63:32 of a register that is
 // a single piece on RV64. Grouped by where they live rather than listed
@@ -646,6 +682,10 @@ bool RiscvCore::csr_access_permitted(Registers &regs, uint16_t csr, bool writing
 	// csr[] backing store instead, so software probing for RV32 layout
 	// found registers that cannot be there.
 	if (Extensions.XLEN64 && is_rv32_high_half(csr)) return false;
+
+	// Unassigned user-level addresses, for the same reason and with the
+	// same answer: no such register, illegal at every privilege.
+	if (is_unimplemented_user_csr(csr)) return false;
 
 	// csr[9:8] normally encodes the lowest privilege that may access the
 	// register -- 0 for U, 1 for S, 3 for M. The value 2 is not a
@@ -1072,14 +1112,28 @@ bool RiscvCore::translate_or_trap(Registers &regs, Memory &mem, uint64_t vaddr, 
 	// start on any even address, so a four-byte access two bytes from the
 	// end of a page is routine.
 	//
-	// The fault has to name the *original* address, not the start of the
-	// second page, because that is the address software asked for and the
-	// one it needs to see in stval.
+	// The address the fault names is the *first byte of the access that
+	// lies in the faulting page* -- the page boundary itself, for a
+	// straddle. Not the original address (software already knows that one),
+	// and not the access's last byte: an access at offset 0xFFF spanning
+	// eight bytes ends at offset 0x006 of the next page, and naming that
+	// tells a hypervisor to back a page at an address four words past the
+	// one that actually faulted.
+	//
+	// It is also the address the byte-at-a-time store path arrives at by
+	// construction -- it translates ascending, so the first byte to fault
+	// is the boundary one. That the two paths disagreed is why straddling
+	// stores reported the right guest physical address and straddling
+	// loads did not.
 	if (size > 1) {
 		const uint64_t last = vaddr + size - 1;
 		if ((last >> 12) != (vaddr >> 12)) {
+			// Aligning `last` down gives the second page's first byte:
+			// nothing here is wider than eight bytes, so an access spans
+			// at most two pages and there is only ever one boundary.
+			const uint64_t tail = last & ~(uint64_t)0xFFF;
 			uint64_t tail_paddr;
-			if (!mmu_translate(regs, mem, last, type, tail_paddr, cause, tval)) {
+			if (!mmu_translate(regs, mem, tail, type, tail_paddr, cause, tval)) {
 				enter_trap(regs, cause, tval);
 				return false;
 			}
@@ -1418,8 +1472,18 @@ bool RiscvCore::check_and_take_interrupt(Registers &regs, Memory &mem)
 		// S-target: always taken from U; from S itself only if SIE is
 		// set; never taken while already in M (M can't be pre-empted by
 		// a trap delegated to a less-privileged mode).
+		//
+		// "From S itself" means HS. VS-mode and VU-mode are both strictly
+		// below HS, so an HS-targeted interrupt is never masked by the
+		// hypervisor's sstatus.SIE while a guest is running -- the guest is
+		// not the mode being interrupted. Without the virt test this read
+		// HS's SIE from inside VS-mode, where `priv == S` is true of both,
+		// and a VS-level interrupt the hypervisor had asked to keep for
+		// itself (hideleg bit clear) was dropped on the floor whenever the
+		// hypervisor happened to be running with its own interrupts off.
 		if (priv == PrivMode::M) return false;
-		if (priv == PrivMode::S && !(mstatus & MSTATUS_SIE)) return false;
+		if (!regs.get_virt() && priv == PrivMode::S && !(mstatus & MSTATUS_SIE))
+			return false;
 	}
 
 	enter_trap(regs, (1ull << 63) | (uint64_t)bit, 0, /*is_interrupt=*/true);
@@ -1624,6 +1688,21 @@ void RiscvCore::exec_32ZICSR(const DecodedInstruction &instr, Registers &regs, M
 				raise_illegal_instruction(regs, instr.raw);
 				return;
 			}
+			// VU-mode never waits at all, and hstatus.VTW does not enter
+			// into it: with TW=0 a WFI from VU is a virtual instruction
+			// unconditionally. The reasoning is that a guest *user* process
+			// halting the hart is never something the guest kernel decided,
+			// so the trap has to go somewhere that can decide -- and the
+			// hypervisor is the nearest such place. (TW=1 already took the
+			// illegal-instruction path above, which outranks this.)
+			//
+			// This arm did not exist: a VU-mode WFI fell through to the
+			// no-op below and the guest carried on, which is the one
+			// outcome the architecture rules out for every setting of TW.
+			if (Extensions.H && regs.get_virt() && regs.get_priv() == PrivMode::U) {
+				enter_trap(regs, hyp::CAUSE_VIRTUAL_INSTRUCTION, instr.raw);
+				return;
+			}
 			if (Extensions.H && regs.get_virt() && regs.get_priv() == PrivMode::S
 			    && (regs.read_csr(hyp::CSR_HSTATUS_ADDR) & (1ull << 21))) { // VTW
 				enter_trap(regs, hyp::CAUSE_VIRTUAL_INSTRUCTION, instr.raw);
@@ -1722,7 +1801,17 @@ void RiscvCore::exec_32ZICSR(const DecodedInstruction &instr, Registers &regs, M
 		// srmcfg from any virtual mode is the hypervisor's to emulate --
 		// it is HS-level state, and the guest asking for it is exactly
 		// the case the hypervisor wants to see.
-		if (Extensions.H && regs.get_virt() && csr == 0x181) {
+		//
+		// Unless M-mode has closed it first. mstateen0.SRMCFG clear means
+		// HS-mode cannot reach srmcfg either, so there is no hypervisor
+		// standing behind the register and nothing to emulate on the
+		// guest's behalf: the answer is "no such access", cause 2. Same
+		// ordering as the envcfg case immediately below, and as TW
+		// outranking VTW for WFI -- a refusal from above is never
+		// downgraded into a refusal from the middle.
+		if (Extensions.H && regs.get_virt() && csr == 0x181
+		    && (!Extensions.SSSTATEEN
+		        || (regs.read_csr(stateen::CSR_MSTATEEN0) & (1ull << 55)))) {
 			enter_trap(regs, hyp::CAUSE_VIRTUAL_INSTRUCTION, instr.raw);
 			return;
 		}

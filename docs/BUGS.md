@@ -287,6 +287,19 @@ of console output (`2667bf1`, re-verified in `936df17`).
 135. [vtype accepted reserved bits and unsupported SEW/LMUL ratios](#bug135)
 136. [Half-precision narrowing never implemented RMM](#bug136)
 
+<a id="part-x-toc"></a>
+### Part X — The hypervisor suite, 38 of 43 to 42 of 43 (2026-09-10)
+
+137. [VU-mode WFI never trapped](#bug137)
+138. [An interrupt bound for the hypervisor was masked by its guest](#bug138)
+139. [Unassigned user-level CSRs were readable and writable](#bug139)
+140. [A mstateen bit hardwired to zero, and a comment that misnamed it](#bug140)
+141. [A refusal from M-mode downgraded to a refusal from the hypervisor](#bug141)
+142. [`henvcfg.PBMTE` did not gate the VS stage](#bug142)
+143. [Pointer masking ignored MXR, and had lost the one `hlv` case that needs HUPMM](#bug143)
+144. [A straddling access reported its last byte instead of the faulting page](#bug144)
+- [What is left](#damo-remaining)
+
 <a id="part-vii"></a>
 ### Part VII — Cross-cutting
 
@@ -4671,7 +4684,7 @@ yet clean." See [What remains](#remains).
 <a id="patterns"></a>
 ## Recurring patterns
 
-Reading 136 bugs in order, the same small number of mechanisms account for
+Reading 144 bugs in order, the same small number of mechanisms account for
 nearly all of them. They are listed here in rough order of how much they
 cost.
 
@@ -5927,3 +5940,270 @@ silently truncates to a valid value of the other. The shadow is now named
 `host_rm`.
 
 **Evidence.** riscv-vector-tests 3040/3042 to **3042/3042**.
+
+---
+
+<a id="part-x"></a>
+## Part X — The hypervisor suite, 38 of 43 to 42 of 43
+
+damo-rv-priv-ats is the only H-extension test suite that exists, and the
+five groups still failing after Part VIII had thirteen named assertions
+between them. This part closes twelve of the thirteen.
+
+The pattern here is different from Part IX's. Nothing was a transcription
+error: every one of these was a rule that had been *reasoned about* and
+reasoned about wrongly, or a rule whose enforcement was written against a
+value nothing could produce. Three of them were found by reading Sail's
+source rather than by running it, and one was found by reading Sail's
+source *after* running it disagreed — the trace said which address the
+reference faulted on, and that was the whole answer.
+
+### 137. VU-mode WFI never trapped
+<a id="bug137"></a>
+
+**Symptom.** `VINST-11: VU executes WFI with TW=0` — no virtual-instruction
+trap.
+
+**Root cause.** WFI had arms for `mstatus.TW` (illegal from anything below
+M) and for `hstatus.VTW` (virtual instruction from VS-mode). VU-mode had
+none, so a WFI from guest user code fell through to the no-op and the guest
+carried on.
+
+Sail states it in four lines: VU never waits. `TW=1` is an illegal
+instruction, `TW=0` is a virtual instruction, and `VTW` does not enter into
+it at all.
+
+**Why the missing arm looked complete.** Because the two bits that *are*
+checked are the two the spec talks about, and VTW's description — "traps
+WFI from VS-mode" — reads like the complete statement of what
+virtualisation adds. The VU rule is not about either bit: it is that a
+guest *user* process halting the hart is never something the guest kernel
+decided, so the trap has to go somewhere that can decide, and the
+hypervisor is the nearest such place. That reasoning does not appear in
+either bit's description, so an implementation guided by the bits misses
+it.
+
+### 138. An interrupt bound for the hypervisor was masked by its guest
+<a id="bug138"></a>
+
+**Symptom.** `TINST-01` — a VS software interrupt, injected through `hvip`
+with `hideleg` bit 2 clear so that HS-mode keeps it, never fired.
+
+**Root cause.** The global-enable test for an S-targeted interrupt read
+`priv == PrivMode::S && !(mstatus & SIE)`. `PrivMode::S` is true of HS-mode
+*and* VS-mode — DoomV carries virtualisation in a separate `virt` flag — so
+while a guest was running, an interrupt destined for the hypervisor was
+gated on the hypervisor's own `sstatus.SIE`.
+
+That is the wrong register and the wrong mode. VS and VU are both strictly
+below HS: the hypervisor is not the mode being interrupted, so its SIE has
+no say. Sail writes the condition as
+`(priv == Supervisor & mstatus[SIE]) | priv == User | priv ==
+VirtualSupervisor | priv == VirtualUser` — the three modes below HS are
+unconditional.
+
+**Why it went unnoticed.** Because the interrupt it drops is the one a
+hypervisor keeps for *itself*. Everything a hypervisor normally injects it
+also delegates, and a delegated VS interrupt goes down the other branch
+where the enable is correctly the guest's `vsstatus.SIE`. Only the
+undelegated case — the hypervisor asking to be told about its guest's
+timer or software interrupt rather than passing it through — reaches this
+line, and only while the hypervisor happens to be running with its own
+interrupts off, which is exactly when it most needs to be told.
+
+### 139. Unassigned user-level CSRs were readable and writable
+<a id="bug139"></a>
+
+**Symptom.** `TENT-14` and `MSTAT-02` both failed on "trap triggered" —
+their trigger is `csrw 0x004, x0` from HS-mode, and no trap happened.
+`HTVAL-CLR-01` and `HTVAL-CLR-06`, which need an illegal instruction to
+observe what it does *not* modify, failed the same way.
+
+**Root cause.** `csr_access_permitted` enforced privilege boundaries and
+read-only-ness, and answered anything else from the generic `csr[]` backing
+store. A comment said so, and said why: OpenSBI probes a spread of CSRs to
+see which trap, and getting that list wrong breaks the boot rather than a
+test.
+
+That reasoning is sound for the machine and supervisor quarters of the
+address space. It does not apply to the user quarter, which is small enough
+to enumerate exactly: RVA23 assigns nine addresses there plus the counters,
+and nothing in a boot path goes looking in it. And the addresses that are
+*not* assigned include the ones that used to be — 0x000-0x005 were
+`ustatus`/`uie`/`utvec`/`uscratch`/`uepc`/`ucause`, the N extension's
+user-level trap registers, and N was removed from the ISA. Software probing
+for it has to see a trap.
+
+**Resolution.** `is_unimplemented_user_csr`, in the shape of the existing
+`is_rv32_high_half`: no such register, illegal at every privilege including
+M. The other three quarters are deliberately untouched. Linux still boots.
+
+**Note.** Four assertions across two groups turned on this, and none of
+them is *about* CSR addressing. Three needed an illegal instruction as an
+instrument — something guaranteed to trap, so the test could look at what
+the trap did to `htval` or `mstatus.MPV`. A machine that will not trap on
+demand cannot be tested for what it does when it traps.
+
+### 140. A mstateen bit hardwired to zero, and a comment that misnamed it
+<a id="bug140"></a>
+
+**Symptom.** `SRMCFG-22: V=0 HS-mode normal access srmcfg` — HS-mode could
+neither read nor write `srmcfg`.
+
+**Root cause.** `srmcfg` is gated below M-mode by `mstateen0` bit 55, and
+`csr_access_permitted` checked that bit correctly. `STATEEN0_M_WMASK` did
+not include it, so nothing could ever set it, and the check could only ever
+refuse.
+
+The reason it was excluded is written down, and is the interesting part.
+The mask carries a long comment about not copying masks from a reference,
+because each bit names a specific extension's state and the honest mask is
+a statement about what *this* machine has — and it ends by dismissing "bit
+55 (CSRIND), which DoomV does not implement either". Bit 55 is SRMCFG.
+CSRIND is bit 60. DoomV implements srmcfg.
+
+**Why it survived.** The comment's reasoning was right, was applied
+carefully to four registers, and got a specific fact wrong in passing. A
+reader checking the *argument* finds nothing to object to; only a reader
+who looks up the bit number finds the error. This is the same failure shape
+as [96](#bug96) and [116](#bug116) — a comment asserting something that
+stopped being true, or was never true — except that here the comment is
+what created the bug rather than what concealed it.
+
+**Note.** `hstateen0` genuinely has no SRMCFG bit — the field is absent
+from the register in the architecture, not merely unimplemented here — and
+that is what makes `srmcfg` unreachable from every virtual mode no matter
+what a hypervisor writes. Resource-control identities are assigned *to*
+guests, never by them. So the mask above it is correct as it stands, for a
+reason, and the two registers had to be treated differently.
+
+### 141. A refusal from M-mode downgraded to a refusal from the hypervisor
+<a id="bug141"></a>
+
+**Symptom.** `SRMCFG-23: mstateen0[55]=0 VS-mode -> illegal-inst` reported
+cause 22 (virtual instruction) where cause 2 was required.
+
+**Root cause.** Any `srmcfg` access from a virtual mode took the
+virtual-instruction path unconditionally. But with `mstateen0.SRMCFG`
+clear, HS-mode cannot reach `srmcfg` either — there is no hypervisor
+standing behind the register and nothing for one to emulate on the guest's
+behalf, so the answer is "no such access".
+
+**Why it is worth its own entry.** DoomV already had this exact rule,
+written out, fifteen lines below the bug: the `senvcfg`/`henvcfg` case
+notes that "mstateen0 closing it first stays illegal: the machine said no
+and no one is underneath". The same ordering appears a third time in WFI,
+where TW outranks VTW. Three instances of one principle — *a refusal from
+above is never downgraded into a refusal from the middle* — and the third
+site did not get it, in a file where the other two are adjacent and
+commented.
+
+### 142. henvcfg.PBMTE did not gate the VS stage
+<a id="bug142"></a>
+
+**Symptom.** `HENV-05: PBMTE=0 disables VS-stage Svpbmt` — no page fault.
+
+**Root cause.** The Svpbmt leaf check read `menvcfg.PBMTE` for every stage.
+`menvcfg.PBMTE` governs the stages HS-mode owns — its own S-stage and the
+G-stage; a guest's VS-stage is governed by `henvcfg.PBMTE`. So a hypervisor
+that cleared `henvcfg.PBMTE` to hide Svpbmt from its guest found the
+guest's own page tables honouring the memory-type bits anyway, and the
+guest probing successfully for an extension it had been denied.
+
+**Why it went unnoticed.** Because the identical rule for Svadu was already
+implemented, correctly, twenty lines above — `adue_enabled(regs, vs_stage)`
+exists precisely because "the choice is per-stage rather than per-hart",
+and its comment says so. The PBMT check sat in the same function, took the
+same `virt_access` flag that the ADUE call was already passing, and read
+one register.
+
+**Resolution.** `pbmte_enabled(regs, vs_stage)`, in the shape of its
+neighbour.
+
+### 143. Pointer masking ignored MXR, and had lost the one hlv case that needs HUPMM
+<a id="bug143"></a>
+
+**Symptom.** Two assertions, one function. `HZPM-TRAP-05: MXR suppresses PM
+in VS-mode` — a trap that should not have happened; `HZPM-HLV-08:
+senvcfg.PMM ineffective for HLV in U-mode` — likewise.
+
+**Root cause, first half.** Pointer masking does not apply while MXR is in
+effect, and DoomV had no such rule. The two features would otherwise fight:
+MXR exists so a supervisor can read an execute-only page, at an address it
+worked out itself, and masking rewrites that address out from under it.
+M-mode is exempt from the suppression — Smmpm's masking is M's own and MXR
+does not govern it — and under virtualisation *either* MXR counts, HS-level
+`mstatus.MXR` across both stages or `vsstatus.MXR` across the VS-stage.
+
+**Root cause, second half.** An `hlv`/`hsv` issued from **U-mode** — which
+`hstatus.HU` permits — with `SPVP=0` acts as VU, and a VU access would
+ordinarily take the guest's `senvcfg.PMM`. That is the wrong register: the
+address came from a U-mode process running under the hypervisor, not from
+the guest, so `hstatus.HUPMM` supplies the length.
+
+DoomV had a case for this once, and it applied HUPMM to *every* `hlv`,
+which was wrong in the other direction. The fix removed the case entirely
+and made hlv follow `SPVP` like an ordinary access — correct for every hlv
+but this one.
+
+**Why both errors have the same symptom.** A tagged pointer masked by a
+field that does not govern it faults on an address the program never named.
+Over-applying HUPMM and under-applying it produce identical-looking
+failures on different accesses, which is why the second error looked like a
+clean simplification of the first.
+
+**Note.** `hlvx` needs no case: it arrives at the MMU as a `Fetch` because
+it borrows a fetch's *permission*, and masking's early return for fetch
+already covers it. The PMM fields are defined over `hlv`/`hsv` only, so
+that is the right answer for the right reason — by luck rather than by
+design, but it holds.
+
+### 144. A straddling access reported its last byte instead of the faulting page
+<a id="bug144"></a>
+
+**Symptom.** `HTVAL-STR-01: load straddle into V=0 page reports htval =
+GPA>>2`, and the test printed its own diagnosis: `htval 0x20080401 is
+neither op>>2=0x200803ff nor victim>>2=0x20080400`.
+
+**Root cause.** An access that crosses a page boundary is two accesses to
+the page tables, and DoomV checked the second page by translating the
+access's **last byte**. For an eight-byte load at offset 0xFFF that byte is
+at offset 0x006 of the next page, so the guest physical address reported to
+the hypervisor was six bytes past the page that actually faulted — telling
+it to back a page at the wrong address.
+
+The reference reports the page boundary itself: Sail's trace gives
+`mtval = 0x80201000` and `mtval2 = 0x20080400` for this access, both naming
+the first byte of the access that lies in the faulting page.
+
+**How it was found, which is the point of the entry.** Three wrong models
+of the test were built and discarded before any of this. What settled it
+was running the same ELF under Sail with `--trace-instr --trace-csr` and
+reading the six CSR writes at the faulting instruction. That gave the
+cause, the tval, the GPA and the `mepc` in one line each — the whole answer,
+with no inference. The instrumentation added to DoomV afterwards only
+confirmed which of its own faults produced the value.
+
+**Why stores were right and loads were wrong.** They take different paths.
+`store_virtual` translates a straddle byte-at-a-time, ascending, so the
+first byte to fault is the boundary one by construction. `load_virtual`
+probes the whole range once through `translate_or_trap`, which is where the
+last-byte address came from. `HTVAL-STR-02`, the store version of the same
+test, passed throughout.
+
+**Resolution.** `last & ~0xFFF` — the second page's first byte. Nothing
+here is wider than eight bytes, so an access spans at most two pages and
+there is only ever one boundary. The comment that used to sit above this
+code claimed the fault "has to name the *original* address, not the start
+of the second page"; it named neither, and the reference names the second.
+
+### What is left
+<a id="damo-remaining"></a>
+
+One assertion, in one group: `HENV-17: DTE=1 enables vsstatus.SDT`. That is
+not a bug — it is Ssdbltrp, which DoomV does not implement at all. Making
+`vsstatus.SDT` writable to satisfy the test and leaving the double-trap
+behaviour absent would be the exact dishonesty the `mstateen` mask comment
+was written to prevent: a bit that reads back set, advertising state the
+machine does not have. It stays unimplemented and the test stays red until
+the extension is real.

@@ -37,10 +37,18 @@ namespace stateen {
 //
 // It was copied from a reference, initially, and that was the error: spike
 // allows bits 60 (Zcmt's JVT) and 0 (custom state), which DoomV does not
-// implement, and Sail allows bit 55 (CSRIND), which it does not either.
-// The two references disagree with each other here precisely because they
-// implement different things, and matching either one would have claimed
-// state this machine does not have.
+// implement. The two references disagree with each other here precisely
+// because they implement different things, and matching either one would
+// have claimed state this machine does not have.
+//
+// That reasoning was then applied to one bit it did not fit. This comment
+// used to dismiss bit 55 as "CSRIND, which DoomV does not implement
+// either" -- but bit 55 is SRMCFG; CSRIND is bit 60. DoomV *does*
+// implement srmcfg, and clearing its gate made the register permanently
+// unreachable from HS-mode: `csr_access_permitted` tests mstateen0[55]
+// before allowing srmcfg below M, and nothing could ever set it. A rule
+// enforced against a value nothing could write, which is the same shape as
+// the hstateen0 bug recorded further down.
 //
 // What DoomV actually has:
 //
@@ -48,6 +56,11 @@ namespace stateen {
 //              what the whole hierarchy below depends on.
 //   62 ENVCFG  menvcfg/senvcfg exist here -- Svpbmt, Sstc and pointer
 //              masking all read them.
+//   55 SRMCFG  Ssqosid's srmcfg exists here. Present in mstateen0 only:
+//              hstateen0 has no SRMCFG bit at all, which is what makes
+//              srmcfg unreachable from every virtual mode no matter what
+//              the hypervisor writes -- resource-control identities are
+//              assigned *to* guests, never by them.
 //
 // Everything else is read-only zero: no Zcmt jump table, no Zfinx, no
 // Sdtrig context registers, no custom state. Reporting that honestly is
@@ -66,7 +79,7 @@ namespace stateen {
 // spike keeps SE0 writable, Sail hardwires it -- which is itself the
 // evidence that it is implementation-defined rather than specified, and
 // the honest answer for DoomV is the one that matches what it has.
-constexpr uint64_t STATEEN0_M_WMASK = (1ull << 63) | (1ull << 62);
+constexpr uint64_t STATEEN0_M_WMASK = (1ull << 63) | (1ull << 62) | (1ull << 55);
 constexpr uint64_t STATEEN_M_WMASK  = 0;
 // sstateen* holds nothing on this hart: U-mode has no state-enable
 // register below it to aggregate, and none of the state sstateen's other

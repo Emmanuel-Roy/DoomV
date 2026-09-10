@@ -1,6 +1,4 @@
 #include "mmu.hpp"
-#include <cstdlib>
-#include <cstdio>
 #include "pmp.hpp"
 #include "registers.hpp"
 #include "memory.hpp"
@@ -93,6 +91,24 @@ inline bool adue_enabled(Registers &regs, bool vs_stage)
 	if (!(regs.read_csr(CSR_MENVCFG) & MENVCFG_ADUE)) return false;
 	if (!vs_stage) return true;
 	return (regs.read_csr(CSR_HENVCFG) & MENVCFG_ADUE) != 0;
+}
+
+// Svpbmt is gated the same two-level way, and for the same reason: an OS
+// probes for it by setting the memory-type bits and seeing whether the
+// access faults, so the answer has to be per-stage. menvcfg.PBMTE covers
+// the stages HS-mode owns; henvcfg.PBMTE covers a guest's VS-stage, and is
+// itself writable only while menvcfg.PBMTE is set.
+//
+// The VS-stage arm did not exist -- the leaf check read menvcfg alone, so a
+// hypervisor that had cleared henvcfg.PBMTE to hide Svpbmt from its guest
+// found the guest's own page tables honouring the bits anyway, and probing
+// successfully for an extension it had been denied.
+inline bool pbmte_enabled(Registers &regs, bool vs_stage)
+{
+	if (!Extensions.SVPBMT) return false;
+	if (!(regs.read_csr(CSR_MENVCFG) & MENVCFG_PBMTE)) return false;
+	if (!vs_stage) return true;
+	return (regs.read_csr(CSR_HENVCFG) & MENVCFG_PBMTE) != 0;
 }
 
 // The bits this access needs set in the PTE. A is required by every
@@ -345,9 +361,32 @@ bool gstage_translate(Registers &regs, Memory &mem, uint64_t gpa, AccessType typ
 // Instruction fetch is never masked, and neither are the addresses the page
 // table walk itself produces -- masking applies to the effective address a
 // load or store computed, and nothing further down.
-int pointer_mask_len(Registers &regs, PrivMode eff_priv, bool eff_virt)
+int pointer_mask_len(Registers &regs, PrivMode eff_priv, bool eff_virt, bool hlsv)
 {
 	uint64_t pmm;
+	// The one case where an hlv/hsv really does need a field of its own,
+	// and it is narrower than the whole instruction class: an hlv issued
+	// from *U-mode* (which hstatus.HU permits) with SPVP=0 acts as VU, and
+	// a VU access would ordinarily take the guest's senvcfg.PMM. That is
+	// the wrong register here -- the address came from a U-mode process
+	// running under the hypervisor, not from the guest -- so hstatus.HUPMM
+	// supplies the length instead. Every other hlv follows SPVP through
+	// the switch below like an ordinary access.
+	//
+	// An earlier version used HUPMM for every hlv, which was wrong in the
+	// other direction; the fix removed the case entirely, which lost this
+	// one. Both errors have the same symptom -- a tagged pointer masked by
+	// a field that does not govern it -- and only differ in which accesses
+	// they hit.
+	if (hlsv && eff_priv == PrivMode::U && eff_virt
+	    && regs.get_priv() == PrivMode::U) {
+		pmm = (regs.read_csr(CSR_HSTATUS) >> 48) & 0x3;   // hstatus.HUPMM
+		switch (pmm) {
+		case 2: return 7;
+		case 3: return 16;
+		default: return 0;
+		}
+	}
 	// An hlv/hsv is not masked by the field that governs the mode issuing
 	// it. It reaches into the guest, so hstatus.HUPMM -- the hypervisor's
 	// own control over the addresses it hands to those instructions --
@@ -400,11 +439,36 @@ int pointer_mask_len(Registers &regs, PrivMode eff_priv, bool eff_virt)
 }
 
 uint64_t apply_pointer_mask(Registers &regs, uint64_t vaddr, AccessType type,
-                            PrivMode eff_priv, bool eff_virt)
+                            PrivMode eff_priv, bool eff_virt, bool hlsv)
 {
+	// Instruction fetch is never masked, and hlvx arrives here as a Fetch
+	// too -- it borrows a fetch's permission, and the PMM fields are
+	// defined over hlv/hsv only, so the same early return covers both.
 	if (type == AccessType::Fetch) return vaddr;
 	if (!Extensions.SSNPM) return vaddr;
-	int pmlen = pointer_mask_len(regs, eff_priv, eff_virt);
+
+	// MXR in effect suppresses pointer masking entirely. The two features
+	// would otherwise fight: MXR exists so a supervisor can read an
+	// execute-only page, which it does by reaching an address it worked out
+	// itself, and masking would rewrite that address out from under it.
+	// M-mode is exempt from the suppression -- Smmpm's masking is M's own
+	// and MXR does not govern it.
+	//
+	// Under virtualisation *either* MXR counts: HS-level mstatus.MXR makes
+	// execute-only readable across both stages, vsstatus.MXR across the
+	// VS-stage, and a guest access sees whichever is set. None of this was
+	// implemented, so a masked load with MXR set had its tag stripped and
+	// faulted on an address the supervisor never named.
+	{
+		bool mxr = false;
+		if (eff_priv != PrivMode::M) {
+			mxr = (regs.read_csr(CSR_MSTATUS) & MSTATUS_MXR) != 0;
+			if (eff_virt) mxr = mxr || (regs.read_csr(CSR_VSSTATUS) & MSTATUS_MXR) != 0;
+		}
+		if (mxr) return vaddr;
+	}
+
+	int pmlen = pointer_mask_len(regs, eff_priv, eff_virt, hlsv);
 	if (pmlen == 0) return vaddr;
 	// Sign-extend from the highest bit that survives, discarding the top
 	// pmlen bits.
@@ -485,7 +549,8 @@ bool mmu_translate(Registers &regs, Memory &mem, uint64_t vaddr, AccessType type
 		eff_priv = (regs.read_csr(CSR_HSTATUS) & HSTATUS_SPVP) ? PrivMode::S : PrivMode::U;
 
 	vaddr = apply_pointer_mask(regs, vaddr, type, eff_priv,
-	                           Extensions.H && (as_guest || regs.get_virt() || mprv_virt));
+	                           Extensions.H && (as_guest || regs.get_virt() || mprv_virt),
+	                           as_guest);
 	uint64_t satp = regs.read_csr(virt_access ? CSR_VSATP : CSR_SATP);
 	uint64_t mode = satp >> 60;
 	if (eff_priv == PrivMode::M || mode == 0) {
@@ -813,11 +878,11 @@ bool mmu_translate(Registers &regs, Memory &mem, uint64_t vaddr, AccessType type
 	// accepting them would report support this hart does not have.
 	{
 		uint64_t pbmt = (pte & PTE_PBMT) >> PTE_PBMT_SHIFT;
-		// Two separate gates, and both have to hold: the hart must
-		// implement Svpbmt at all, and M-mode must have enabled it for
-		// S-mode. Without the extension the field is simply reserved.
-		bool pbmt_enabled = Extensions.SVPBMT
-		                 && (regs.read_csr(CSR_MENVCFG) & MENVCFG_PBMTE) != 0;
+		// Three gates now, and all have to hold: the hart must implement
+		// Svpbmt at all, M-mode must have enabled it, and for a VS-stage
+		// walk the hypervisor must have enabled it too. Without the
+		// extension the field is simply reserved.
+		bool pbmt_enabled = pbmte_enabled(regs, virt_access);
 		if (pbmt == 3 || (pbmt != 0 && !pbmt_enabled)) {
 			cause = fault_cause(type);
 			tval = vaddr;
