@@ -1976,6 +1976,45 @@ void RiscvCore::exec_32ZICSR(const DecodedInstruction &instr, Registers &regs, M
 			updated &= ~ENVCFG_SSE;
 	}
 
+	// And then the bits that do not exist at all. The block above clears
+	// individual bits whose extension is absent, which is the right rule
+	// applied one bit at a time -- and one bit at a time is how DTE came to
+	// be writable, and how CDE and UKTE still were. The reference states it
+	// as a whole instead: its legalization names the fields it implements
+	// and its comment says "other extensions are not implemented yet so all
+	// other fields are read only zero".
+	//
+	// So this is the same rule turned round. Each register admits exactly
+	// the fields DoomV has, and anything else -- a future extension's
+	// enable, a reserved bit -- reads zero without needing to be remembered
+	// individually. What is deliberately absent:
+	//
+	//   60 CDE   Smcdeleg, counter delegation. Not implemented.
+	//   59 DTE   Ssdbltrp, double trap. Not implemented.
+	//    8 UKTE  Ssctr's constant-timing enable. Not implemented.
+	//
+	// STCE, PBMTE and ADUE exist in menvcfg and henvcfg but not in
+	// senvcfg -- there is no S-level control over a guest's timer, page
+	// types or A/D updates -- so the masks differ rather than being one
+	// shared constant.
+	{
+		constexpr uint64_t PMM   = 3ull << 32;   // pointer masking length
+		constexpr uint64_t COMMON = PMM
+		                          | (1ull << 7)  // CBZE
+		                          | (1ull << 6)  // CBCFE
+		                          | (3ull << 4)  // CBIE
+		                          | (1ull << 3)  // SSE
+		                          | (1ull << 2)  // LPE
+		                          | (1ull << 0); // FIOM
+		constexpr uint64_t DELEGATING = (1ull << 63)   // STCE
+		                              | (1ull << 62)   // PBMTE
+		                              | (1ull << 61);  // ADUE
+		if (csr == CSR_MENVCFG || (Extensions.H && csr == 0x60A))
+			updated &= COMMON | DELEGATING;
+		else if (csr == 0x10A)
+			updated &= COMMON;
+	}
+
 	// CBIE is WARL in all three envcfg registers, and henvcfg additionally
 	// cannot set a bit menvcfg has cleared -- see henvcfg_mask.
 	if (csr == CSR_MENVCFG || csr == 0x10A || (Extensions.H && csr == 0x60A))

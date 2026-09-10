@@ -301,6 +301,7 @@ of console output (`2667bf1`, re-verified in `936df17`).
 - [What is left](#damo-remaining)
 145. [An envcfg bit that advertised an extension the hart does not have](#bug145)
 146. [`mstatus.TSR` was stored and never consulted](#bug146)
+147. [The envcfg registers were a blacklist where they should be a whitelist](#bug147)
 
 <a id="part-vii"></a>
 ### Part VII — Cross-cutting
@@ -4686,7 +4687,7 @@ yet clean." See [What remains](#remains).
 <a id="patterns"></a>
 ## Recurring patterns
 
-Reading 146 bugs in order, the same small number of mechanisms account for
+Reading 147 bugs in order, the same small number of mechanisms account for
 nearly all of them. They are listed here in rough order of how much they
 cost.
 
@@ -6315,3 +6316,42 @@ meantime was wrong about what the exception was.
 **Evidence.** riscv-tests 376/377 to **377/377**. With it, every suite this
 project runs is at 100%: arch-test 663/663, riscv-vector-tests 3042/3042,
 differential 19/19, damo-rv-priv-ats 43/43.
+
+### 147. The envcfg registers were a blacklist where they should be a whitelist
+<a id="bug147"></a>
+
+**Symptom.** None. No test catches this; it was found by asking what else
+was wrong in the same way [145](#bug145) was.
+
+**Root cause.** The envcfg write path cleared individual bits whose
+extension is absent — LPE without Zicfilp, SSE without Zicfiss, and, after
+145, DTE. That is the right rule applied one bit at a time, and one bit at a
+time is exactly how DTE came to be writable in the first place. Two more
+were still writable on a hart that implements neither:
+
+* **60 CDE** — Smcdeleg, counter delegation.
+* **8 UKTE** — Ssctr's constant-timing enable.
+
+Plus every reserved bit in all three registers, and every enable a future
+extension will put there.
+
+The reference states the rule as a whole rather than per bit: its
+legalization names the fields it implements and takes everything else from
+the register's old value, which starts at zero and stays there. Its comment
+says so outright — "other extensions are not implemented yet so all other
+fields are read only zero".
+
+**Resolution.** The same rule turned round. Each register admits exactly
+the fields DoomV has, so an unimplemented enable reads zero without having
+to be remembered individually. The masks differ per register rather than
+being one shared constant: STCE, PBMTE and ADUE exist in `menvcfg` and
+`henvcfg` but not in `senvcfg`, because there is no S-level control over a
+guest's timer, page types or A/D updates.
+
+**Why this is worth an entry with no failing test behind it.** Three of the
+last four entries were one bit that was writable while the thing it enables
+did not exist — [140](#bug140), [145](#bug145), [146](#bug146). Two of them
+cost a failing assertion each and one cost a wrong conclusion published in
+this document. A blacklist gets that class of bug wrong once per future
+extension; a whitelist gets it right by construction. The fix is worth more
+than the bugs it closes today.

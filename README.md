@@ -229,7 +229,7 @@ tools/verification/tests/suites/fetch.sh            # precompiled third-party su
 
 ### What that process actually found
 
-146 bugs, written up individually in [docs/BUGS.md](docs/BUGS.md). A few
+147 bugs, written up individually in [docs/BUGS.md](docs/BUGS.md). A few
 that say something about the method:
 
 * **Floating point had to stop using the host FPU.** Three ordinary bugs
