@@ -288,6 +288,11 @@ void RiscvCore::exec_V(const DecodedInstruction &instr, Registers &regs, Memory 
 		bool is_mvv = (instr.funct3 == 0b010);
 		if (is_mvv && funct6 <= 0x07) exec_v_reduce(instr, regs);
 		else if (funct6 >= 0x08 && funct6 <= 0x0b) exec_v_muldiv(instr, regs); // averaging add/sub
+		// Zvbc's carry-less multiply. 0x0c and 0x0d are unassigned in the
+		// base vector ISA, so this needs no disambiguation -- and it has to
+		// come before the catch-all below, which was treating both as
+		// multiply-family ops and quietly producing arithmetic products.
+		else if (funct6 == 0x0c || funct6 == 0x0d) exec_zvbc(instr, regs);
 		else if (!is_mvv && (funct6 == 0x0e || funct6 == 0x0f)) exec_v_perm(instr, regs); // vslide1up/down.vx
 		else if (funct6 == 0x10) exec_v_mask(instr, regs); // vmv.x.s/vcpop.m/vfirst.m or vmv.s.x
 		// funct6 0x12 is shared: base V's vzext/vsext use vs1 2..7, Zvbb's
