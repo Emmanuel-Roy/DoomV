@@ -299,6 +299,7 @@ of console output (`2667bf1`, re-verified in `936df17`).
 143. [Pointer masking ignored MXR, and had lost the one `hlv` case that needs HUPMM](#bug143)
 144. [A straddling access reported its last byte instead of the faulting page](#bug144)
 - [What is left](#damo-remaining)
+145. [An envcfg bit that advertised an extension the hart does not have](#bug145)
 
 <a id="part-vii"></a>
 ### Part VII — Cross-cutting
@@ -4684,7 +4685,7 @@ yet clean." See [What remains](#remains).
 <a id="patterns"></a>
 ## Recurring patterns
 
-Reading 144 bugs in order, the same small number of mechanisms account for
+Reading 145 bugs in order, the same small number of mechanisms account for
 nearly all of them. They are listed here in rough order of how much they
 cost.
 
@@ -6200,10 +6201,62 @@ of the second page"; it named neither, and the reference names the second.
 ### What is left
 <a id="damo-remaining"></a>
 
-One assertion, in one group: `HENV-17: DTE=1 enables vsstatus.SDT`. That is
-not a bug — it is Ssdbltrp, which DoomV does not implement at all. Making
-`vsstatus.SDT` writable to satisfy the test and leaving the double-trap
-behaviour absent would be the exact dishonesty the `mstateen` mask comment
-was written to prevent: a bit that reads back set, advertising state the
-machine does not have. It stays unimplemented and the test stays red until
+The conclusion recorded here was that the one remaining assertion --
+`HENV-17: DTE=1 enables vsstatus.SDT` -- is not a bug: that it wants
+Ssdbltrp, which DoomV does not implement, and that it should stay red until
 the extension is real.
+
+That was wrong, and [145](#bug145) is what it actually was. The argument
+about not advertising state the machine does not have was sound; it was
+pointed at the wrong register. Ssdbltrp is still unimplemented and the
+suite is at 43/43.
+
+### 145. An envcfg bit that advertised an extension the hart does not have
+<a id="bug145"></a>
+
+**Symptom.** `HENV-17: DTE=1 enables vsstatus.SDT` — the last failing
+assertion in the hypervisor suite, and the one [Part X](#part-x) closed by
+saying it was not a bug.
+
+That was wrong, and the way it was wrong is the entry.
+
+**The reasoning that got it wrong.** `henvcfg.DTE` is Ssdbltrp's, and
+Ssdbltrp is not implemented here: no `mstatus.MDT`, no `vsstatus.SDT`, no
+double-trap escalation. So the test appeared to be asking for an extension
+that does not exist, and the conclusion recorded was that it should stay
+red until the extension is real — with an argument attached about how
+making `vsstatus.SDT` writable to turn the test green would be advertising
+state the machine does not have.
+
+The argument is right. It was pointed at the wrong register. The test never
+asked for `vsstatus.SDT` unprompted: it wrote `henvcfg.DTE`, read it back,
+found it had stuck, and *only then* went looking for the state that bit
+promises. `henvcfg.DTE` reading back set is itself the false advertisement.
+
+**Root cause.** The envcfg write path already has a block for exactly this,
+with the rule written out: "an envcfg bit for an extension this hart does
+not have reads as zero... leaving LPE or SSE writable on a hart with no
+landing pads or shadow stack would have software enable a protection that
+then does not happen -- worse than not offering it, because the enable
+appears to succeed." DTE belongs in that block and was not in it.
+
+**What settled it.** Running the group under Sail. The suite reports
+`[sail: PASS (119 passed)]` where DoomV reported 118 and one failure, and
+Sail has Ssdbltrp *less* implemented than DoomV does — its `henvcfg.DTE`
+legalization is commented out with a `TODO: Add Ssdbltrp part once
+supported`, so the write is dropped and the bit reads zero. The reference
+passes the test by reporting the extension absent, which is what the test
+is for. The `--sail-verdict` flag exists precisely to ask "does the
+reference pass this?", and it had not been asked.
+
+**Resolution.** One line, in the block that already stated the rule.
+damo-rv-priv-ats goes 42/43 to **43/43**.
+
+**Note.** Two lessons, and the second is the useful one. First: an
+extension is reported absent by making its *enable* read zero, not by
+leaving the enable alone and omitting the behaviour — the second reads as
+"enabled and broken". Second: "this test wants a feature we do not have" is
+a conclusion that needs the same evidence as any other, and the evidence is
+one command. Part X shipped the opposite conclusion with a paragraph of
+justification and no measurement, which is a more expensive mistake than
+being wrong quietly would have been.

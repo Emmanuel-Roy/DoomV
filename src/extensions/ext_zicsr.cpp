@@ -1924,9 +1924,26 @@ void RiscvCore::exec_32ZICSR(const DecodedInstruction &instr, Registers &regs, M
 	{
 		constexpr uint64_t ENVCFG_LPE = 1ull << 2;
 		constexpr uint64_t ENVCFG_SSE = 1ull << 3;
+		// DTE is Ssdbltrp's, and Ssdbltrp is not implemented here: there is
+		// no mstatus.MDT, no sstatus/vsstatus.SDT and no double-trap
+		// escalation. So the bit reads zero.
+		//
+		// It used to be writable, and that single fact was the whole of the
+		// last failing hypervisor assertion. The suite tests DTE the way it
+		// tests every other envcfg bit -- write it, read it back, and if it
+		// stuck, go on to check what it is supposed to enable. DTE reading
+		// back set is a promise that vsstatus.SDT exists, and it does not.
+		// Clearing the bit is not a way of dodging the test: the reference
+		// model has Ssdbltrp unimplemented too, its henvcfg.DTE
+		// legalization commented out with a TODO, and it passes the group
+		// for exactly this reason. Reporting the extension absent is the
+		// answer, and implementing half of it to turn the test green would
+		// be the failure mode this block exists to prevent.
+		constexpr uint64_t ENVCFG_DTE = 1ull << 59;
 		if (csr == CSR_MENVCFG || csr == 0x10A || (Extensions.H && csr == 0x60A)) {
 			if (!Extensions.ZICFILP) updated &= ~ENVCFG_LPE;
 			if (!Extensions.ZICFISS) updated &= ~ENVCFG_SSE;
+			updated &= ~ENVCFG_DTE;
 		}
 		// A guest cannot set senvcfg.SSE while its hypervisor has
 		// henvcfg.SSE clear -- the write has no effect rather than being

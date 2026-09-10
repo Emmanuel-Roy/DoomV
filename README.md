@@ -194,7 +194,7 @@ to be the one that is wrong, but it does not decide anything.
 | differential | 19 hand-written suites, 639 cases, diffed against Sail | **19 / 19** |
 | riscv-vector-tests | 3042 generated V tests at VLEN=128, signature-diffed against Sail | **3042 / 3042** |
 | riscv-tests | the Berkeley suite, 377 applicable of 667 | **376 / 377** |
-| damo-rv-priv-ats | hypervisor, the only H coverage that exists anywhere -- 43 groups | **42 / 43 groups** (the last needs Ssdbltrp) |
+| damo-rv-priv-ats | hypervisor, the only H coverage that exists anywhere -- 43 groups | **43 / 43 groups** |
 | Linux | OpenSBI + 6.12 + busybox, ext4 root over virtio-blk | boots to an interactive shell |
 | DOOM | bare-metal, no OS | plays |
 
@@ -227,7 +227,7 @@ tools/verification/tests/suites/fetch.sh            # precompiled third-party su
 
 ### What that process actually found
 
-144 bugs, written up individually in [docs/BUGS.md](docs/BUGS.md). A few
+145 bugs, written up individually in [docs/BUGS.md](docs/BUGS.md). A few
 that say something about the method:
 
 * **Floating point had to stop using the host FPU.** Three ordinary bugs
