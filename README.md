@@ -193,7 +193,7 @@ to be the one that is wrong, but it does not decide anything.
 | riscv-arch-test RVA23S64 | the certification suite, 663 tests, signature-diffed against Sail | **663 / 663** |
 | differential | 19 hand-written suites, 639 cases, diffed against Sail | **19 / 19** |
 | riscv-vector-tests | 3042 generated V tests at VLEN=128, signature-diffed against Sail | **3042 / 3042** |
-| riscv-tests | the Berkeley suite, 377 applicable of 667 | **376 / 377** |
+| riscv-tests | the Berkeley suite, 377 applicable of 667 | **377 / 377** |
 | damo-rv-priv-ats | hypervisor, the only H coverage that exists anywhere -- 43 groups | **43 / 43 groups** |
 | Linux | OpenSBI + 6.12 + busybox, ext4 root over virtio-blk | boots to an interactive shell |
 | DOOM | bare-metal, no OS | plays |
@@ -204,8 +204,10 @@ Zvfh, bf16, Zvbb/Zvbc, and the whole Zvk crypto family. arch-test does not
 test any of them, which is why it read 663/663 through every bug in
 [Part IX](docs/BUGS.md#part-ix). `riscv-tests` is mostly redundant with
 arch-test but not entirely -- it is the only suite here that exercises
-M-mode's illegal-instruction path directly, which is also the one test in
-it that still fails.
+M-mode's illegal-instruction path directly, and that is where the last
+failure anywhere in this project turned out to be: `mstatus.TSR` was
+writable and never read, so an S-mode `SRET` returned when it should have
+trapped.
 
 Every suite runs headless (`-ng`), which is what makes them practical to
 run at all: arch-test's 663 tests take about 40 seconds and the 43-group
@@ -227,7 +229,7 @@ tools/verification/tests/suites/fetch.sh            # precompiled third-party su
 
 ### What that process actually found
 
-145 bugs, written up individually in [docs/BUGS.md](docs/BUGS.md). A few
+146 bugs, written up individually in [docs/BUGS.md](docs/BUGS.md). A few
 that say something about the method:
 
 * **Floating point had to stop using the host FPU.** Three ordinary bugs

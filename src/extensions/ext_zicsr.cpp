@@ -1583,6 +1583,29 @@ void RiscvCore::exec_32ZICSR(const DecodedInstruction &instr, Registers &regs, M
 				enter_trap(regs, 22, 0);
 				return;
 			}
+			// mstatus.TSR is the other half of that pair, and it is the
+			// half that was missing. It closes SRET to *HS*-mode, so that
+			// M-mode can interpose on a supervisor's return the same way a
+			// hypervisor interposes on its guest's. Without it an S-mode
+			// SRET with TSR set simply returned -- and since the very next
+			// thing a test does after setting TSR is put the machine in
+			// S-mode and try one, the return went to a sepc chosen for a
+			// trap that never happened.
+			//
+			// Three deliberate exclusions, all of them Sail's:
+			//   * M-mode is exempt. TSR is M's own control, and a mode does
+			//     not trap itself with it.
+			//   * VS-mode is exempt. hstatus.VTSR governs there, checked
+			//     above; TSR does not reach through virtualisation to a
+			//     guest's return.
+			//   * U-mode does not need it -- SRET is illegal there under
+			//     any setting, which is the next check.
+			constexpr uint64_t MSTATUS_TSR = 1ull << 22;
+			if (regs.get_priv() == PrivMode::S && !regs.get_virt()
+			    && (regs.read_csr(CSR_MSTATUS) & MSTATUS_TSR)) {
+				raise_illegal_instruction(regs, instr.raw);
+				return;
+			}
 			// SRET is a supervisor instruction, so U-mode may not run it
 			// at all -- and from VU-mode the refusal is a virtual
 			// instruction, since HS-mode could have run it. DoomV checked

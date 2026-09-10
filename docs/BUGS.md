@@ -300,6 +300,7 @@ of console output (`2667bf1`, re-verified in `936df17`).
 144. [A straddling access reported its last byte instead of the faulting page](#bug144)
 - [What is left](#damo-remaining)
 145. [An envcfg bit that advertised an extension the hart does not have](#bug145)
+146. [`mstatus.TSR` was stored and never consulted](#bug146)
 
 <a id="part-vii"></a>
 ### Part VII — Cross-cutting
@@ -4685,7 +4686,7 @@ yet clean." See [What remains](#remains).
 <a id="patterns"></a>
 ## Recurring patterns
 
-Reading 145 bugs in order, the same small number of mechanisms account for
+Reading 146 bugs in order, the same small number of mechanisms account for
 nearly all of them. They are listed here in rough order of how much they
 cost.
 
@@ -6260,3 +6261,57 @@ a conclusion that needs the same evidence as any other, and the evidence is
 one command. Part X shipped the opposite conclusion with a paragraph of
 justification and no measurement, which is a more expensive mistake than
 being wrong quietly would have been.
+
+### 146. mstatus.TSR was stored and never consulted
+<a id="bug146"></a>
+
+**Symptom.** `rv64mi-p-illegal` subtest 2 — the last failing test in
+riscv-tests, and the last red anywhere in the project. It had been carried
+as "pre-existing" for the whole of Parts IX and X without being looked at.
+
+**Root cause.** `mstatus.TSR` closes SRET to HS-mode, so that M-mode can
+interpose on a supervisor's return the same way a hypervisor interposes on
+its guest's. The bit was in the writable mask and nothing ever read it, so
+an S-mode SRET with TSR set simply returned.
+
+The test's shape makes that immediately destructive. It traps an illegal
+instruction from S-mode, and the handler sets `mstatus.TSR` before
+returning — so the very next thing the machine does after TSR becomes set
+is execute an SRET in S-mode expecting cause 2. DoomV performed the return
+instead, to a `sepc` chosen for a trap that never happened, and the
+resulting fetch fault arrived at the handler as cause 1 where cause 2 was
+required.
+
+**Why it went unnoticed.** Because its virtualised counterpart was
+implemented, and implemented *because a test caught it*. `hstatus.VTSR` is
+handled fifteen lines above, with a comment recording that it "was defined
+and made writable and then never consulted, so a guest with VTSR set simply
+returned -- to whatever sepc held". That is a verbatim description of the
+bug still sitting below it. The hypervisor suite exercises VTSR; nothing
+in arch-test exercises TSR; and the one suite that does had its failure
+filed as environmental.
+
+**Resolution.** One condition, matching Sail's `sret_illegal`, with three
+deliberate exclusions: M-mode is exempt because TSR is M's own control and
+a mode does not trap itself with it; VS-mode is exempt because VTSR governs
+there; U-mode needs no case because SRET is illegal there under any
+setting.
+
+**Note.** This is the fourth entry in this document where one bit of a pair
+was implemented and the other was not, and the third where the *comment on
+the implemented half* describes the unimplemented one exactly — see
+[115](#bug115), [140](#bug140), [141](#bug141). The pattern is specific
+enough to act on: when a bit is found unconsulted, the next thing to check
+is whatever bit it is the analogue of.
+
+**And the method note, since this one is unflattering.** "Pre-existing" is
+not a diagnosis. This failure was reported in five separate regression runs
+across two parts of this document, named as a known M-mode gap each time,
+and it took one `--sail-verdict` (Sail passes), one disassembly and one
+breakpoint to find. The cost of carrying it was not the test -- it was that
+every "all suites green except one known failure" summary written in the
+meantime was wrong about what the exception was.
+
+**Evidence.** riscv-tests 376/377 to **377/377**. With it, every suite this
+project runs is at 100%: arch-test 663/663, riscv-vector-tests 3042/3042,
+differential 19/19, damo-rv-priv-ats 43/43.
