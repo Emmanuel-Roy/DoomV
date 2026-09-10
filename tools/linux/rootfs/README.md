@@ -77,3 +77,42 @@ byte length -- see `src/doom_system.cpp`'s `init_linux_boot` for where
 `linux,initrd-end` must be recomputed and the DTS recompiled
 (`dtc -I dts -O dtb -o doomv.dtb doomv.dts`) before booting -- there's
 no way to compute it from inside the DTB, so it isn't automatic.
+
+## A partitioned disk image, for testing the shape a distribution has
+
+`mkdisk.sh` builds a GPT-partitioned ext4 image whose root filesystem the
+kernel mounts as `/dev/vda1`, rather than a bare filesystem written to the
+whole device. Run it inside WSL as root -- it needs loop devices, `sgdisk`
+and `mkfs.ext4`, none of which exist on the Windows side:
+
+```
+wsl -d Ubuntu -u root -- bash /mnt/z/Code/Dev/DoomV/tools/linux/rootfs/mkdisk.sh
+```
+
+The point is not that a partition table is interesting in itself. It is
+that every image you can download has one, so a `-disk=` path tested only
+against a bare filesystem leaves the partition-scanning path unexercised.
+It does work: virtio-blk reports the right capacity, the kernel finds the
+primary GPT, enumerates `vda1`, and mounts it --
+
+```
+virtio_blk virtio0: [vda] 393216 512-byte logical blocks (201 MB/192 MiB)
+ vda: vda1
+EXT4-fs (vda1): mounted filesystem ... r/w with ordered data mode.
+VFS: Mounted root (ext4 filesystem) on device 254:1.
+```
+
+-- and the script exists so that stays true. The DTB needs
+`root=/dev/vda1` rather than the `rdinit=/bin/sh` that `doomv.dts` ships;
+the script prints the two commands for that when it finishes.
+
+Boot it with **no** `-initrd`. With an initramfs present the kernel runs
+that instead and never touches the block device, which looks like success
+and proves nothing.
+
+One arithmetic trap, since it cost a boot: size the filesystem to the
+*partition*, not to the file. A filesystem five 4K blocks longer than its
+partition mounts fine on the host, which is reading the file, and fails in
+the guest with `bad geometry: block count 48896 exceeds size of device
+(48891 blocks)`. `mkdisk.sh` reads the extent back out of the partition
+table instead of computing it.
