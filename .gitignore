@@ -31,10 +31,13 @@ tools/*/build/
 tools/linux/Image
 tools/linux/vmlinux
 
-# tools/linux/rootfs/mkdisk.sh's output, and the DTB that goes with it.
-# Both are large and reproducible from the script in one command.
+# tools/linux/rootfs/mkdisk.sh's and tools/linux/ubuntu/mkrootfs.sh's
+# outputs, and the DTBs that go with them. All large and reproducible from
+# their scripts in one command.
 /rootfs.img
+/ubuntu.img
 /disk.dtb
+/ubuntu.dtb
 
 # BusyBox initramfs build output -- also extensionless-adjacent
 # (.cpio isn't covered by *.bin/*.elf above).

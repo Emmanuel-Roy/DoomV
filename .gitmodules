@@ -29,3 +29,7 @@
 	path = tools/verification/simulators/whisper/src
 	url = https://github.com/tenstorrent/whisper.git
 	branch = master
+[submodule "tools/linux/ubuntu/src"]
+	path = tools/linux/ubuntu/src
+	url = https://git.launchpad.net/ubuntu/+source/debootstrap
+	branch = applied/ubuntu/noble
