@@ -280,6 +280,13 @@ Extension Decoder::classify(uint32_t raw_instr) const
 		return (funct7 & 0x1) ? Extension::D : Extension::F;
 	}
 	case 0b1010111: // OP-V: vector arithmetic and vset{i}vl{i} -- its own opcode, no sharing/collision
+	case 0b1110111: // OP-VE: the vector crypto family's own major opcode.
+		// Zvkned/Zvkg/Zvknh/Zvksed/Zvksh do not live in OP-V with the rest
+		// of the vector ISA -- they were given a major opcode of their own,
+		// which is why every one of them decoded as illegal here rather
+		// than as some wrong vector operation. Classifying them as V is
+		// what gets them the vector unit's mstatus.VS enable check and the
+		// vill/vstart handling, all of which apply to them unchanged.
 		return Extension::V;
 	default:
 		return Extension::ILLEGAL;
@@ -322,6 +329,7 @@ DecodedInstruction Decoder::decode(uint32_t raw_instr, Extension ext) const
 		if (ext == Extension::ZFH) return decode_zfh(raw_instr);
 		return ((ext == Extension::D) ? decode_d(raw_instr) : decode_f(raw_instr));
 	case 0b1010111: // OP-V
+	case 0b1110111: // OP-VE (vector crypto)
 		return decode_v(raw_instr);
 	case 0b0110011: // OP
 	case 0b0111011: // OP-32

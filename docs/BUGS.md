@@ -263,6 +263,28 @@ of console output (`2667bf1`, re-verified in `936df17`).
 115. [Seven hypervisor bits that existed and were never consulted](#bug115)
 116. [Two-stage translation applied only to `hlv` and `hsv`](#bug116)
 
+<a id="part-ix-toc"></a>
+### Part IX — Widening the ISA: the crypto and half-precision extensions (2026-09-10)
+
+117. [Headless mode exited before the signature was written](#bug117)
+118. [A script that stripped debug output deleted the CSR write path](#bug118)
+119. [A CSR that does not exist](#bug119)
+120. [The reference was never consulted, because the model and its config did not match](#bug120)
+121. [Zicfilp armed a landing-pad requirement on the wrong register](#bug121)
+122. [A shadow-stack page is not a leaf by the usual test](#bug122)
+123. [Zfh was wired into the wrong dispatch table](#bug123)
+124. [`fclass.h` was claimed by Zfhmin](#bug124)
+125. [The vector suite reported 3042 of 3042 while measuring nothing](#bug125)
+126. [Every f16 NaN was canonicalised in transit](#bug126)
+127. [The unsigned flag read the wrong direction](#bug127)
+128. [The estimate tables were transcribed with Sail's index order intact](#bug128)
+129. [The largest finite magnitude, computed by clearing the wrong bit](#bug129)
+130. [`vslidedown` read past the end of the source](#bug130)
+131. [`brev8` decoded in the wrong opcode](#bug131)
+132. [The vector crypto opcode was not decoded at all](#bug132)
+133. [GHASH multiplied in the direction it is described in](#bug133)
+134. [`vaeskf2`'s round number was clamped as five bits](#bug134)
+
 <a id="part-vii"></a>
 ### Part VII — Cross-cutting
 
@@ -4647,7 +4669,7 @@ yet clean." See [What remains](#remains).
 <a id="patterns"></a>
 ## Recurring patterns
 
-Reading 110 bugs in order, the same small number of mechanisms account for
+Reading 134 bugs in order, the same small number of mechanisms account for
 nearly all of them. They are listed here in rough order of how much they
 cost.
 
@@ -5406,3 +5428,410 @@ running at the guest's own privilege.
 [96](#bug96) and [100](#bug100) — where a comment asserting "not needed yet"
 outlived the condition that made it true. It is the most reliable single
 predictor of a bug in this codebase.
+
+---
+
+<a id="part-ix"></a>
+## Part IX — Widening the ISA: the crypto and half-precision extensions
+
+663/663 on the certification suite is a statement about one ISA string. The
+suites in this part measure a different one. `riscv-tests` and
+`riscv-vector-tests` between them cover Zfh, Zvfh, bf16, the scalar crypto
+bitmanip and the whole vector crypto family — none of which RVA23S64
+mandates, and none of which arch-test has a single test for.
+
+Two things characterise every bug in this part. The first is that they were
+all invisible to the suite that was being watched: arch-test stayed at
+663/663 through every one of them. The second is that most of them are
+*transcription* errors rather than reasoning errors — a table copied with
+its index order intact, a round number masked to the wrong width, a decoder
+arm attached to the wrong dispatch table. Reasoning errors are found by
+thinking harder. Transcription errors are found by diffing against the
+reference, and only by that.
+
+### 117. Headless mode exited before the signature was written
+<a id="bug117"></a>
+
+**Symptom.** arch-test dropped from 663/663 to 574/663 the moment the suites
+started running headless, with 89 tests reporting a signature mismatch in
+the last few words.
+
+**Root cause.** The headless exit waited on `debugger.halted` and then called
+`std::exit`. `halted` is set by the CPU thread when the guest stops; the
+signature, the crash log and the tohost log are written *after* that, by the
+same thread. So the process was racing its own output files and usually won.
+
+**Why it looked like 89 architectural failures.** Because a truncated
+signature is a mismatch, and a mismatch is what an architectural failure
+looks like. The failures were spread across families with nothing in common,
+which is the tell — 89 unrelated tests do not regress together — but the
+diff for any one of them reads exactly like a real bug.
+
+**Resolution.** A separate `run_finished` flag, set only once every output
+file is closed. `halted` answers "has the guest stopped", which is not the
+question. `2e8d015`.
+
+### 118. A script that stripped debug output deleted the CSR write path
+<a id="bug118"></a>
+
+**Symptom.** Every CSR without an explicit case in `write_csr`'s dispatch
+silently discarded its write.
+
+**Root cause.** A one-off script removing debug prints turned
+
+```cpp
+else regs.write_csr(csr, updated);
+```
+
+into `else { }`. The `else` had no braces, so the print *was* the statement,
+and deleting the print deleted the branch.
+
+**Why it went unnoticed for as long as it did.** It did not: it was caught
+within the same session. It is recorded because the class matters. Every
+other entry in this document is a bug in code that was written; this is a
+bug in code that was *edited by a program*, where the edit was syntactically
+valid and semantically a deletion. A braceless `else` whose body is the line
+being removed is the exact shape that lets that happen, and there are a lot
+of them in this codebase.
+
+**Resolution.** Restored, and found by grepping for the line rather than by
+any test — nothing in the suites writes a CSR this machine gives no meaning
+to.
+
+### 119. A CSR that does not exist
+<a id="bug119"></a>
+
+**Symptom.** The damo hypervisor suite went from passing groups to failing
+outright.
+
+**Root cause.** `vscounteren` was invented at address 0x206 and `scounteren`
+accesses in VS-mode were redirected to it, by analogy with `vsstatus`,
+`vsie`, `vsip` and every other S-level CSR the H extension shadows.
+
+There is no such register. The H extension does not shadow `scounteren`:
+there is one `scounteren`, and a guest supervisor writing it writes the
+same register the host supervisor reads. So the redirect sent every counter
+enable the guest kernel set into a register nothing consulted, and VU-mode
+was denied `cycle`, `time` and `instret` — which its own kernel had just
+enabled.
+
+**Why it looked right.** The pattern is real and nearly universal. Nine
+S-level CSRs are shadowed by a VS twin. Extending it to the tenth is the
+obvious generalisation, and the obvious generalisation is wrong.
+
+**Resolution.** Reverted. The lesson is narrower than "check the spec": the
+H extension's CSR list is *enumerated*, not derived, and an enumeration has
+to be read rather than extrapolated from.
+
+### 120. The reference was never consulted, because the model and its config did not match
+<a id="bug120"></a>
+
+**Symptom.** A design decision was built on the claim that Sail does not
+implement Zicfilp or Zicfiss. Both are in its RVA23S64 config with
+`supported: true`.
+
+**Root cause.** The Sail binary and the configuration file being handed to
+it came from different builds. The config had a `lrsc` key the installed
+model's schema rejected, so every invocation failed its schema check before
+executing an instruction. A model that refuses to start looks a great deal
+like a model that does not implement the extension you are asking about.
+
+**Why it went unnoticed.** Because the failure was upstream of the question.
+The reference was not disagreeing; it was not running. And a claim about
+what a reference model does not implement is exactly the kind of claim that
+does not get double-checked, because the natural check — run it and see —
+is the thing that is broken.
+
+**Resolution.** `mkconfig.py` now generates the config from the *installed*
+model's own defaults, so the pair cannot drift, and both extensions were
+implemented against a working reference. `4f243be`, `bb50a2d`.
+
+**Note.** This is the second-order version of the pattern in
+[Category 3](#taxonomy): a reference gap has to be established, not
+assumed. Here nothing was even established falsely — the reference had
+never spoken.
+
+### 121. Zicfilp armed a landing-pad requirement on the wrong register
+<a id="bug121"></a>
+
+**Symptom.** Ordinary un-instrumented binaries trapped with a landing-pad
+fault on their first indirect call.
+
+**Root cause.** The exemption was implemented as `rd == 0 && (rs1 == 1 ||
+rs1 == 5)`. The spec's exemption is on `rs1` alone: an indirect jump through
+`x1`, `x5` or `x7` is a *return*, and returns do not need landing pads
+because the shadow stack already protects them.
+
+Including `rd` in the test broke exactly one case, and it is the common
+one: `jalr ra, off(ra)`, which a compiler emits for a call through a
+resolved function pointer. `rd` is `ra` there, so the exemption did not
+apply, so a landing pad was required at a target that no un-instrumented
+binary has one at.
+
+**Why it looked right.** `rd == 0` is what distinguishes `jr` from `jalr`
+in the assembler's mnemonics, so it reads like part of "is this a return".
+It is not — the architecture's return test is about which register holds
+the address, not about whether the instruction also links.
+
+**Resolution.** `rs1 != 1 && rs1 != 5 && rs1 != 7`. `4f243be`.
+
+### 122. A shadow-stack page is not a leaf by the usual test
+<a id="bug122"></a>
+
+**Symptom.** 29 Zicfiss assertions failed, all of them on the first access
+to a shadow stack.
+
+**Root cause.** The page-table walk decides a PTE is a leaf with
+`(pte & PTE_R) || (pte & PTE_X)`, which is correct for every page type that
+existed before Zicfiss. A shadow-stack page is encoded as `W=1, R=0` — an
+encoding that was reserved precisely so it could be given this meaning — so
+it granted neither R nor X and the walk treated it as a pointer to a
+non-existent next level.
+
+**Why it went unnoticed.** Because the leaf test is not part of Zicfiss and
+was not touched when Zicfiss was added. The extension's own logic — the
+`sspush`/`sspopchk` instructions, the enable bits, the fault causes — was
+all implemented and all correct. One line in a file the change never opened
+made every bit of it unreachable.
+
+**Resolution.** `(pte & PTE_R) || (pte & PTE_X) || ss_page`. One clause,
+29 assertions. `bb50a2d`.
+
+### 123. Zfh was wired into the wrong dispatch table
+<a id="bug123"></a>
+
+**Symptom.** `fadd.h` returned 0.
+
+**Root cause.** `decode_zfh` was added to the OP / OP-IMM arm of the
+decoder's dispatch switch. Half-precision arithmetic is in OP-FP. So
+classify() correctly identified the extension, `decode()` never routed to
+it, and every half op fell through to `decode_f` — where its funct7 named a
+single-precision instruction, which then executed on the operands as though
+they were floats.
+
+**Why it looked right.** Because the extension *was* wired in, and to a
+real arm, and the code compiled and ran. The decoder has two dispatch
+tables — `classify()` maps an encoding to an extension, `decode()` maps an
+opcode to a decoder — and agreeing with one of them is not agreeing with
+both. Every other extension added to this decoder touched both tables in
+the same commit, which is why nothing about the shape of the change looked
+wrong.
+
+**Resolution.** Moved to the OP-FP arm alongside Zfa and Zfhmin.
+`cd4c125`.
+
+### 124. fclass.h was claimed by Zfhmin
+<a id="bug124"></a>
+
+**Symptom.** `fclass.h` decoded as `fmv.x.h`.
+
+**Root cause.** Both live in funct7 0x72 and differ only in funct3 — 000 for
+the move, 001 for the classify. Zfhmin owns the move (it is one of the four
+instructions Zfhmin consists of) and had claimed the whole funct7.
+
+**Why it went unnoticed.** Zfhmin passed 663/663 for as long as Zfh did not
+exist, because nothing could emit the encoding it was stealing.
+
+**Resolution.** Split on funct3. `cd4c125`.
+
+### 125. The vector suite reported 3042 of 3042 while measuring nothing
+<a id="bug125"></a>
+
+**Symptom.** `riscv-vector-tests` passed completely, before Zvfh, Zvbc or
+any of the vector crypto family existed.
+
+**Root cause.** The harness has two verdicts: a signature diff against Sail,
+and the test's own tohost word. A test that exports signature symbols took
+the signature path — and if no reference signature existed for it, the
+signature branch returned pass. Almost none of them had references.
+
+**Why it went unnoticed.** Because 3042/3042 is not a suspicious number when
+you believe the vector unit is finished. The honest baseline, once the
+branch fell back to the tohost verdict, was 2147 pass and 895 fail.
+
+**Resolution.** A signature test with no reference falls back to the test's
+own pass/fail, which every one of these suites reports. Never to an
+unconditional pass. `db995f5`.
+
+**Note.** This is the third harness bug in this document that manufactured
+passes rather than failures — see [Bugs in the tests, not the emulator](#test-bugs). A harness bug that produces failures costs an
+afternoon. One that produces passes costs however long it takes for someone
+to disbelieve the number.
+
+### 126. Every f16 NaN was canonicalised in transit
+<a id="bug126"></a>
+
+**Symptom.** After Zvfh brought the vector suite from 2147 to 2887, 99 of
+the remaining failures were NaN-payload and invalid-flag mismatches.
+
+**Root cause.** `ext_v_fp.cpp` computes in `double` and converts at the
+element boundaries. The f16-to-double conversion returns a canonical quiet
+NaN for any NaN input — which is correct for arithmetic and destroys two
+things the architecture requires be preserved: the operand's payload, which
+propagates through a NaN-producing operation, and whether it was signalling,
+which decides whether invalid is raised.
+
+**Resolution.** A half NaN is carried through the double as
+`0x7FF8000000000000 | bits`, with the original sixteen bits in the low half.
+It is still a NaN to every operation in between, and `d_to_h` recovers the
+encoding exactly. `39ce9ac`, 99 failures to 68.
+
+**Why this is worth an entry.** The lossy step is in a conversion function
+whose job is to be lossless for every value that is not a NaN, and it is.
+The bug is entirely in the interaction between "canonicalise NaNs" — a
+correct thing for a conversion to do — and "use this conversion as a
+transport", which is a use it was never designed for.
+
+### 127. The unsigned flag read the wrong direction
+<a id="bug127"></a>
+
+**Symptom.** Every `vfcvt.f.xu.v` at e16 produced a signed conversion.
+
+**Root cause.** One `is_unsigned` predicate was reused for both conversion
+directions. VFUNARY0's sub-opcodes do not agree about which are unsigned:
+0x00 and 0x06 are the unsigned *float-to-int* forms, while 0x02 is the
+unsigned form going the other way. Testing for the first pair read every
+int-to-float unsigned conversion as signed.
+
+**Resolution.** Two predicates. `45d037f`.
+
+### 128. The estimate tables were transcribed with Sail's index order intact
+<a id="bug128"></a>
+
+**Symptom.** `vfrec7(2.0)` returned 0.25 where the reference returns
+0.498046875.
+
+**Root cause.** Sail's lookup reads `table[127 - unsigned(idx)]`. Sail
+vectors default to **descending** index order, so that expression is the
+*ascending* element `idx` — `table[127 - idx]` in Sail and `table[idx]` in a
+C array are the same lookup. The tables were transcribed together with the
+`127 - idx`, which reverses all 128 entries.
+
+**Why it went unnoticed.** Because it moved the suite count by exactly zero.
+The tests that cover vfrec7 and vfrsqrt7 were failing before the tables
+existed and kept failing after, so the only signal was the count, and the
+count said nothing. A single hand-computed probe found it immediately.
+
+**Resolution.** `TABLE[idx]`. `4d6659a`.
+
+**Note.** The same convention governs the AES and SM4 S-box lookups
+(`table[255 - unsigned(x)]`) and the SM4 key-constant table
+(`table[31 - unsigned(x)]`). Having been caught here, it was got right
+there — which is the only reason [132](#bug132) was a one-line fix rather
+than three reversed tables.
+
+### 129. The largest finite magnitude, computed by clearing the wrong bit
+<a id="bug129"></a>
+
+**Symptom.** `vfrec7` of a value that overflows returned 0x3FFF at
+round-toward-zero where the answer is 0x7BFF.
+
+**Root cause.** "The largest finite magnitude" was written as
+`emask >> 1`. Shifting the exponent mask right clears its *top* bit, not
+its bottom one — it halves the exponent field rather than decrementing it.
+
+**Why it went unnoticed.** Five f32 probes at round-to-nearest-even all
+matched, because RNE takes the infinity branch and never reaches this line.
+The line is only live in the three directed rounding modes, which is a third
+of the rounding modes and a much smaller fraction of the tests.
+
+**Resolution.** `emask - 1` in the significand, exponent explicit.
+`b340e5a`.
+
+### 130. vslidedown read past the end of the source
+<a id="bug130"></a>
+
+**Symptom.** Large slide offsets produced elements from beyond the source
+register group.
+
+**Root cause.** `vslidedown` reads element `i + offset`, and both `i +
+offset` and `offset` alone can exceed VLMAX. The spec's answer is zero for
+any such element; the code computed the index and read it.
+
+**Resolution.** Both bounds checked. Elements sourced from beyond VLMAX are
+zero, not whatever is adjacent in the register file. `865284d`.
+
+### 131. brev8 decoded in the wrong opcode
+<a id="bug131"></a>
+
+**Symptom.** `brev8` was unrecognised.
+
+**Root cause.** It was routed in OP. It lives in OP-IMM, sharing `rev8`'s
+funct6 and distinguished only by the value in the rs2 field of the immediate
+— 0b11000 against `rev8`'s 0b00111.
+
+**Why it looked right.** `brev8` is a bit-reversal of a register, and every
+other register-to-register bitmanip operation in this codebase is in OP.
+Being an immediate-form instruction that takes no immediate is unusual
+enough that nothing about the instruction suggests where it lives.
+
+**Resolution.** OP-IMM, split on the immediate. `cd4c125`.
+
+### 132. The vector crypto opcode was not decoded at all
+<a id="bug132"></a>
+
+**Symptom.** Every one of the 24 vector crypto instructions raised an
+illegal instruction.
+
+**Root cause.** Zvkned, Zvkg, Zvknh, Zvksed and Zvksh are not in OP-V with
+the rest of the vector ISA. They were given a major opcode of their own,
+OP-VE (0b1110111), and `classify()` had no case for it.
+
+**Why this is a better failure than the alternative.** An unclaimed major
+opcode fails loudly and completely: nothing decodes, nothing executes,
+nothing produces a plausible wrong answer. Compare [123](#bug123), where a
+misrouted extension executed as its single-precision twin and returned
+numbers. Given the choice, the whole family being illegal is the failure
+mode you want.
+
+**Resolution.** OP-VE classified as `Extension::V`, which gets it the vector
+unit's `mstatus.VS` enable check and the `vill`/`vstart` handling unchanged,
+and routed by funct6 to the three implementation files. The one subtlety is
+that funct6 0x28 and 0x29 hold both the AES round instructions and SM4's,
+told apart only by the vs1 field — 16 is SM4, 0 through 3 and 7 are AES, 17
+is Zvkg's `vgmul` — so the split cannot be on funct6 alone.
+
+### 133. GHASH multiplied in the direction it is described in
+<a id="bug133"></a>
+
+**Symptom.** `vgmul` and `vghsh` were the last two of the 24 crypto tests
+to fail, after all thirteen AES tests passed.
+
+**Root cause.** GF(2^128) multiplication for GHASH was written the way
+GHASH is usually *explained*: walk the multiplier from bit 127 down,
+shifting the accumulator right and folding the reduction polynomial in at
+the top. The architecture specifies it the other way — both operands pass
+through `brev8`, the multiplier is walked from bit 0 up, the multiplicand
+shifts *left*, and 0x87 folds into the low byte. GCM stores its field
+elements bit-reversed within each byte, and the two formulations are
+different functions.
+
+**Why it looked right.** Because it is a correct implementation of GHASH as
+described in the GCM literature, and it produces output with the right
+statistical shape. There is no partial credit in a field multiply: it is
+either the same permutation as the reference or it is noise, and noise and
+correctness are indistinguishable without the reference.
+
+**Resolution.** Transcribed from `zvkg_insts.sail`, including the `brev8` on
+the way in and out.
+
+### 134. vaeskf2's round number was clamped as five bits
+<a id="bug134"></a>
+
+**Symptom.** `vaeskf2.vi` mismatched on 16 of 1352 signature words.
+
+**Root cause.** Out-of-range round numbers are not illegal; the spec folds
+them back into range by inverting bit 3, so that every encoding decodes to
+something defined. That fold is specified on `rnd[3:0]`, and it was applied
+to the whole five-bit immediate. For `rnd = 0x10` the two differ: four bits
+gives 0 → 8, five bits gives 16 → 24, and the round constant is then indexed
+at `(24 >> 1) - 1 = 11` in a ten-entry table.
+
+**Why it went unnoticed in vaeskf1.** Its sibling reads the same immediate
+and passed first time, because Sail writes *its* clamp as a test on
+`rnd_val[3..0]` with the flip on the five-bit value — which is equivalent to
+four-bit arithmetic for every input, where vaeskf2's is not.
+
+**Resolution.** Mask to four bits, and make the rcon table return 0 rather
+than read out of bounds for an index the clamp should have made
+unreachable — a defence, not a behaviour, since no input reaches it now.

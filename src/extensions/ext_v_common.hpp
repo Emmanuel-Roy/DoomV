@@ -240,7 +240,10 @@ bool exec_v_ldst(const DecodedInstruction &instr, Registers &regs, Memory &mem, 
 void exec_v_int(const DecodedInstruction &instr, Registers &regs);
 void exec_zvbb(const DecodedInstruction &instr, Registers &regs);       // Zvbb, ext_zvbb.cpp
 void exec_zvbb_unary(const DecodedInstruction &instr, Registers &regs); // Zvbb's OPMVV funct6=0x12 group
-void exec_zvbc(const DecodedInstruction &instr, Registers &regs);       // Zvbc, ext_zvbb.cpp
+void exec_zvbc(const DecodedInstruction &instr, Registers &regs);
+void exec_zvkned(const DecodedInstruction &instr, Registers &regs);   // Zvkned/Zvkg, opcode 0x77
+void exec_zvknh(const DecodedInstruction &instr, Registers &regs);     // Zvknha/Zvknhb, ditto
+void exec_zvksm(const DecodedInstruction &instr, Registers &regs);     // Zvksed/Zvksh, ditto       // Zvbc, ext_zvbb.cpp
 void exec_v_muldiv(const DecodedInstruction &instr, Registers &regs);
 void exec_v_mask(const DecodedInstruction &instr, Registers &regs);
 void exec_v_perm(const DecodedInstruction &instr, Registers &regs);

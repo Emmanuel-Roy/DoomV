@@ -177,6 +177,45 @@ const char *fvv_fvf_name(uint8_t funct6)
 
 } // namespace
 
+// OP-VE mnemonics. funct6 alone is not enough for most of them: the four
+// AES round instructions share one funct6 and are told apart by the vs1
+// field, which for them is an operation selector rather than a register.
+static const char *ve_name(uint8_t funct6, uint8_t vs1)
+{
+	switch (funct6) {
+	case 0x20: return "VSM3ME.VV";
+	case 0x21: return "VSM4K.VI";
+	case 0x2b: return "VSM3C.VI";
+	case 0x2d: return "VSHA2MS.VV";
+	case 0x2e: return "VSHA2CH.VV";
+	case 0x2f: return "VSHA2CL.VV";
+	case 0x22: return "VAESKF1.VI";
+	case 0x2a: return "VAESKF2.VI";
+	case 0x2c: return "VGHSH.VV";
+	case 0x28:
+		switch (vs1) {
+		case 0: return "VAESDM.VV";
+		case 1: return "VAESDF.VV";
+		case 2: return "VAESEM.VV";
+		case 3: return "VAESEF.VV";
+		case 16: return "VSM4R.VV";
+		case 17: return "VGMUL.VV";
+		default: return "???";
+		}
+	case 0x29:
+		switch (vs1) {
+		case 0: return "VAESDM.VS";
+		case 1: return "VAESDF.VS";
+		case 2: return "VAESEM.VS";
+		case 3: return "VAESEF.VS";
+		case 7: return "VAESZ.VS";
+		case 16: return "VSM4R.VS";
+		default: return "???";
+		}
+	default: return "???";
+	}
+}
+
 DecodedInstruction Decoder::decode_v(uint32_t raw_instr) const
 {
 	DecodedInstruction instr{};
@@ -213,7 +252,12 @@ DecodedInstruction Decoder::decode_v(uint32_t raw_instr) const
 		return instr;
 	}
 
-	if (opcode != 0b1010111) return instr; // shouldn't happen -- decode() only routes these three opcodes here
+	if (opcode == 0b1110111) { // OP-VE: vector crypto
+		instr.mnemonic = ve_name(op_v_funct6(funct7), rs1);
+		return instr;
+	}
+
+	if (opcode != 0b1010111) return instr; // shouldn't happen -- decode() only routes these opcodes here
 
 	if (funct3 == 0b111) { // OPCFG: vsetvli / vsetvl / vsetivli
 		bool bit31 = (funct7 >> 6) & 1;
@@ -257,6 +301,21 @@ void RiscvCore::exec_V(const DecodedInstruction &instr, Registers &regs, Memory 
 		// A page fault mid-instruction already redirected pc into the trap
 		// handler -- must not then stomp it with the normal advance below.
 		if (exec_v_ldst(instr, regs, mem, *this)) regs.set_pc(pc + instr.length);
+		return;
+	}
+
+	if (instr.opcode == 0b1110111) { // OP-VE: the vector crypto families
+		// Four families share this opcode's funct6 space and two of them
+		// share a funct6 outright: 0x28/0x29 hold both the AES rounds and
+		// SM4's, told apart only by vs1 (16 is SM4, 0-3 and 7 are AES, 17
+		// is Zvkg's vgmul). So the split has to consider vs1, not funct6
+		// alone.
+		const uint8_t ve6 = op_v_funct6(instr.funct7);
+		if ((ve6 == 0x28 || ve6 == 0x29) && instr.rs1 == 16) exec_zvksm(instr, regs);
+		else if (ve6 == 0x20 || ve6 == 0x21 || ve6 == 0x2b) exec_zvksm(instr, regs);
+		else if (ve6 >= 0x2d && ve6 <= 0x2f) exec_zvknh(instr, regs);
+		else exec_zvkned(instr, regs);
+		regs.set_pc(pc + instr.length);
 		return;
 	}
 

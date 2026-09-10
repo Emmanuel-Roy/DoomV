@@ -41,7 +41,13 @@ opt-in since it's not needed to boot Doom itself.
 | Zba / Zbb / Zbs (bitmanip) | ✅ |
 | Zcb (compressed bitmanip/mem) | ✅ |
 | Zicond (conditional move) | ✅ |
-| Zvbb (vector bitmanip) | ✅ |
+| Zvbb / Zvbc (vector bitmanip, carry-less multiply) | ✅ |
+| Zbc / Zbkb / Zbkx (scalar carry-less multiply, crypto bitmanip) | ✅ |
+| Zkr (entropy source `seed`) | ✅ |
+| Zvkned / Zvkg (vector AES, GCM/GMAC) | ✅ |
+| Zvknha / Zvknhb (vector SHA-256 / SHA-512) | ✅ |
+| Zvksed / Zvksh (vector SM4, SM3) | ✅ |
+| Zicfilp / Zicfiss (landing pads, shadow stack) | ✅, off by default |
 | Zihintpause / Zihintntl | ✅ (hints — retire without effect) |
 | Zimop / Zcmop | ✅ (write zero to `rd`) |
 | Zicbom / Zicbop | ✅ (no cache to manage — see below) |
@@ -50,8 +56,9 @@ opt-in since it's not needed to boot Doom itself.
 | Zicntr (`cycle`/`time`/`instret`) | ✅ |
 | Zihpm (`hpmcounter3-31`) | ✅ (read as zero) |
 | Zfa (additional FP) | ✅ |
-| Zfhmin (half-precision converts) | ✅ |
-| Zvfhmin (vector half converts) | ✅ |
+| Zfh / Zfhmin (half-precision arithmetic, converts) | ✅ |
+| Zvfh / Zvfhmin (vector half arithmetic, converts) | ✅ |
+| Zvfbfmin / Zvfbfwma (vector bf16 converts, widening FMA) | ✅ |
 | Svinval (fine-grained TLB invalidation) | ✅ (no TLB — see below) |
 | Svnapot (64KB contiguous PTEs) | ✅ |
 | Svpbmt (page-based memory types) | ✅ |
@@ -102,14 +109,24 @@ quiet NaN when the spec reserves that for a signalling one — a documented
 simplification that was harmless for results and wrong for flags, and that
 the accrued-flags-only test could not see.
 
-RVA23 mandates `Zfhmin` and `Zvfhmin`, not the full `Zfh`/`Zvfh` — half
-precision *arithmetic* is an expansion option, so there is no `fadd.h`
-here and software is expected to widen to single, compute, and narrow
-back. MinGW has no `_Float16` on x86, so every half conversion is
-hand-written integer code (`src/extensions/ext_fp16.hpp`) rather than a
-host FPU operation. Narrowing rounds exactly once from the source
-significand: going double → float → half rounds twice, and a value that
-is an exact midpoint in half but not in single rounds the wrong way.
+RVA23 mandates only `Zfhmin` and `Zvfhmin` — half precision *arithmetic*
+is an expansion option — but the full `Zfh` and `Zvfh` are implemented
+here anyway, so `fadd.h` and its vector twin are real instructions rather
+than something software has to widen around. MinGW has no `_Float16` on
+x86, so the conversions are hand-written integer code
+(`src/extensions/ext_fp16.hpp`) and the arithmetic goes through Berkeley
+SoftFloat's `f16` alongside F and D. Narrowing rounds exactly once from
+the source significand: going double → float → half rounds twice, and a
+value that is an exact midpoint in half but not in single rounds the
+wrong way.
+
+Carrying an f16 through the vector unit needed one trick worth naming.
+`ext_v_fp.cpp` computes in `double` and converts at the edges, and the
+obvious conversion canonicalises every NaN — which destroys the operand's
+payload and quiets a signalling NaN before anything can raise invalid on
+it. So a half NaN is smuggled through the double as `0x7FF8000000000000 |
+bits`, where the low sixteen bits are the original encoding and the result
+is still a NaN to everything in between.
 
 Adding them surfaced two older gaps. `exec_v_fp` returned silently for
 any SEW other than 32 or 64, so every vector FP instruction at `e16` was
@@ -199,7 +216,7 @@ tools/verification/tests/suites/fetch.sh            # precompiled third-party su
 
 ### What that process actually found
 
-110 bugs, written up individually in [docs/BUGS.md](docs/BUGS.md). A few
+134 bugs, written up individually in [docs/BUGS.md](docs/BUGS.md). A few
 that say something about the method:
 
 * **Floating point had to stop using the host FPU.** Three ordinary bugs
