@@ -672,7 +672,7 @@ void exec_v_fp(const DecodedInstruction &instr, Registers &regs)
 			// here for an sNaN operand and then lost the operand itself.
 			return read_felem(regs, vreg, esew, i);
 		};
-		auto write_f = [&](int vreg, int esew, uint64_t i, double v, int rm) {
+		auto write_f = [&](int vreg, int esew, uint64_t i, double v, int rm_riscv) {
 			if (esew != 16) { write_felem(regs, vreg, esew, i, v); return; }
 			// A narrowing write does round, so this one keeps the real
 			// conversion and its flags rather than the lossless encoding.
@@ -682,9 +682,11 @@ void exec_v_fp(const DecodedInstruction &instr, Registers &regs)
 				write_velem(regs, vreg, 16, i, d_to_h(v));
 				return;
 			}
-			uint8_t fl = 0;
-			uint16_t h = fp16::f64_bits_to_h(b, rm, fl);
-			regs.or_fflags(fl);
+			// SoftFloat rather than ext_fp16.hpp's narrowing, for RMM --
+			// see the note in the vfncvt.f.f.w arm below.
+			sf::begin(rm_riscv, regs.get_frm());
+			uint16_t h = sf::bits(f64_to_f16(sf::f64(b)));
+			sf::end(regs);
 			write_velem(regs, vreg, 16, i, h);
 		};
 
@@ -728,7 +730,7 @@ void exec_v_fp(const DecodedInstruction &instr, Registers &regs)
 					volatile double r = (wsew == 32) ? (double)(float)r0 : r0;
 					std::fesetround(old_round);
 					regs.or_fflags(collect_fflags());
-					write_f(instr.rd, wsew, i, r, rm_default);
+					write_f(instr.rd, wsew, i, r, rm);
 					break;
 				}
 				case 0x0C: { // vfwcvt.f.f.v -- the Zvfhmin one. Always exact:
@@ -751,7 +753,7 @@ void exec_v_fp(const DecodedInstruction &instr, Registers &regs)
 						break;
 					}
 					double v = read_f(instr.rs2, nsew, i);
-					write_f(instr.rd, wsew, i, v, rm_default);
+					write_f(instr.rd, wsew, i, v, rm);
 					break;
 				}
 				default: break; // 0x0D is reserved
@@ -814,7 +816,7 @@ void exec_v_fp(const DecodedInstruction &instr, Registers &regs)
 					volatile double r = (nsew == 32) ? (double)(float)r0 : r0;
 					std::fesetround(old_round);
 					regs.or_fflags(collect_fflags());
-					write_f(instr.rd, nsew, i, r, rm_default);
+					write_f(instr.rd, nsew, i, r, rm);
 					break;
 				}
 				case 0x14: case 0x15: { // vfncvt.f.f.w, and .rod
@@ -822,7 +824,16 @@ void exec_v_fp(const DecodedInstruction &instr, Registers &regs)
 					// narrowing done in two steps cannot double-round: it
 					// forces the intermediate's low bit set whenever the
 					// result is inexact.
-					int rm = (sub == 0x15) ? FE_TOWARDZERO : rm_default;
+					// Named apart from the function's `rm`, which holds the
+					// *RISC-V* rounding mode. This one is a host FE_* value
+					// for the double path below, and the two are not
+					// interchangeable: FE_TOWARDZERO is 0xC00 on x86, so
+					// handing it to a uint8_t parameter expecting a RISC-V
+					// mode truncates to 0 -- round-to-nearest-even. That
+					// shadowing is what made every directed-rounding
+					// overflow in the half path return an infinity where the
+					// largest finite magnitude was required.
+					const int host_rm = (sub == 0x15) ? FE_TOWARDZERO : rm_default;
 					// Same NaN rule as the widening direction, and for the
 					// same reason it has to come off the raw bits.
 					const uint64_t wraw = read_velem(regs, instr.rs2, wsew, i);
@@ -833,15 +844,34 @@ void exec_v_fp(const DecodedInstruction &instr, Registers &regs)
 						write_velem(regs, instr.rd, nsew, i, canonical_nan_bits(nsew));
 						break;
 					}
-					double v = read_f(instr.rs2, wsew, i);
 					if (nsew == 16) {
-						uint8_t fl = 0;
-						uint16_t h = fp16::f64_bits_to_h(bits_from_f64(v), rm, fl);
-						if (sub == 0x15 && (fl & fp16::FLAG_NX)) h |= 1; // round to odd
-						regs.or_fflags(fl);
+						// Through SoftFloat, not the hand-written narrowing
+						// in ext_fp16.hpp. That one takes a *host* rounding
+						// mode, and x86 has no encoding for RMM (round to
+						// nearest, ties away from zero) -- host_round_mode
+						// folds it to nearest-even, so every tie under
+						// frm=4 rounded the wrong way. It is the same defect
+						// that moved F and D onto SoftFloat wholesale; this
+						// one conversion was the last caller left behind.
+						//
+						// The source is read at its own width rather than
+						// as a double, so the conversion is a single
+						// rounding no matter which pair of formats it is.
+						sf::begin((sub == 0x15) ? 1 : rm, regs.get_frm());
+						float16_t r16 = (wsew == 64)
+							? f64_to_f16(sf::f64(wraw))
+							: f32_to_f16(sf::f32((uint32_t)wraw));
+						uint16_t h = sf::bits(r16);
+						// Round-to-odd: round toward zero, then force the low
+						// bit whenever anything was discarded. It exists so
+						// that narrowing in two steps cannot double-round.
+						if (sub == 0x15 && (softfloat_exceptionFlags & softfloat_flag_inexact))
+							h |= 1;
+						sf::end(regs);
 						write_velem(regs, instr.rd, 16, i, h);
 					} else {
-						std::fesetround(rm);
+						double v = read_f(instr.rs2, wsew, i);
+						std::fesetround(host_rm);
 						volatile double r = (double)(float)v;
 						std::fesetround(old_round);
 						uint8_t fl = collect_fflags();

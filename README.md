@@ -192,9 +192,20 @@ to be the one that is wrong, but it does not decide anything.
 | --- | --- | --- |
 | riscv-arch-test RVA23S64 | the certification suite, 663 tests, signature-diffed against Sail | **663 / 663** |
 | differential | 19 hand-written suites, 639 cases, diffed against Sail | **19 / 19** |
-| damo-rv-priv-ats | hypervisor, the only H coverage that exists anywhere -- 43 groups | 13 / 43 groups, **1757 / 2079 assertions**; in progress |
-| Linux | OpenSBI + 6.12 + busybox | boots to an interactive shell |
+| riscv-vector-tests | 3042 generated V tests at VLEN=128, signature-diffed against Sail | **3042 / 3042** |
+| riscv-tests | the Berkeley suite, 377 applicable of 667 | **376 / 377** |
+| damo-rv-priv-ats | hypervisor, the only H coverage that exists anywhere -- 43 groups | 38 / 43 groups, 19 failing assertions; in progress |
+| Linux | OpenSBI + 6.12 + busybox, ext4 root over virtio-blk | boots to an interactive shell |
 | DOOM | bare-metal, no OS | plays |
+
+`riscv-vector-tests` is the suite that covers the vector ISA at the width
+this machine implements, including the sub-profiles RVA23 leaves optional:
+Zvfh, bf16, Zvbb/Zvbc, and the whole Zvk crypto family. arch-test does not
+test any of them, which is why it read 663/663 through every bug in
+[Part IX](docs/BUGS.md#part-ix). `riscv-tests` is mostly redundant with
+arch-test but not entirely -- it is the only suite here that exercises
+M-mode's illegal-instruction path directly, which is also the one test in
+it that still fails.
 
 Every suite runs headless (`-ng`), which is what makes them practical to
 run at all: arch-test's 663 tests take about 40 seconds and the 43-group
@@ -216,7 +227,7 @@ tools/verification/tests/suites/fetch.sh            # precompiled third-party su
 
 ### What that process actually found
 
-134 bugs, written up individually in [docs/BUGS.md](docs/BUGS.md). A few
+136 bugs, written up individually in [docs/BUGS.md](docs/BUGS.md). A few
 that say something about the method:
 
 * **Floating point had to stop using the host FPU.** Three ordinary bugs

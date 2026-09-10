@@ -284,6 +284,8 @@ of console output (`2667bf1`, re-verified in `936df17`).
 132. [The vector crypto opcode was not decoded at all](#bug132)
 133. [GHASH multiplied in the direction it is described in](#bug133)
 134. [`vaeskf2`'s round number was clamped as five bits](#bug134)
+135. [vtype accepted reserved bits and unsupported SEW/LMUL ratios](#bug135)
+136. [Half-precision narrowing never implemented RMM](#bug136)
 
 <a id="part-vii"></a>
 ### Part VII — Cross-cutting
@@ -4669,7 +4671,7 @@ yet clean." See [What remains](#remains).
 <a id="patterns"></a>
 ## Recurring patterns
 
-Reading 134 bugs in order, the same small number of mechanisms account for
+Reading 136 bugs in order, the same small number of mechanisms account for
 nearly all of them. They are listed here in rough order of how much they
 cost.
 
@@ -5835,3 +5837,93 @@ four-bit arithmetic for every input, where vaeskf2's is not.
 **Resolution.** Mask to four bits, and make the rcon table return 0 rather
 than read out of bounds for an index the clamp should have made
 unreachable — a defence, not a behaviour, since no input reaches it now.
+
+### 135. vtype accepted reserved bits and unsupported SEW/LMUL ratios
+<a id="bug135"></a>
+
+**Symptom.** None visible. This was found by reading Sail's
+`vext_vset_insts.sail` alongside `exec_v_config`, not by a failing test.
+
+**Root cause.** `vset{i}vl{i}` implemented two of the five conditions that
+set `vill` — the reserved `vsew` encodings and the reserved `vlmul` — and
+none of the other three:
+
+* **The reserved field.** Bits above the four defined ones are reserved,
+  and a nonzero one makes the whole vtype illegal rather than being
+  ignored. They live in a different place in each form: bits[10:8] of
+  `vsetvli`'s 11-bit immediate, bits[9:8] of `vsetivli`'s 10-bit one, and
+  bits[62:8] plus `vill` itself of the register `vsetvl` reads. All three
+  were accepted, and `vsetvl` then stored the request back verbatim, so a
+  reserved bit could be read out of `vtype` again afterwards.
+
+* **SEW against LMUL.** SEW may not exceed ELEN, and for a fractional
+  LMUL it may not exceed LMUL × ELEN. At ELEN=64 that makes every
+  fractional LMUL illegal at SEW=64, `mf4` and `mf8` illegal at SEW=32,
+  and `mf8` illegal at SEW=16. All were accepted, and VLMAX was then
+  computed by integer division: `mf8` at SEW=64 gives
+  (128 × 1) / (64 × 8) = 0. An accepted configuration in which no vector
+  instruction can address an element.
+
+* **The `rd=x0, rs1=x0` form.** It keeps `vl`, which is only meaningful if
+  VLMAX has not changed — so it is illegal to use it to change the
+  SEW/LMUL ratio, or to use it at all while `vtype` is already `vill`.
+  Neither was checked.
+
+**Why it went unnoticed.** Every one of these is a rule about what must be
+*rejected*, and a test that only ever asks for legal configurations cannot
+see the difference. The three `vset` tests in riscv-vector-tests pass both
+before and after this change; what settled it was the reference's source,
+which states each condition as one line of a single `if`.
+
+**Resolution.** All three conditions added, and the stored `vtype` masked
+to the four defined fields rather than written back raw.
+
+**Note.** The rule this belongs to is the one in
+[Bugs that were design assumptions](#assumptions): the absence of a
+failing test is not evidence. It is also the second entry in Part IX —
+with [120](#bug120) — where the fix came from reading the reference model
+rather than from running it.
+
+### 136. Half-precision narrowing never implemented RMM
+<a id="bug136"></a>
+
+**Symptom.** `rv64vfncvt_f_f_w-1` and `-2`, the last two failures in
+riscv-vector-tests. Subtest 137 expected `0xc081` and got `0xc080` —
+one bit, in the last place.
+
+**Root cause.** `frm` was 4, RMM: round to nearest, ties away from zero.
+The f32→f16 conversion went through `fp16::f64_bits_to_h`, which takes a
+*host* rounding mode, and `host_round_mode` had to map RMM onto something
+x86 can express. There is nothing: x86 has no RMM encoding. It folded to
+round-to-nearest-even, which differs from RMM on exactly the ties — and
+`0xc080` is even.
+
+This is the same defect that moved F and D onto Berkeley SoftFloat
+wholesale, recorded at the top of this document. Vector FP followed them,
+one operation at a time; this one conversion was the last caller left
+behind, and it survived because nothing else in the file still consulted a
+host rounding mode for a *result*.
+
+**Resolution.** SoftFloat's `f32_to_f16` and `f64_to_f16`, chosen on the
+source's own width so the conversion is a single rounding for either pair
+of formats. Round-to-odd (`vfncvt.rod.f.f.w`) still rounds toward zero and
+then forces the low bit on inexact, which is what it is defined as.
+
+**And the fix read the wrong variable.** The first attempt made the
+conversion correct and the results were still wrong, differently: an
+overflow under round-toward-zero returned an infinity where the largest
+finite magnitude was required. The arm being edited declared its own
+`int rm` holding a host `FE_*` value, shadowing the function's `uint8_t rm`
+holding the RISC-V mode. The new SoftFloat call read the shadow.
+`FE_TOWARDZERO` is `0xC00` on x86; narrowed to a `uint8_t` parameter
+expecting a RISC-V rounding mode, that is `0` — round-to-nearest-even
+again. So the symptom moved from "RMM ties round the wrong way" to "every
+directed-rounding overflow returns an infinity", and both were the same
+sentence read twice.
+
+Two variables of different types, both named `rm`, both meaning "rounding
+mode", in units that are not interchangeable and where the wrong one
+silently truncates to a valid value of the other. The shadow is now named
+`host_rm`.
+
+**Evidence.** riscv-vector-tests 3040/3042 to **3042/3042**.
