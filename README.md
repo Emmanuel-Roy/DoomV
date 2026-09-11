@@ -310,13 +310,43 @@ riscv_doom.exe -opensbi=<f> -kernel=<f> -dtb=<f> -initrd=<f> [options]   # Linux
 | `-opensbi=<path>` | OpenSBI firmware ELF (`fw_jump.elf`). Any of the four Linux options selects Linux-boot mode. |
 | `-kernel=<path>` | Kernel `Image`. |
 | `-dtb=<path>` | Flattened device tree. |
-| `-initrd=<path>` | Initramfs cpio archive. |
+| `-initrd=<path>` | Initramfs cpio archive. Omit it when booting from `-disk=` -- with an initramfs present the kernel runs that and never mounts the disk. |
+| `-disk=<path>` | Raw disk image for the virtio-blk device. A whole-device filesystem or a partitioned image both work; the kernel finds the partition table itself. |
 
 `-ng` is what makes the conformance suites practical. With a window open a
 finished test never exits on its own and has to be killed from outside, so
 every test cost its full timeout whether it passed or not; headless, the
 whole 663-test arch-test run takes about 40 seconds and the 43-group
 hypervisor suite about 10.
+
+### The display
+
+There are two framebuffers, and which one the window shows depends on how
+the machine was started.
+
+DOOM writes its native 320x200 through `MMIO_FB`, and the window scales it
+up inside a dashboard that shows registers, CSRs and a trace log alongside.
+
+A Linux guest gets a 1024x768 linear aperture at `0x50000000`, declared to
+the kernel as a `simple-framebuffer` node in the device tree. The kernel's
+`simplefb` driver binds to it and `fbcon` draws a 128x48 character console
+into it, which the window then shows full-screen with the dashboard
+suppressed -- a 1024x768 console squeezed into the dashboard's game box
+would put three source pixels into one and turn the text to grey.
+
+The aperture sits deliberately *outside* the device tree's memory node,
+which is what stops Linux allocating over it without needing a
+reserved-memory entry -- the same arrangement a carved-out framebuffer has
+on real hardware. `simple-framebuffer` has no mode-setting protocol at all:
+the driver takes width, height, stride and format from the device tree and
+trusts them, so `tools/linux/dts/doomv.dts` and `Memory::LFB_*` have to
+agree and nothing checks that they do.
+
+The bootargs carry `console=tty0 console=hvc0`, in that order. Both consoles
+are registered, so the kernel log reaches the framebuffer *and* the SBI
+serial the headless harnesses read. The order decides which becomes
+`/dev/console` and the last one wins, so `hvc0` last puts the shell on the
+serial where a script can drive it.
 
 Key bindings live in `controls.json` if you want to remap them.
 

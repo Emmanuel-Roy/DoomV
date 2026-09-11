@@ -163,8 +163,29 @@ mount -t sysfs sys /sys
 mount -t devtmpfs dev /dev 2>/dev/null || true
 
 echo "=== DOOMV-STAGE2-BEGIN ==="
+
+# debootstrap redirects the second stage's output into a log *inside the
+# target*, so the console goes silent for however many hours the work takes
+# -- and a silent emulator is indistinguishable from a hung one. Relay that
+# log to the console, and print a package count every so often, so the run
+# can be watched from outside.
+#
+# This matters more here than it would on real hardware: at around 13 MIPS a
+# single package's postinst can take minutes, and without a heartbeat the
+# only evidence of progress is that the host's image file is still being
+# written, which is not something the log can tell you.
+( while [ ! -f /debootstrap/debootstrap.log ]; do sleep 5; done
+  tail -n +1 -F /debootstrap/debootstrap.log ) &
+( while true; do
+    sleep 60
+    n=$(ls /var/lib/dpkg/info/*.list 2>/dev/null | wc -l)
+    echo "=== DOOMV-STAGE2-HEARTBEAT unpacked=$n ==="
+    sync
+  done ) &
+
 /debootstrap/debootstrap --second-stage
 rc=$?
+kill %1 %2 2>/dev/null || true
 echo "=== DOOMV-STAGE2-SECOND-STAGE rc=$rc ==="
 
 if [ "$rc" = 0 ]; then
