@@ -19,6 +19,12 @@ DTB="$HERE/ubuntu.dtb"
 [ -f "$IMG" ] || { echo "error: $IMG not found -- run mkrootfs.sh and boot-stage2.sh." >&2; exit 1; }
 [ -x "$ROOT/riscv_doom.exe" ] || { echo "error: build riscv_doom.exe first (make)." >&2; exit 1; }
 
+# console=tty0 before console=hvc0, and the order is load-bearing: both are
+# registered so the window and the serial log both get output, but the *last*
+# one becomes /dev/console. hvc0 last puts the shell on the serial where a
+# script can reach it; tty0 last silences the log the moment a real console
+# registers, which looks exactly like a hang. This file had it backwards.
+#
 # Same three differences from the stock DTB as the stage-2 one, minus the init
 # override: root is the partition, there is no initrd, and systemd is PID 1.
 # An initrd is what you must not leave in -- the kernel would run that and
@@ -27,7 +33,7 @@ python3 - "$ROOT/tools/linux/dts/doomv.dts" "$HERE/ubuntu.dts" <<'PY'
 import re, sys
 src = open(sys.argv[1]).read()
 src = re.sub(r'bootargs = "[^"]*";',
-             'bootargs = "earlycon=sbi console=hvc0 console=tty0 '
+             'bootargs = "earlycon=sbi console=tty0 console=hvc0 '
              'root=/dev/vda1 rootwait rw";', src, count=1)
 src = re.sub(r'\s*linux,initrd-(start|end)\s*=\s*<[^>]*>;', '', src)
 open(sys.argv[2], "w", newline="\n").write(src)
