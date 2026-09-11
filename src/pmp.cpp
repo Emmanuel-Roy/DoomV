@@ -68,6 +68,39 @@ bool region_of(Registers &regs, unsigned entry, uint64_t &lo, uint64_t &hi)
 	}
 }
 
+
+// Decoded regions, cached.
+//
+// `check` runs on every memory access and used to re-derive each entry from
+// its CSRs every time: a cfg byte read, one or two pmpaddr reads, and for
+// NAPOT a loop counting trailing ones -- times sixteen entries, times every
+// load, store and instruction fetch. Once the page-table walk was cached
+// this was what remained.
+//
+// The regions only change when pmpcfg or pmpaddr is written, and both go
+// through write_cfg/write_addr below, so the cache is rebuilt lazily after
+// either of those bumps the generation. Nothing else can invalidate it:
+// pmpaddr for a TOR entry depends on the *previous* entry's address, which
+// is still a pmpaddr write, and the lock bits are part of cfg.
+struct Decoded {
+	uint64_t lo, hi;
+	uint8_t cfg;
+	bool on;
+};
+
+unsigned cache_gen = 0;      // bumped by every pmpcfg/pmpaddr write
+unsigned cache_built = ~0u;  // generation the cache was built from
+Decoded cache[ENTRIES];
+
+inline void rebuild_cache(Registers &regs)
+{
+	for (unsigned i = 0; i < ENTRIES; i++) {
+		cache[i].on = region_of(regs, i, cache[i].lo, cache[i].hi);
+		cache[i].cfg = cfg_byte(regs, i);
+	}
+	cache_built = cache_gen;
+}
+
 } // namespace
 
 uint64_t read_cfg(Registers &regs, uint16_t csr)
@@ -86,6 +119,7 @@ uint64_t read_addr(Registers &regs, uint16_t csr)
 
 void write_cfg(Registers &regs, uint16_t csr, uint64_t value)
 {
+	cache_gen++;   // see the note on Decoded above
 	if ((csr - CSR_PMPCFG0) % 2 != 0) return;
 	unsigned base = (unsigned)((csr - CSR_PMPCFG0) / 2) * 8;
 
@@ -122,6 +156,7 @@ void write_cfg(Registers &regs, uint16_t csr, uint64_t value)
 
 void write_addr(Registers &regs, uint16_t csr, uint64_t value)
 {
+	cache_gen++;   // see the note on Decoded above
 	unsigned entry = addr_index(csr);
 	if (entry >= ENTRIES) return;
 
@@ -150,15 +185,17 @@ bool check(Registers &regs, uint64_t paddr, unsigned size, int access, uint8_t p
 	uint64_t first = paddr;
 	uint64_t last  = paddr + (size ? size - 1 : 0);
 
+	if (cache_built != cache_gen) rebuild_cache(regs);
+
 	for (unsigned i = 0; i < ENTRIES; i++) {
-		uint64_t lo, hi;
-		if (!region_of(regs, i, lo, hi)) continue;
+		if (!cache[i].on) continue;
+		const uint64_t lo = cache[i].lo, hi = cache[i].hi;
 		bool hit_first = (first >= lo && first < hi);
 		bool hit_last  = (last  >= lo && last  < hi);
 		if (!hit_first && !hit_last) continue;
 		if (hit_first != hit_last) return false;   // straddles this region's edge
 
-		uint8_t cfg = cfg_byte(regs, i);
+		const uint8_t cfg = cache[i].cfg;
 		// M-mode ignores permissions on unlocked entries -- the lock bit
 		// is precisely what makes an entry bind M-mode too.
 		if (priv == (uint8_t)3 && !(cfg & CFG_L)) return true;
