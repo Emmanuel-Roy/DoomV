@@ -33,11 +33,30 @@ enum class AccessType : uint8_t {
 	ShadowStack,
 };
 
-// Sv39 address translation. Stateless on purpose (no TLB) -- every call
-// re-walks the page table directly out of guest RAM via `mem`, which is
-// simple to get right and cheap enough for now; only worth revisiting if
-// it's an actual measured bottleneck once something heavier than Doom is
-// running.
+// Drops every cached translation. Must be called from anything that can
+// change what a virtual address means: the fences (SFENCE.VMA, SINVAL.VMA,
+// HFENCE.*), a write to satp/vsatp/hgatp, and a write to an envcfg whose
+// bits gate whether a PTE faults. Getting that list wrong is the entire
+// risk of having a cache at all -- a stale entry is a guest reading another
+// process's memory, silently and much later.
+void mmu_tlb_flush();
+
+// Sv39/48/57 address translation.
+//
+// This used to be stateless on purpose, and the comment here said a TLB was
+// worth revisiting only if it became "an actual measured bottleneck once
+// something heavier than Doom is running". Something heavier turned up:
+// booting Linux measures 1.67 MIPS, and building an Ubuntu root filesystem
+// on this machine takes hours, nearly all of it re-walking the same page
+// tables -- every fetch and every load or store was three or four dependent
+// reads out of guest RAM before the access itself.
+//
+// So there is a small direct-mapped TLB now, and it caches deliberately
+// little: only single-stage, non-virtualised, non-M-mode translations, and
+// only ones whose A and D bits were already set, so that a hit cannot skip
+// an update the architecture requires. Everything else -- two-stage,
+// hlv/hsv, anything under H -- re-walks exactly as before, which keeps the
+// hypervisor suite measuring the code it was written for.
 //
 // Returns true and fills `paddr` on a successful translation (including
 // the trivial case: M-mode, or satp.MODE == 0, always succeeds untranslated

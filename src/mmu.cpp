@@ -183,6 +183,59 @@ uint64_t guest_fault_cause(AccessType type)
 // spec requires such a fault to be reported against the original access,
 // and it is also why a single guest load can perform a dozen memory
 // accesses and fault at any of them.
+
+// ---------------------------------------------------------------- the TLB
+//
+// Direct-mapped, indexed by virtual page number, flushed wholesale. There is
+// no ASID matching and no selective invalidation: SFENCE.VMA with a specific
+// address or ASID drops everything. That is architecturally legal -- a fence
+// may always invalidate more than it was asked to -- and it means the
+// correctness argument is one sentence instead of a table.
+//
+// What may be cached is deliberately narrow. An entry is only inserted when
+// all of these hold, and each one removes a way to be wrong rather than a
+// way to be slow:
+//
+//   * the walk succeeded. Faults are never cached, so a mapping that
+//     appears later is seen immediately.
+//   * single stage, no virtualisation, not an hlv/hsv. Two-stage
+//     translation has a second set of tables and a second set of fences,
+//     and none of that is modelled here.
+//   * the effective privilege is not M. M-mode does not translate.
+//   * the leaf's A bit was already set, and D too for anything that writes.
+//     A hit skips the walk, and skipping the walk skips the A/D update the
+//     architecture requires on first touch -- so only translations that
+//     needed no update are eligible. The *second* access to a page is the
+//     one that gets cached, which is exactly the access that repeats.
+//
+// The key carries everything else that changes the answer for one address:
+// the privilege it is made at, the kind of access (permissions differ per
+// type), and SUM and MXR (which decide whether a supervisor may read a user
+// page, and whether an execute-only page reads). Anything not in the key
+// must flush, and the flush list is in mmu.hpp.
+namespace {
+
+constexpr unsigned TLB_BITS = 12;              // 4096 entries
+constexpr unsigned TLB_SIZE = 1u << TLB_BITS;
+constexpr uint64_t TLB_MASK = TLB_SIZE - 1;
+
+struct TlbEntry {
+	uint64_t key;   // 0 means empty; see tlb_key below
+	uint64_t ppn;   // physical address of the page, low 12 bits clear
+};
+
+TlbEntry tlb[TLB_SIZE];
+
+// vpn in the high bits, the rest of the context in the low ones, and bit 0
+// always set so that a zero entry can never match a real key.
+inline uint64_t tlb_key(uint64_t vpn, PrivMode priv, AccessType type, bool sum, bool mxr)
+{
+	return (vpn << 8) | ((uint64_t)type << 4) | ((uint64_t)priv << 2)
+	     | ((uint64_t)sum << 1) | ((uint64_t)mxr << 3) | 1ull;
+}
+
+} // namespace
+
 bool gstage_translate(Registers &regs, Memory &mem, uint64_t gpa, AccessType type,
                       uint64_t &pa, uint64_t &cause, uint64_t &tval, bool implicit)
 {
@@ -340,6 +393,11 @@ bool gstage_translate(Registers &regs, Memory &mem, uint64_t gpa, AccessType typ
 	pa = (ppn_full << 12) | (gpa & ((1ull << low_bits) - 1));
 	return true;
 }
+}
+
+void mmu_tlb_flush()
+{
+	for (unsigned i = 0; i < TLB_SIZE; i++) tlb[i].key = 0;
 }
 
 // Pointer masking (Smnpm / Ssnpm / Sspm).
@@ -553,6 +611,24 @@ bool mmu_translate(Registers &regs, Memory &mem, uint64_t vaddr, AccessType type
 	                           as_guest);
 	uint64_t satp = regs.read_csr(virt_access ? CSR_VSATP : CSR_SATP);
 	uint64_t mode = satp >> 60;
+
+	// TLB lookup. Only the narrow case described in mmu.hpp is eligible:
+	// one stage, no virtualisation, not an hlv/hsv, and a mode that
+	// actually translates. Everything else falls through to the full walk.
+	const bool tlb_eligible = !virt_access && !as_guest
+	                       && eff_priv != PrivMode::M && mode != 0;
+	uint64_t tlb_k = 0;
+	unsigned tlb_i = 0;
+	if (tlb_eligible) {
+		const uint64_t st = regs.read_csr(CSR_MSTATUS);
+		tlb_k = tlb_key(vaddr >> 12, eff_priv, type,
+		                (st & MSTATUS_SUM) != 0, (st & MSTATUS_MXR) != 0);
+		tlb_i = (unsigned)((vaddr >> 12) & TLB_MASK);
+		if (tlb[tlb_i].key == tlb_k) {
+			paddr = tlb[tlb_i].ppn | (vaddr & 0xFFF);
+			return true;
+		}
+	}
 	if (eff_priv == PrivMode::M || mode == 0) {
 		// With the first stage off there are no page tables, so there is no
 		// page marked as a shadow stack -- and a shadow stack instruction
@@ -822,9 +898,11 @@ bool mmu_translate(Registers &regs, Memory &mem, uint64_t vaddr, AccessType type
 	// not on the guest physical address the walk indexed with. Getting
 	// that wrong writes A into whatever the hypervisor happens to have at
 	// that guest physical address.
+	bool ad_was_updated = false;
 	{
 		const uint64_t need = ad_bits_needed(type, false);
 		if ((pte & need) != need) {
+			ad_was_updated = true;
 			if (!adue_enabled(regs, virt_access) || leaf_pte_addr == 0
 			    || !mem.is_backed(leaf_pte_addr, PTESIZE)) {
 				cause = fault_cause(type);
@@ -956,6 +1034,17 @@ bool mmu_translate(Registers &regs, Memory &mem, uint64_t vaddr, AccessType type
 			tval = vaddr;
 			return false;
 		}
+	}
+
+	// Cache it, unless this walk was the one that set A or D. A hit skips
+	// the walk, and the walk is where that update happens -- so caching a
+	// translation that needed one would mean the next access to the page
+	// silently failed to set a bit the architecture says it must. The
+	// access after this one finds A and D already set and is cached then,
+	// which is the access that actually repeats.
+	if (tlb_eligible && !ad_was_updated) {
+		tlb[tlb_i].key = tlb_k;
+		tlb[tlb_i].ppn = paddr & ~0xFFFull;
 	}
 	return true;
 }

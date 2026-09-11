@@ -83,5 +83,11 @@ void RiscvCore::exec_SVINVAL(const DecodedInstruction &instr, Registers &regs, M
 		return;
 	}
 
+	// SINVAL.VMA invalidates translations, so it drops the TLB for the
+	// same reason SFENCE.VMA does. The two ordering instructions
+	// (SFENCE.W.INVAL, SFENCE.INVAL.IR) name no address and invalidate
+	// nothing, so they are left alone -- flushing on them would be
+	// harmless but would say something untrue about what they mean.
+	if (instr.funct7 == 0b0001011) mmu_tlb_flush();
 	regs.set_pc(regs.get_pc() + instr.length);
 }

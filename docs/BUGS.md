@@ -303,6 +303,7 @@ of console output (`2667bf1`, re-verified in `936df17`).
 146. [`mstatus.TSR` was stored and never consulted](#bug146)
 147. [The envcfg registers were a blacklist where they should be a whitelist](#bug147)
 148. [virtio-blk's file offsets were 32 bits wide](#bug148)
+149. [Not a bug: the missing TLB, and what it cost](#bug149)
 
 <a id="part-vii"></a>
 ### Part VII — Cross-cutting
@@ -4688,7 +4689,7 @@ yet clean." See [What remains](#remains).
 <a id="patterns"></a>
 ## Recurring patterns
 
-Reading 148 bugs in order, the same small number of mechanisms account for
+Reading 149 bugs in order, the same small number of mechanisms account for
 nearly all of them. They are listed here in rough order of how much they
 cost.
 
@@ -6402,3 +6403,70 @@ the same line of reasoning, and only the loud one was reachable with the
 images in use. Finding the first is what made anyone look at the second,
 which is an argument for chasing a bug to its cause rather than to its
 symptom.
+
+### 149. Not a bug: the missing TLB, and what it cost
+<a id="bug149"></a>
+
+This one is here because the reasoning that left it out was written down,
+turned out to be right at the time, and expired without anyone noticing.
+
+`mmu.hpp` said translation was "stateless on purpose (no TLB) -- every call
+re-walks the page table directly out of guest RAM via `mem`, which is simple
+to get right and cheap enough for now; only worth revisiting if it's an
+actual measured bottleneck once something heavier than Doom is running".
+
+Every clause of that is correct. Statelessness *is* simpler to get right: no
+cache means no invalidation, which is why `SFENCE.VMA`, `SINVAL.VMA` and
+`fence.i` could all be honest no-ops, and why several entries in this
+document about fences are about privilege checks rather than about
+flushing. And Doom does not stress it: it runs bare-metal with `satp` at
+zero, so it never walks a page table at all.
+
+Then something heavier turned up. Booting Linux measures **1.67 MIPS** --
+206 million instructions in 123 seconds -- and building an Ubuntu root
+filesystem on this machine is a multi-hour job, almost all of it re-walking
+the same handful of pages. With Sv39 every fetch and every load or store was
+three dependent reads out of guest RAM before the access itself, and an
+instruction that crosses into a second halfword pays for two translations.
+
+A 4096-entry direct-mapped TLB takes it to **4.24 MIPS**, and the guest's
+own clock reports the identical instruction count either way -- 0.206266
+seconds of guest time before and after -- which is the first evidence that
+nothing about what executed has changed.
+
+**What makes it safe is what it refuses to cache.** The temptation is to
+cache every translation; the design caches four narrow cases out of many,
+and each exclusion removes a way to be wrong:
+
+* **Faults are never cached**, so a mapping that appears later is seen at
+  once.
+* **Two-stage translation is never cached** -- no VS-mode, no `hlv`/`hsv`,
+  nothing under H. That has a second set of tables and a second set of
+  fences, none of it modelled here, and excluding it means the hypervisor
+  suite still exercises the code it was written against.
+* **M-mode is never cached**, which is trivial because M-mode does not
+  translate.
+* **A translation whose walk set A or D is never cached.** This is the
+  subtle one. A hit skips the walk, and the walk is where the accessed and
+  dirty bits get set -- so caching a translation that needed an update would
+  mean the *next* access silently failed to set a bit the architecture
+  requires. Only walks that found A (and D, for anything that writes)
+  already set are eligible, which means the second touch of a page is the
+  one that gets cached. That is exactly the access that repeats.
+
+The key carries everything else that changes the answer for one address:
+the privilege it is made at, the access type, and SUM and MXR. Anything not
+in the key must flush, and the flush list is short by design -- `satp`,
+`vsatp` and `hgatp` writes, the fences, and an `envcfg` write, since
+`PBMTE` decides whether a nonzero memory-type field faults and a cached
+entry was validated under the old setting.
+
+`SFENCE.VMA` and `SINVAL.VMA` drop the whole table rather than the address
+or ASID the operands name. Invalidating more than asked is always permitted,
+and it keeps the argument for correctness down to one sentence instead of a
+table.
+
+**Evidence.** 663/663 arch-test, 43/43 damo, 377/377 riscv-tests, 3042/3042
+riscv-vector-tests, 19/19 differential -- every suite unchanged, and Linux
+still boots. The suites are what made this worth attempting at all: an
+optimisation to the MMU is exactly the change you do not make without them.

@@ -48,6 +48,16 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[3]
 
+# Which binary to test. Overridable so a candidate build can be put through
+# the suites while the normal one is busy -- `make OUT=riscv_doom_dev.exe`
+# and DOOMV_BIN=riscv_doom_dev.exe -- rather than having to swap the file
+# under a running emulator.
+def _dut() -> str:
+    import os
+    return str(ROOT / os.environ.get("DOOMV_BIN", "riscv_doom.exe"))
+
+
+
 sys.path.insert(0, str(HERE.parent / "archtest"))
 from archtest import (elf_symbols, read_sail_sig, read_doomv_sig,  # noqa: E402
                       acquire_lock, MARCH)
@@ -150,7 +160,7 @@ def doomv_run(elf: Path, syms: dict, timeout: int):
     # -nogui: no SDL window, and the process exits when the guest stops
     # instead of sitting in a render loop. That turns a 60-second
     # kill-on-timeout into a sub-second run that returns an exit code.
-    cmd = [str(ROOT / "riscv_doom.exe"), "-nogui",
+    cmd = [_dut(), "-nogui",
            str(ROOT / "tools" / "doom" / "doombuild" / "DOOM1.WAD"),
            str(elf), "-march=" + SUITE_MARCH,
            "-tohost={:x}".format(syms["tohost"])]

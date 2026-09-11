@@ -144,7 +144,7 @@ for t in "${TESTS[@]}"; do
 	  # loop until the timeout expired, so every one of these suites cost
 	  # its full 180 seconds whether it passed or not. The timeout stays
 	  # as the backstop for a test that never reaches the halt address.
-	  timeout 180 ./riscv_doom.exe -ng tools/doom/doombuild/DOOM1.WAD \
+	  timeout 180 "./${DOOMV_BIN:-riscv_doom.exe}" -ng tools/doom/doombuild/DOOM1.WAD \
 		"tools/verification/tests/differential/vector/$t.elf" -march="$(march_for "$t")" \
 		-sig="$BEG:$END" -break="0x$HALT" >/dev/null 2>&1 )
 

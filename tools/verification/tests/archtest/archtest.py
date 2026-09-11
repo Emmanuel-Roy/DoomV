@@ -34,6 +34,16 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[3]
+
+# Which binary to test. Overridable so a candidate build can be put through
+# the suites while the normal one is busy -- `make OUT=riscv_doom_dev.exe`
+# and DOOMV_BIN=riscv_doom_dev.exe -- rather than having to swap the file
+# under a running emulator.
+def _dut() -> str:
+    import os
+    return str(ROOT / os.environ.get("DOOMV_BIN", "riscv_doom.exe"))
+
+
 CONFIG = "sail-RVA23S64"
 
 # DoomV's -march resets every extension it does not name, so the profile has
@@ -147,7 +157,7 @@ def run_one(elf: Path, sail_sig: Path, outdir: Path, keep: bool, timeout: int) -
 
     siglog = ROOT / "signature.log"
     cmd = [
-        str(ROOT / "riscv_doom.exe"), "-nogui",
+        _dut(), "-nogui",
         str(ROOT / "tools" / "doom" / "doombuild" / "DOOM1.WAD"),
         str(elf),
         "-march=" + MARCH,

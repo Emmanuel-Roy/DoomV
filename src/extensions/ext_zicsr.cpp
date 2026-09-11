@@ -458,6 +458,9 @@ uint64_t compute_misa()
 // satp.MODE=0xa (Sv57) already active.
 void write_satp_warl(Registers &regs, uint16_t csr, uint64_t value)
 {
+	// The root of translation just moved, so every cached translation
+	// describes a page table that is no longer the one in force.
+	mmu_tlb_flush();
 	// 0 (Bare), 8 (Sv39), 9 (Sv48) and 10 (Sv57) are all implemented now,
 	// so all four stick. Sv48 and Sv57 were rejected here for as long as
 	// the walk only knew three levels -- rejecting them was the right
@@ -487,6 +490,9 @@ void write_satp(Registers &regs, uint64_t value)
 // 16KiB-aligned, not 4KiB, because the top level is four pages wide.
 void write_hgatp_warl(Registers &regs, uint64_t value)
 {
+	// The root of translation just moved, so every cached translation
+	// describes a page table that is no longer the one in force.
+	mmu_tlb_flush();
 	uint64_t mode = value >> 60;
 	if (mode != 0 && mode != 8 && mode != 9 && mode != 10) return;
 	regs.write_csr(hyp::CSR_HGATP_ADDR, value & ~0x3ull);
@@ -1532,6 +1538,12 @@ void RiscvCore::exec_32ZICSR(const DecodedInstruction &instr, Registers &regs, M
 				raise_illegal_instruction(regs, instr.raw);
 				return;
 			}
+			// The fence now has something to do. This drops every cached
+			// translation rather than the one address or ASID the operands
+			// name -- invalidating more than asked is always permitted, and
+			// it keeps the argument for the cache being correct down to one
+			// sentence instead of a table.
+			mmu_tlb_flush();
 			regs.set_pc(pc + instr.length);
 			return;
 		}
@@ -2017,6 +2029,11 @@ void RiscvCore::exec_32ZICSR(const DecodedInstruction &instr, Registers &regs, M
 
 	// CBIE is WARL in all three envcfg registers, and henvcfg additionally
 	// cannot set a bit menvcfg has cleared -- see henvcfg_mask.
+	// An envcfg write can change whether an already-translated page
+	// faults -- PBMTE decides whether a nonzero memory-type field is
+	// legal -- and a cached entry was validated under the old setting.
+	if (csr == CSR_MENVCFG || csr == 0x10A || (Extensions.H && csr == 0x60A))
+		mmu_tlb_flush();
 	if (csr == CSR_MENVCFG || csr == 0x10A || (Extensions.H && csr == 0x60A))
 		updated = cbie_warl(updated, old);
 	if (Extensions.H && csr == 0x60A)
