@@ -21,9 +21,19 @@ IMG="${1:-$ROOT/ubuntu.img}"
 LOG="${2:-$ROOT/ubuntu-stage2.log}"
 DTB="$HERE/stage2.dtb"
 
+# Prefer scripts/build_linux.sh's output over the older copies committed
+# under tools/linux/. They are not interchangeable: the committed kernel
+# predates CONFIG_FB_SIMPLE, so booting it gives "Console: colour dummy
+# device 80x25" and a window that stays black through a perfectly good
+# boot -- which is exactly the wrong-kernel bug this comment exists to
+# stop the next person hitting.
+IMAGES="$ROOT/build/linux"
+KERNEL="$IMAGES/Image"; [ -f "$KERNEL" ] || KERNEL="$ROOT/tools/linux/linux/Image"
+SBI="$IMAGES/fw_jump.elf"; [ -f "$SBI" ] || SBI="$ROOT/tools/linux/opensbi/fw_jump.elf"
+
 [ -f "$IMG" ] || { echo "error: $IMG not found -- run mkrootfs.sh first." >&2; exit 1; }
 [ -x "$ROOT/riscv_doom.exe" ] || { echo "error: build riscv_doom.exe first (make)." >&2; exit 1; }
-for f in "$ROOT/tools/linux/opensbi/fw_jump.elf" "$ROOT/tools/linux/linux/Image"; do
+for f in "$SBI" "$KERNEL"; do
 	[ -f "$f" ] || { echo "error: $f missing -- see scripts/build_linux.sh." >&2; exit 1; }
 done
 
@@ -60,8 +70,8 @@ echo "   log: $LOG"
 # -ng: no window. There is nothing to look at -- the interesting output is
 # dpkg's, and it comes out of the console into the log.
 "$ROOT/riscv_doom.exe" -ng \
-	-opensbi="$ROOT/tools/linux/opensbi/fw_jump.elf" \
-	-kernel="$ROOT/tools/linux/linux/Image" \
+	-opensbi="$SBI" \
+	-kernel="$KERNEL" \
 	-dtb="$DTB" -disk="$IMG" > "$LOG" 2>&1 || true
 
 echo

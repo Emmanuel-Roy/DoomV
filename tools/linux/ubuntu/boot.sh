@@ -16,6 +16,16 @@ IMG="${1:-$ROOT/ubuntu.img}"
 shift || true
 DTB="$HERE/ubuntu.dtb"
 
+# Prefer scripts/build_linux.sh's output over the older copies committed
+# under tools/linux/. They are not interchangeable: the committed kernel
+# predates CONFIG_FB_SIMPLE, so booting it gives "Console: colour dummy
+# device 80x25" and a window that stays black through a perfectly good
+# boot -- which is exactly the wrong-kernel bug this comment exists to
+# stop the next person hitting.
+IMAGES="$ROOT/build/linux"
+KERNEL="$IMAGES/Image"; [ -f "$KERNEL" ] || KERNEL="$ROOT/tools/linux/linux/Image"
+SBI="$IMAGES/fw_jump.elf"; [ -f "$SBI" ] || SBI="$ROOT/tools/linux/opensbi/fw_jump.elf"
+
 [ -f "$IMG" ] || { echo "error: $IMG not found -- run mkrootfs.sh and boot-stage2.sh." >&2; exit 1; }
 [ -x "$ROOT/riscv_doom.exe" ] || { echo "error: build riscv_doom.exe first (make)." >&2; exit 1; }
 
@@ -44,6 +54,6 @@ MSYS2_ARG_CONV_EXCL='*' wsl -d Ubuntu -u root -- dtc -I dts -O dtb \
 [ -s "$DTB" ] || { echo "error: dtc produced no $DTB" >&2; exit 1; }
 
 exec "$ROOT/riscv_doom.exe" \
-	-opensbi="$ROOT/tools/linux/opensbi/fw_jump.elf" \
-	-kernel="$ROOT/tools/linux/linux/Image" \
+	-opensbi="$SBI" \
+	-kernel="$KERNEL" \
 	-dtb="$DTB" -disk="$IMG" "$@"
