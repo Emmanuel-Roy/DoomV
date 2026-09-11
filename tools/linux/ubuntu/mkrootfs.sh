@@ -217,12 +217,18 @@ if [ "$rc" = 0 ]; then
 	# over and then nobody writes to it.
 	systemctl enable getty@tty1.service 2>/dev/null || true
 	rm -f /doomv-stage2
+fi
+
+# sync before the marker, not after. The host watches the log for this line
+# and ends the run on it, so it has to mean "the image is on disk" rather
+# than "the script got this far" -- otherwise the window between the two is
+# a window in which dpkg's work is still in the guest's page cache.
+sync
+if [ "$rc" = 0 ]; then
 	echo "=== DOOMV-STAGE2-OK ==="
 else
 	echo "=== DOOMV-STAGE2-FAILED ==="
 fi
-
-sync
 # /proc stays mounted: the poweroff below goes through
 # /proc/sysrq-trigger, and unmounting it first is how you get a script that
 # cannot turn the machine off.
@@ -239,10 +245,19 @@ umount /sys 2>/dev/null || true
 # `echo o` is sysrq's power-off, handled in the kernel with no userspace
 # involved, and it reaches DoomV's sifive,test0 device through SBI SRST.
 echo o > /proc/sysrq-trigger 2>/dev/null || true
-# And the fallbacks, in case CONFIG_MAGIC_SYSRQ is off.
+# And the fallbacks, in case CONFIG_MAGIC_SYSRQ is off -- which it is in
+# riscv defconfig, and was for the kernel the first build ran on.
+# scripts/build_linux.sh enables it now, but these cost nothing and the
+# image outlives any one kernel.
 poweroff -f 2>/dev/null || true
 reboot -f 2>/dev/null || true
 echo "=== DOOMV-STAGE2-POWEROFF-FAILED ==="
+# Reaching here is not a failure of the build -- the marker above already
+# said the image is finished and synced, and boot-stage2.sh ends the run
+# from the host on that marker. It only means the guest could not turn
+# itself off, so park and wait to be stopped. Long sleeps, because guest
+# time here is retired instructions: one `sleep 60` is hours of real time,
+# which is exactly what is wanted for a loop nobody should be spinning in.
 while true; do sleep 60; done
 STAGE2
 chmod 755 "$W/mnt/doomv-stage2"

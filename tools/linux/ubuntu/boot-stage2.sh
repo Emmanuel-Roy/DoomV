@@ -69,10 +69,43 @@ echo "== booting DoomV to configure the image (this is the slow part)"
 echo "   log: $LOG"
 # -ng: no window. There is nothing to look at -- the interesting output is
 # dpkg's, and it comes out of the console into the log.
+#
+# Run it in the background and end the run from out here on a marker, rather
+# than waiting for the emulator to exit. The guest does try to power itself
+# off through SBI SRST when it finishes, but that depends on the kernel: it
+# goes through /proc/sysrq-trigger, riscv defconfig leaves CONFIG_MAGIC_SYSRQ
+# off, and the fallbacks in the stage-2 script are systemd's poweroff, which
+# wants a running systemd there is not. scripts/build_linux.sh now enables
+# sysrq -- but a four-hour build should not hinge on which kernel happens to
+# be in build/linux, so the host watches for the marker and ends it either
+# way. That also makes the exit status mean "stage 2 finished", not "the
+# emulator stopped".
 "$ROOT/riscv_doom.exe" -ng \
 	-opensbi="$SBI" \
 	-kernel="$KERNEL" \
-	-dtb="$DTB" -disk="$IMG" > "$LOG" 2>&1 || true
+	-dtb="$DTB" -disk="$IMG" > "$LOG" 2>&1 &
+pid=$!
+
+# Cap it at eight hours. That is a guess with a lot of headroom -- the first
+# successful build took about four -- and the point of the cap is only to stop
+# a wedged run from sitting there forever, not to time anything.
+for _ in $(seq 1 28800); do
+	grep -aq "DOOMV-STAGE2-OK\|DOOMV-STAGE2-FAILED" "$LOG" 2>/dev/null && break
+	kill -0 "$pid" 2>/dev/null || break
+	sleep 1
+done
+# The marker is printed after the guest's `sync`, so the image is already on
+# disk by the time this loop breaks -- every virtio-blk write is fflush'd as
+# it is issued. Still give the guest a couple of minutes to power itself off
+# properly rather than being killed mid-instruction, since it is trying to.
+if grep -aq "DOOMV-STAGE2-OK" "$LOG" 2>/dev/null; then
+	for _ in $(seq 1 180); do
+		kill -0 "$pid" 2>/dev/null || break
+		sleep 1
+	done
+fi
+kill "$pid" 2>/dev/null || true
+wait "$pid" 2>/dev/null || true
 
 echo
 if grep -q "DOOMV-STAGE2-OK" "$LOG"; then

@@ -46,6 +46,9 @@ public:
 	// conformance run has no use for a window, and the window is the only
 	// reason a finished test has to be killed from outside.
 	void set_headless() { headless = true; }
+	// Hold the headless stdin feed until the guest's console has printed
+	// this string. See console_stdin_loop.
+	void set_console_expect(const char *needle) { memory.get_uart().expect(needle); }
 
 	// Attach a raw image as the virtio-blk backing store. Returns false if
 	// it cannot be opened, which main reports rather than booting a machine
@@ -128,6 +131,10 @@ private:
 	// command typing (letters/digits/space/enter/backspace/tab/common
 	// QWERTY-shifted punctuation), not a full keyboard-layout engine.
 	uint8_t translate_console_key(uint32_t sdl_keysym) const;
+	// Headless stands in for the keyboard with stdin -- see the comment at
+	// the definition for why a guest console needs to be reachable from a
+	// pipe at all.
+	void console_stdin_loop();
 
 	// CPU execution runs on its own thread so rendering isn't blocked on
 	// (or blocking) instruction bursts. Only this thread ever touches

@@ -51,6 +51,16 @@ void Uart::write(uint64_t offset, uint8_t val)
 	case UART_RBR_THR:
 		std::putchar(val);
 		std::fflush(stdout);
+		if (!expect_hit) {
+			// Plain incremental match. Restarting at 0 rather than doing
+			// the KMP fallback costs nothing here and cannot miss a
+			// prompt: console prompts are not self-overlapping strings.
+			if (val == (uint8_t)expect_needle[expect_pos]) {
+				if (++expect_pos == expect_needle.size()) expect_hit = true;
+			} else {
+				expect_pos = (val == (uint8_t)expect_needle[0]) ? 1 : 0;
+			}
+		}
 		break;
 	case UART_IER: ier = val; break;
 	case UART_FCR: fcr = val; break;
@@ -61,11 +71,24 @@ void Uart::write(uint64_t offset, uint8_t val)
 	}
 }
 
+void Uart::expect(const char *needle)
+{
+	expect_needle = needle ? needle : "";
+	expect_pos = 0;
+	expect_hit = expect_needle.empty();
+}
+
 void Uart::push_rx(uint8_t byte)
+{
+	(void)try_push_rx(byte);
+}
+
+bool Uart::try_push_rx(uint8_t byte)
 {
 	std::lock_guard<std::mutex> lock(rx_mutex);
 	int next = (rx_tail + 1) % RX_RING_SIZE;
-	if (next == rx_head) return; // ring full, drop the byte
+	if (next == rx_head) return false; // ring full
 	rx_ring[rx_tail] = byte;
 	rx_tail = next;
+	return true;
 }

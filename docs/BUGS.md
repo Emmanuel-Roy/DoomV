@@ -305,6 +305,14 @@ of console output (`2667bf1`, re-verified in `936df17`).
 148. [virtio-blk's file offsets were 32 bits wide](#bug148)
 149. [Not a bug: the missing TLB, and what it cost](#bug149)
 
+<a id="part-xi-toc"></a>
+### Part XI — Running a distribution, and the three ways a guest could not end its own run (2026-09-11)
+
+150. [The poweroff register was implemented, acknowledged, and never read](#bug150)
+151. [A headless guest console was write-only](#bug151)
+152. [The fix for the poweroff was written for a kernel that could not run it](#bug152)
+153. [Not a bug: a screenshot is not evidence](#bug153)
+
 <a id="part-vii"></a>
 ### Part VII — Cross-cutting
 
@@ -6470,3 +6478,230 @@ table.
 riscv-vector-tests, 19/19 differential -- every suite unchanged, and Linux
 still boots. The suites are what made this worth attempting at all: an
 optimisation to the MMU is exactly the change you do not make without them.
+
+## Part XI — Running a distribution, and the three ways a guest could not end its own run
+
+Part X was the last of the conformance work. This part comes from a
+different kind of testing: building and booting Ubuntu 24.04, which runs
+riscv64 `dpkg`, its maintainer scripts, and the perl and shell those fork,
+for about four hours. No reference model is involved. It either configures a
+hundred packages or it does not.
+
+It found nothing wrong with the ISA. What it found was that the *machine*
+was missing three things, and all three were the same thing wearing
+different clothes: a guest running an unattended job had no way to stop.
+Each one on its own looks like a footnote. Together they are the difference
+between a build you can run and a build you have to sit and watch.
+
+The other lesson is about what counts as evidence. Two of these three were
+diagnosed by *reading a configuration file* and one by grepping the kernel
+binary -- after a session of reasoning confidently about code that could not
+have worked. The measurement was available the whole time and took a minute.
+
+### 150. The poweroff register was implemented, acknowledged, and never read
+<a id="bug150"></a>
+
+**Symptom.** A guest powers off. The kernel says so:
+
+```
+[    0.296394] sysrq: Power Off
+[    0.299056] reboot: Power down
+[    1.341319] Unable to poweroff system
+```
+
+...and the emulator keeps running. The four-hour Ubuntu build reached its
+completion marker and then sat in the sleep loop its own script falls into
+when poweroff fails, forever, with the work already done.
+
+**Root cause.** `Memory` has had the `sifive,test0` device since the device
+tree got a `test@100000` node, and it does the right thing with a write:
+
+```cpp
+if (addr >= TEST_BASE && addr < TEST_BASE + TEST_SIZE) {
+        if (cmd == 0x5555 || cmd == 0x7777 || cmd == 0x3333) poweroff = true;
+```
+
+and `Memory::poweroff_requested()` returns that flag. Nothing anywhere
+called it. `grep -rn poweroff_requested src/` returned exactly one line: the
+definition.
+
+The device had been added for OpenSBI's benefit rather than for the
+emulator's -- OpenSBI's generic platform implements SBI SRST by *finding*
+that compatible string in the device tree, so without the node a guest's
+`poweroff` returns "not supported". That is a real requirement and it was
+met, which is precisely why the other half was easy to miss: the node made
+the kernel's poweroff path work, right up to the last step, and the last
+step was a flag being set for nobody.
+
+The kernel's "Unable to poweroff system" is the giveaway in hindsight. It
+does not mean the write failed; it means the write returned. A power-off
+register is the one MMIO store in the machine that is not supposed to have
+a next instruction.
+
+**Fix.** `cpu_loop` reads the flag once per 200000-instruction burst and
+ends the run. Once per burst rather than once per instruction because the
+guest is in its poweroff path by then and has nothing left to do, so the
+overrun is free and the hot path stays clean. In windowed mode the render
+loop closes the window on the same flag -- specifically on that flag and
+not on `run_finished`, which is also set by a debugger halt and by a test
+finishing, both of which want the window to stay up so the dashboard can be
+read and F9 can resume. A machine that has been switched off is the one
+case where there is nothing left to look at.
+
+**Evidence.**
+
+```
+$ printf 'mount -t proc proc /proc\necho o > /proc/sysrq-trigger\n' \
+    | ./riscv_doom.exe -ng -expect='~ # ' -kernel=build/linux/Image ...
+~ # echo o > /proc/sysrq-trigger
+[    0.296394] sysrq: Power Off
+~ # [    0.299056] reboot: Power down
+guest requested poweroff
+$ echo $?
+0
+```
+
+Before the fix the same command exited 124 -- `timeout` killing it after
+five minutes.
+
+### 151. A headless guest console was write-only
+<a id="bug151"></a>
+
+**Symptom.** Not a wrong answer; a thing that could not be done. A `-ng`
+Linux boot could be read and never answered. The UART's receive ring was
+fed from exactly one place -- the SDL keyboard handler in the render loop --
+so every interaction with a guest past the kernel log needed a window and a
+person. Logging in, running a command and reading what it printed, telling a
+guest to shut down: all of it manual, none of it scriptable, and therefore
+none of it in any suite.
+
+That is why 150 survived as long as it did. The poweroff path is reachable
+from a shell in one line, and there was no way to type that line except by
+hand.
+
+**Fix.** Two pieces, and the second is the one that matters.
+
+`-ng` now runs a thread feeding host stdin into the receive ring, so a guest
+is drivable from a pipe. Newlines are translated to CR on the way in: a pipe
+carries LF, a terminal sends CR when you press return, and the kernel's line
+discipline is set up for a terminal -- `ICRNL` turns CR into LF on input and
+nothing turns LF into anything, so a raw LF is typed and never runs. The
+feed blocks until each byte fits rather than dropping on a full ring, which
+also paces it to whatever rate the guest is draining at. Dropping stays the
+right behaviour for the keyboard path, where a human cannot outrun sixteen
+bytes and stalling the render thread would be the wrong answer.
+
+Then `-expect=<text>`, which is not a convenience. The first attempt sent
+its command at reset and the guest ran `cho o > /proc/sysrq-trigger`:
+
+```
+~ # cho o > /proc/sysrq-trigger
+/bin/sh: cho: not found
+```
+
+Input sent before the guest's tty exists is not queued anywhere. It is read
+out of the ring by OpenSBI, handed to a console with no line discipline yet,
+and dropped. `-expect` holds the feed until the guest's *transmit* side has
+printed a given string, which `Uart` matches incrementally because the guest
+writes one character per store and any needle straddles many writes. The
+alternative is a delay, and a delay is a guess that has to be re-guessed
+every time the guest gets slower or faster.
+
+### 152. The fix for the poweroff was written for a kernel that could not run it
+<a id="bug152"></a>
+
+**Symptom.** The stage-2 build script ends with
+
+```sh
+echo o > /proc/sysrq-trigger 2>/dev/null || true
+```
+
+on the reasoning -- correct as far as it goes -- that `poweroff` in an
+Ubuntu rootfs is systemd's, that systemd's `poweroff` wants to talk to a
+running systemd, and that there is none when the stage-2 script is itself
+PID 1. sysrq is handled in the kernel with no userspace involved, so it is
+the one thing that works from there.
+
+It would have worked on a kernel with sysrq. This one had:
+
+```
+$ grep MAGIC_SYSRQ .../linux-*/.config
+# CONFIG_MAGIC_SYSRQ is not set
+```
+
+riscv `defconfig` leaves it off. So `/proc/sysrq-trigger` did not exist, the
+redirect failed into `/dev/null`, and the `|| true` swallowed it -- and the
+two fallbacks after it are systemd's `poweroff` and `reboot`, which is
+exactly what had failed in the first place. A fix that changed nothing, with
+its own failure suppressed twice.
+
+**Fix.** `--enable MAGIC_SYSRQ` in `scripts/build_linux.sh`, next to the
+`FB_SIMPLE` line and for the same reason: the feature the machine needs is
+one riscv defconfig does not build.
+
+And then the same thing again from the host side, because a four-hour build
+should not hinge on which kernel happens to be in `build/linux`:
+`boot-stage2.sh` runs the emulator in the background and ends the run itself
+when the completion marker appears in the log. The guest still tries to
+power itself off and now can, but the build no longer depends on it. That
+also makes the script's exit status mean "stage 2 finished" rather than "the
+emulator stopped", which are not the same claim.
+
+One related change in the guest script: the marker is now printed *after*
+`sync`, not before. The host ends the run on that marker, so it has to mean
+"the image is on disk" and not "the script got this far" -- otherwise the
+gap between the two is a window in which dpkg's work is still in the guest's
+page cache and the emulator is being killed.
+
+**Evidence.** `sysrq-trigger` is in the rebuilt kernel:
+
+```
+$ strings -a build/linux/Image | grep -c sysrq-trigger
+1
+```
+
+and the end-to-end chain is [150](#bug150)'s evidence block: sysrq to SBI
+SRST to `sifive,test0` to an emulator that exits 0.
+
+### 153. Not a bug: a screenshot is not evidence
+<a id="bug153"></a>
+
+Worth writing down because it cost more than any bug in this part, and
+because the mistake is not about emulators at all.
+
+The framebuffer console was finished and the question was whether Ubuntu was
+drawing on it. I took a screenshot. It was black. I then spent two changes
+-- a `getty@tty1` fix and a kernel-path fix, both of which turned out to be
+real and necessary for other reasons -- reasoning about *why* the screen was
+black, without ever having established *that* it was.
+
+Screenshots of this window are not evidence, twice over.
+`CopyFromScreen` copies a rectangle of the screen, so it captures whatever
+is on top of that rectangle -- one of them captured a browser playing
+minesweeper. `PrintWindow` asks the window to draw itself and returns black
+for GPU-composited SDL content, which is what SDL2 renders by default. So
+the "blank screen" was consistent with a perfectly good framebuffer and with
+no framebuffer at all, which makes it not an observation.
+
+`-fbdump=<path>` writes the framebuffer out of `Memory::linux_framebuffer()`
+itself, as a PPM plus a count of non-black pixels. It cannot be the wrong
+window and it cannot be composited away. The Ubuntu boot, which had produced
+the black screenshot:
+
+```
+framebuffer: 100023 of 786432 pixels non-black, written to fbu.ppm
+```
+
+and at the login prompt, rendered as text:
+
+```
+Ubuntu 24.04 LTS doomv tty1
+
+doomv login: _
+```
+
+The pixel count is the part worth keeping. A cleared console with a login
+prompt on it lights about a thousand of 786432 pixels, and two lines of 8x16
+text disappear entirely when a 1024x768 image is scaled down to glance at.
+The bounding box and the count are the measurement; the thumbnail is not.
+

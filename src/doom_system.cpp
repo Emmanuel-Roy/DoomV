@@ -399,7 +399,74 @@ void DoomSystem::cpu_loop()
 			step();
 		}
 		publish_snapshot();
+
+		// The guest asking to be turned off. Memory has recorded writes to
+		// the sifive,test0 register since that device was added -- for
+		// OpenSBI's benefit, which needs the compatible string to implement
+		// SBI SRST at all -- but nothing ever read the flag back, so the
+		// write was acknowledged and ignored. The visible symptom is the
+		// kernel printing "reboot: Power down" and then, a second later,
+		// "Unable to poweroff system", with the emulator carrying on: a
+		// guest that cannot end its own run, which is the one thing the
+		// device exists to make possible.
+		//
+		// Checked once per burst rather than per instruction. The guest is
+		// in its poweroff path by then and has nothing left to do, so the
+		// overrun costs nothing and a per-step check would sit on the hot
+		// path.
+		if (memory.poweroff_requested()) {
+			dump_framebuffer();
+			std::cout << "guest requested poweroff" << std::endl;
+			run_finished = true;
+			return;
+		}
 	}
+}
+
+// Host stdin -> the guest's UART receive ring, for headless runs.
+//
+// The window's keyboard path (translate_console_key, in run()) is the only
+// way anything ever reached the guest console, which meant a -ng boot was
+// write-only: you could read the kernel log and never answer it. That is
+// fine for the test suites, which do not interact, and wrong for everything
+// else -- logging in, running a command and reading what it printed, or
+// telling a guest to power itself off, all of which had to be done by hand
+// in a window. With this, a guest is scriptable from a pipe:
+//
+//   printf 'root\ndoomv\nuname -a\n' | riscv_doom.exe -ng -kernel=...
+//
+// Two details that are not optional:
+//
+// Newline translation. A pipe carries LF; a terminal sends CR when you press
+// return, and the kernel's line discipline is configured for a terminal --
+// ICRNL turns CR into LF on input and nothing turns LF into anything. Feed a
+// raw LF and the shell sees a character it does not treat as end-of-line, so
+// the command is typed and never run.
+//
+// Back-pressure. The ring is 16 bytes and the guest drains it at emulated
+// speed, which is thousands of times slower than a pipe fills it. Dropping on
+// full is right for a keyboard and useless here -- it would silently truncate
+// every line past the first. So this blocks until each byte fits, which also
+// paces the feed to whatever rate the guest is actually consuming at.
+void DoomSystem::console_stdin_loop()
+{
+	// Nothing is sent until the guest has printed whatever -expect asked
+	// for. Without a needle this is already true and the loop starts
+	// immediately, which is right for a guest that is waiting at a prompt
+	// before the emulator even starts reading stdin.
+	while (!run_finished && !memory.get_uart().expect_seen())
+		std::this_thread::sleep_for(std::chrono::milliseconds(1));
+
+	int c;
+	while (!run_finished && (c = std::fgetc(stdin)) != EOF) {
+		const uint8_t byte = (c == '\n') ? (uint8_t)'\r' : (uint8_t)c;
+		while (!run_finished && !memory.get_uart().try_push_rx(byte))
+			std::this_thread::sleep_for(std::chrono::milliseconds(1));
+	}
+	// Deliberately does not end the run on EOF. A script that pipes in a few
+	// commands and closes stdin still wants the guest to keep going and keep
+	// printing; the run ends when the guest ends it, or when whoever started
+	// it does.
 }
 
 void DoomSystem::run()
@@ -418,6 +485,11 @@ void DoomSystem::run()
 	// this the run would sit in the loop below forever with no window,
 	// which is the worst of both worlds.
 	if (headless) {
+		// ...except for the console. Without a window there is no keyboard,
+		// so a headless Linux boot could be watched but never answered --
+		// which leaves anything past a login prompt untestable except by
+		// hand, in a window, by a person. stdin covers that gap.
+		if (linux_mode) std::thread(&DoomSystem::console_stdin_loop, this).detach();
 		while (!run_finished) std::this_thread::sleep_for(std::chrono::milliseconds(1));
 		std::exit(0);
 	}
@@ -448,5 +520,13 @@ void DoomSystem::run()
 			snap = shared_snapshot;
 		}
 		gui.render(snap);
+
+		// Poweroff, specifically -- not run_finished, which is also set by
+		// a debugger halt and by a test finishing, both of which want the
+		// window to stay up so the dashboard can be read and F9 can resume.
+		// A machine that has been switched off is the one case where there
+		// is nothing left to look at. Checked after the render so the last
+		// frame the guest drew is the one on screen.
+		if (memory.poweroff_requested()) break;
 	}
 }

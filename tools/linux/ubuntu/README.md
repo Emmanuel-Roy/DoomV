@@ -62,10 +62,23 @@ makes -- and if it cannot, that is a bug worth finding. Expect it to take a
 long while -- a Linux boot measures about 6.6 MIPS
 (`tools/verification/bench_boot.sh`), and this is a great deal of dpkg.
 
-The guest ends the run itself, through SBI SRST and the `sifive,test0` device
-in the device tree, so stage 2 is unattended. Without that device a guest's
-`poweroff` returns "not supported" and the machine sits at a dead prompt --
-which is why the device exists at all.
+Stage 2 is unattended, and it took three separate fixes to make that true.
+The guest powers itself off through SBI SRST and the `sifive,test0` device in
+the device tree -- without that device a guest's `poweroff` returns "not
+supported" and the machine sits at a dead prompt, which is why the device
+exists at all. But `poweroff` in an Ubuntu rootfs is systemd's and wants to
+talk to a running systemd, which there is not when the stage-2 script is PID
+1, so the script goes through `/proc/sysrq-trigger` instead; that needs
+`CONFIG_MAGIC_SYSRQ`, which riscv `defconfig` leaves off and
+`scripts/build_linux.sh` now enables; and the emulator had to actually *read*
+the register it had been acknowledging writes to. See
+[Part XI of BUGS.md](../../../docs/BUGS.md#part-xi-toc).
+
+`boot-stage2.sh` does not depend on any of that. It runs the emulator in the
+background and ends the run itself when the completion marker appears in the
+log, so a four-hour build does not hinge on which kernel happens to be in
+`build/linux`. The marker is printed after the guest's `sync`, so it means
+"the image is on disk" rather than "the script got this far".
 
 ### Checking out a POSIX tool on Windows breaks it twice
 

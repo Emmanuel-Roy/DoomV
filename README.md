@@ -324,12 +324,43 @@ riscv_doom.exe -opensbi=<f> -kernel=<f> -dtb=<f> -initrd=<f> [options]   # Linux
 | `-dtb=<path>` | Flattened device tree. |
 | `-initrd=<path>` | Initramfs cpio archive. Omit it when booting from `-disk=` -- with an initramfs present the kernel runs that and never mounts the disk. |
 | `-disk=<path>` | Raw disk image for the virtio-blk device. A whole-device filesystem or a partitioned image both work; the kernel finds the partition table itself. |
+| `-fbdump=<path>` | Write the Linux framebuffer to this file as a binary PPM, with a non-black pixel count on stdout. Written when the run stops and periodically while it runs. |
+| `-expect=<text>` | Hold the headless stdin feed until the guest's console prints this string. |
 
 `-ng` is what makes the conformance suites practical. With a window open a
 finished test never exits on its own and has to be killed from outside, so
 every test cost its full timeout whether it passed or not; headless, the
 whole 663-test arch-test run takes about 40 seconds and the 43-group
 hypervisor suite about 10.
+
+### Driving a guest from a pipe
+
+A headless Linux boot reads host stdin into the UART, so a guest is
+scriptable without a window:
+
+```sh
+printf 'mount -t proc proc /proc\necho o > /proc/sysrq-trigger\n' \
+  | riscv_doom.exe -ng -expect='~ # ' \
+      -opensbi=build/linux/fw_jump.elf -kernel=build/linux/Image \
+      -dtb=build/linux/doomv.dtb -initrd=build/linux/initramfs.cpio
+```
+
+`-expect` is the part that is not optional. Anything typed at a guest before
+its tty exists is read out of the UART by OpenSBI, handed to a console with
+no line discipline yet, and dropped -- send at reset and the guest runs
+`cho o > /proc/sysrq-trigger`. Waiting on a prompt the guest has actually
+printed is the only correct fix; a delay is a guess that has to be
+re-guessed every time the guest changes speed.
+
+Newlines are translated to CR on the way in, because that is what pressing
+return sends and `ICRNL` is what the guest's line discipline is expecting.
+Feed a raw LF and the command is typed but never runs.
+
+That example also ends the run: `sifive,test0` is in the device tree, so a
+guest's poweroff reaches the emulator and the process exits 0. That matters
+for anything unattended -- see
+[tools/linux/ubuntu/](tools/linux/ubuntu/README.md), where the build is four
+hours long and the alternative is watching it.
 
 ### The display
 

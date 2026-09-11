@@ -1,6 +1,9 @@
 #pragma once
+#include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <mutex>
+#include <string>
 
 // Minimal 8250/16550-compatible UART -- just enough register behavior for
 // OpenSBI's own driver (tools/linux/opensbi/src/lib/utils/serial/uart8250.c) to
@@ -25,9 +28,31 @@ public:
 	void write(uint64_t offset, uint8_t val);
 
 	void push_rx(uint8_t byte);
+	// Same, but says whether the byte fit. A keyboard wants the dropping
+	// version -- a human cannot outrun a 16-byte ring, and if they could,
+	// stalling the GUI thread would be the wrong answer. A pipe can outrun
+	// it trivially, so the headless stdin feed needs to know and wait.
+	bool try_push_rx(uint8_t byte);
+
+	// Watch the transmit side for a string, so an input feed can wait for
+	// the guest to ask before answering. Input sent before the guest's tty
+	// exists is not queued anywhere -- it is read out of this ring by
+	// OpenSBI, handed to a console that has no line discipline yet, and
+	// dropped -- so a pipe that starts talking at reset loses its first
+	// bytes. Waiting on a prompt is the only correct way to avoid that; a
+	// delay is a guess that gets longer every time the guest gets slower.
+	void expect(const char *needle);
+	bool expect_seen() const { return expect_hit; }
 
 private:
 	static constexpr int RX_RING_SIZE = 16;
+
+	// Matched incrementally against the transmit byte stream, so the
+	// needle is found even when it straddles two writes -- which it always
+	// will, since the guest writes one character per store.
+	std::string expect_needle;
+	size_t expect_pos = 0;
+	std::atomic<bool> expect_hit{true}; // no needle set == already satisfied
 
 	uint8_t rx_ring[RX_RING_SIZE];
 	int rx_head;
