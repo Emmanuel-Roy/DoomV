@@ -28,62 +28,107 @@ Keeping it in its own directory with its own submodule follows the pattern
 the rest of `tools/` already uses: one third-party source pinned per
 component, with DoomV's own build script beside it rather than inside it.
 
-## Building
+## Building, in two stages
 
-Runs inside WSL as root — it needs loop devices, `mkfs.ext4`, `sgdisk` and
-binfmt, none of which exist on the MSYS2 side:
+Stage 1 unpacks; stage 2 configures. The split is not a convenience -- it is
+how cross-architecture bootstrapping works, and it is where the interesting
+decision is.
 
 ```
 git submodule update --init tools/linux/ubuntu/src
-wsl -d Ubuntu -u root -- apt-get install -y qemu-user-static binfmt-support gdisk
+wsl -d Ubuntu -u root -- apt-get install -y gdisk
 wsl -d Ubuntu -u root -- bash /mnt/z/Code/Dev/DoomV/tools/linux/ubuntu/mkrootfs.sh
+tools/linux/ubuntu/boot-stage2.sh
 ```
 
-It downloads from `ports.ubuntu.com` — riscv64 is a *ports* architecture and
-is not on `archive.ubuntu.com` — so it needs network and takes a while.
+**Stage 1** (`mkrootfs.sh`, on the host) runs `debootstrap --foreign`, which
+unpacks the `.debs` and executes nothing from the target architecture. That is
+precisely what makes it possible on an x86 machine. It downloads from
+`ports.ubuntu.com` -- riscv64 is a *ports* architecture and is not on
+`archive.ubuntu.com`.
 
-One Windows-specific trap, handled by the script so it cannot be hit:
-`core.autocrlf=true` is set on this machine, and the parent
-`.gitattributes` deliberately leaves the vendored trees under `tools/*/src`
-alone -- they keep whatever upstream uses. Upstream debootstrap ships no
-`.gitattributes`, so a plain clone here arrives with CRLF endings, and
-debootstrap is POSIX shell:
+**Stage 2** (`boot-stage2.sh`) configures those packages, which means running
+riscv64 `dpkg`, its maintainer scripts, and the perl and shell those fork.
+**DoomV runs it.** The image is booted with `init=/doomv-stage2` and the
+emulator does the work.
+
+The ordinary way to do this is `qemu-user-static` plus binfmt, letting the
+host execute the target's binaries. That is deliberately not what happens
+here, and not because qemu is unavailable: the point of an emulator that
+boots Linux is that it can run the distribution's own tooling. If DoomV can
+configure a hundred Ubuntu packages then it is running real riscv64 userspace
+under real load, which is a far stronger statement than any conformance suite
+makes -- and if it cannot, that is a bug worth finding. Expect it to take a
+long while; DoomV runs around 13 MIPS and this is a great deal of dpkg.
+
+The guest ends the run itself, through SBI SRST and the `sifive,test0` device
+in the device tree, so stage 2 is unattended. Without that device a guest's
+`poweroff` returns "not supported" and the machine sits at a dead prompt --
+which is why the device exists at all.
+
+### Checking out a POSIX tool on Windows breaks it twice
+
+Both of these are handled by the script, and both are worth knowing about
+because they apply to any vendored shell tool, not just this one. The parent
+`.gitattributes` deliberately leaves `tools/*/src` alone -- submodules keep
+whatever upstream uses -- and upstream debootstrap ships no `.gitattributes`
+of its own, so it arrives from a Windows clone damaged in two independent
+ways.
+
+**Line endings.** `core.autocrlf=true` gives every file CRLF, and debootstrap
+is POSIX shell:
 
 ```
 debootstrap: line 2: set: -: invalid option
-debootstrap: line 69: syntax error near unexpected token (a stray CR)
 ```
 
-`mkrootfs.sh` works from a CR-stripped copy in a temp directory rather than
-requiring every checkout to be configured correctly. It is a few hundred KB
-of text, so the copy costs nothing and cannot be forgotten.
+**Symlinks.** Git on Windows cannot create them without developer mode, so it
+writes each one out as a one-line text file containing the target's name. 47
+of debootstrap's 70 suite scripts are symlinks -- `scripts/noble` is the five
+bytes `gutsy` -- so sourcing one runs its target's *name* as a command:
 
-Cross-architecture bootstrapping is two stages for a reason worth knowing:
-stage 1 (`--foreign`) only unpacks, executing nothing from the target
-architecture, which is what makes it possible on an x86 host at all. Stage 2
-runs the maintainer scripts, which are riscv64 binaries, so it needs
-`qemu-user-static` and binfmt. Without them stage 1 still appears to succeed
-and stage 2 fails on the first maintainer script — a confusing place to
-discover a missing dependency, which is why `mkrootfs.sh` checks up front.
+```
+scripts/noble: gutsy: not found
+```
+
+That one is genuinely nasty, because debootstrap has already redirected its
+own output by the time it happens: the visible symptom is an exit status of
+127 and complete silence. Finding it took running debootstrap under `sh -x`
+and reading the last twenty lines of the trace.
+
+`mkrootfs.sh` works from a copy in a temp directory with CRs stripped and the
+symlinks materialised, rather than requiring every checkout to be configured
+correctly.
+
+### Host dependencies debootstrap does not check
+
+`zstd`, in particular. Noble compresses `.deb` payloads with it, a WSL
+install does not ship it, and debootstrap's failure mode is another bare exit
+127 from inside the unpack loop with no indication of which tool was missing.
+`mkrootfs.sh` checks `wget ar gpgv xz zstd` up front and names the package to
+install.
 
 ## Booting
 
 ```
-sed 's|rdinit=/bin/sh|root=/dev/vda1 rootwait rw|' tools/linux/dts/doomv.dts > /tmp/ubuntu.dts
-dtc -I dts -O dtb -o ubuntu.dtb /tmp/ubuntu.dts
-riscv_doom.exe -opensbi=tools/linux/opensbi/fw_jump.elf \
-               -kernel=tools/linux/linux/Image \
-               -dtb=ubuntu.dtb -disk=ubuntu.img
+tools/linux/ubuntu/boot.sh
 ```
 
-Log in as `root` / `doomv`.
+Log in as `root` / `doomv`. That opens a window, and with `FB_SIMPLE` in the
+kernel and the `framebuffer@50000000` node in the device tree the console is
+a real 1024x768 framebuffer rather than a serial log -- Ubuntu being
+*displayed* by the emulator, not merely logged by it. Pass `-ng` for the log
+instead.
 
 Two things not to do:
 
 * **No `-initrd`.** With an initramfs present the kernel runs that instead
-  and never mounts the disk, which looks like success and proves nothing.
-* **No `init=` override.** `init=/bin/sh` gets you a shell much faster and
-  skips systemd entirely, which is the whole point of this image.
+  and never mounts the disk, which looks like a successful boot of nothing.
+  Both scripts strip the `linux,initrd-*` properties rather than leaving them
+  pointing at a stale address, because a `/chosen` that claims an initramfs
+  that was never loaded is how you get a kernel unpacking garbage.
+* **No `init=` override** after stage 2. `init=/bin/sh` reaches a shell far
+  faster and skips systemd entirely, which is the whole point of this image.
 
 ## Known constraints
 

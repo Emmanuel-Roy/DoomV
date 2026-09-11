@@ -38,6 +38,14 @@ tools/linux/vmlinux
 /ubuntu.img
 /disk.dtb
 /ubuntu.dtb
+/ubuntu-stage2.log
+# Generated per run from tools/linux/dts/doomv.dts by the Ubuntu boot
+# scripts, which rewrite its bootargs -- never edited by hand.
+/tools/linux/ubuntu/stage2.dts
+/tools/linux/ubuntu/stage2.dtb
+/tools/linux/ubuntu/ubuntu.dts
+/tools/linux/ubuntu/ubuntu.dtb
+/ubuntu.dtb
 
 # BusyBox initramfs build output -- also extensionless-adjacent
 # (.cpio isn't covered by *.bin/*.elf above).

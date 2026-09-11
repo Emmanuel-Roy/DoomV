@@ -1,17 +1,27 @@
 #!/usr/bin/env bash
-# Builds a bootable Ubuntu riscv64 root filesystem as a GPT-partitioned disk
-# image for -disk=, using the debootstrap pinned in src/.
+# Stage 1 of building an Ubuntu riscv64 root filesystem for DoomV: unpack the
+# .debs into a GPT-partitioned disk image. Nothing riscv64 is executed here.
 #
-# This is the distribution counterpart to ../rootfs/, which builds a BusyBox
-# initramfs. The difference is not size -- it is that BusyBox is one static
-# binary exec'd as PID 1, and Ubuntu is systemd plus a package database plus
-# a hundred services, so it exercises cgroups, epoll, signalfd, timerfd,
-# /proc, /sys, the RTC and a great deal more of the kernel than `rdinit=/bin/sh`
-# ever reaches. A machine that boots BusyBox is not thereby known to boot a
-# distribution.
+# Stage 2 -- configuring those packages, which means running riscv64 dpkg,
+# perl and shell -- is done by DoomV itself. See boot-stage2.sh.
 #
-# Runs inside WSL as root -- it needs loop devices, mkfs.ext4, sgdisk and
-# binfmt, none of which exist on the MSYS2 side:
+# The usual way to cross-bootstrap is qemu-user-static plus binfmt, letting
+# the host execute the target's binaries. That is deliberately not what this
+# does, and not because qemu is unavailable: the point of an emulator that
+# boots Linux is that it can run the distribution's own tooling. If DoomV can
+# configure a hundred Ubuntu packages -- dpkg, its maintainer scripts, the
+# perl they invoke, the shell those fork -- then it is running real riscv64
+# userspace under real load, which is a far stronger statement than any test
+# suite makes. And if it cannot, that is a bug worth finding.
+#
+# This is also the distribution counterpart to ../rootfs/, which builds a
+# BusyBox initramfs: BusyBox is one static binary exec'd as PID 1 and asks the
+# kernel for very little, while Ubuntu is systemd plus a package database plus
+# a hundred services. A machine that boots BusyBox is not thereby known to
+# boot a distribution.
+#
+# Runs inside WSL as root -- it needs loop devices, mkfs.ext4 and sgdisk,
+# none of which exist on the MSYS2 side:
 #
 #   wsl -d Ubuntu -u root -- bash /mnt/z/Code/Dev/DoomV/tools/linux/ubuntu/mkrootfs.sh
 #
@@ -20,7 +30,7 @@
 set -e
 
 OUT="${1:-/mnt/z/Code/Dev/DoomV/ubuntu.img}"
-SIZE_MIB="${2:-3072}"
+SIZE_MIB="${2:-4096}"
 SUITE="${SUITE:-noble}"
 MIRROR="${MIRROR:-http://ports.ubuntu.com/ubuntu-ports}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -40,21 +50,18 @@ SRC="$HERE/src"
 for t in sgdisk mkfs.ext4 losetup; do
 	command -v "$t" >/dev/null 2>&1 || { echo "error: $t not found (apt-get install gdisk e2fsprogs util-linux)" >&2; exit 1; }
 done
-
-# The second stage has to execute riscv64 binaries. binfmt_misc plus
-# qemu-user-static is the ordinary way; without it debootstrap's stage 1
-# still unpacks correctly and stage 2 fails on the first maintainer script,
-# which is a confusing place to discover the dependency.
-QEMU=""
-for c in /usr/bin/qemu-riscv64-static /usr/bin/qemu-riscv64; do
-	[ -x "$c" ] && QEMU="$c" && break
+# debootstrap's own dependencies, checked here because it does not check them
+# itself: a missing one surfaces as a bare exit 127 from inside the unpack
+# loop, with no indication of which tool was not found. zstd is the one that
+# actually bites -- noble compresses .deb payloads with it, and a WSL install
+# does not ship it.
+for t in wget ar gpgv xz zstd; do
+	command -v "$t" >/dev/null 2>&1 || {
+		echo "error: $t not found -- debootstrap needs it to unpack .debs." >&2
+		echo "       apt-get install -y wget binutils gpgv xz-utils zstd" >&2
+		exit 1
+	}
 done
-[ -n "$QEMU" ] || {
-	echo "error: no qemu-riscv64 binary found -- the second stage cannot run." >&2
-	echo "       apt-get install -y qemu-user-static binfmt-support" >&2
-	echo "       (and check /proc/sys/fs/binfmt_misc/qemu-riscv64 appears)" >&2
-	exit 1
-}
 
 W="$(mktemp -d)"
 LOOP=""
@@ -76,6 +83,31 @@ DEBOOTSTRAP_DIR="$W/debootstrap-src"
 cp -r "$SRC" "$DEBOOTSTRAP_DIR"
 find "$DEBOOTSTRAP_DIR" -type f -exec sed -i 's/\r$//' {} +
 chmod +x "$DEBOOTSTRAP_DIR/debootstrap"
+
+# And the other half of the same problem: git on Windows cannot create
+# symlinks without developer mode, so it checks each one out as a one-line
+# text file containing the target name. 47 of debootstrap-s 70 suite
+# scripts are symlinks -- scripts/noble is the five bytes "gutsy" -- and
+# sourcing one runs its target name as a command:
+#
+#   scripts/noble: gutsy: not found
+#
+# which debootstrap reports by exiting 127 with no message at all, having
+# already redirected its own output. Materialise them by following the
+# chain until a real script is reached: command substitution strips
+# trailing newlines, so a smuggled symlink has no interior newline and a
+# real script has many, which tells the two apart without guessing sizes.
+for f in "$DEBOOTSTRAP_DIR"/scripts/*; do
+	[ -f "$f" ] || continue
+	hops=0
+	while t="$(cat "$f")"; [ -n "$t" ] \
+	      && [ "$(printf %s "$t" | wc -l)" -eq 0 ] \
+	      && [ -f "$DEBOOTSTRAP_DIR/scripts/$t" ] \
+	      && [ "$hops" -lt 8 ]; do
+		cp "$DEBOOTSTRAP_DIR/scripts/$t" "$f"
+		hops=$((hops + 1))
+	done
+done
 
 cleanup() {
 	mountpoint -q "$W/mnt/proc" && umount "$W/mnt/proc" || true
@@ -103,38 +135,67 @@ mount "$LOOP" "$W/mnt"
 echo "== debootstrap stage 1 ($SUITE/riscv64 from $MIRROR)"
 # --foreign: unpack only. Nothing riscv64 is executed on the host in this
 # stage, which is what makes cross-architecture bootstrapping possible at all.
+# --variant=minbase, because every package unpacked here is a package
+# DoomV has to *configure* in stage 2, at around 13 MIPS. minbase drops the
+# "standard" priority set and leaves the essential ones; systemd is then
+# added back explicitly, since it is the whole point of using a distribution
+# rather than BusyBox. ifupdown and iproute2 are deliberately absent: there
+# is no NIC in this machine, so they would be packages configured slowly to
+# manage hardware that does not exist.
+PACKAGES="${PACKAGES:-systemd,systemd-sysv,udev,nano,less}"
 DEBOOTSTRAP_DIR="$DEBOOTSTRAP_DIR" "$DEBOOTSTRAP_DIR/debootstrap" \
-	--arch=riscv64 --foreign \
-	--include=systemd,systemd-sysv,udev,init,ifupdown,iproute2,nano,less \
+	--arch=riscv64 --foreign --variant=minbase \
+	--include="$PACKAGES" \
 	"$SUITE" "$W/mnt" "$MIRROR"
 
-echo "== debootstrap stage 2 (riscv64 via $QEMU)"
-cp "$QEMU" "$W/mnt/usr/bin/$(basename "$QEMU")"
-mount --bind /proc "$W/mnt/proc"
-mount --bind /sys  "$W/mnt/sys"
-mount --bind /dev  "$W/mnt/dev"
-chroot "$W/mnt" /debootstrap/debootstrap --second-stage
-umount "$W/mnt/dev" "$W/mnt/sys" "$W/mnt/proc"
+echo "== writing the stage-2 script DoomV will run as init"
+# This is PID 1 for exactly one boot, so it cannot assume much: nothing is
+# mounted, no service manager exists, and if it exits the kernel panics on
+# "init died". It mounts what dpkg needs, does the work, and powers the
+# machine off through SBI SRST rather than returning.
+cat > "$W/mnt/doomv-stage2" <<'STAGE2'
+#!/bin/sh
+# Ubuntu's second-stage configuration, run by DoomV as PID 1. Every binary
+# executed from here on is riscv64, interpreted by the emulator.
+set -x
+mount -t proc proc /proc
+mount -t sysfs sys /sys
+mount -t devtmpfs dev /dev 2>/dev/null || true
 
-echo "== configuring for DoomV"
-# Root password. A machine with no console login is a machine you cannot
-# check anything on, and this image never leaves the developer's disk.
-chroot "$W/mnt" /bin/bash -c 'echo "root:doomv" | chpasswd'
-echo doomv > "$W/mnt/etc/hostname"
-cat > "$W/mnt/etc/fstab" <<'FSTAB'
-# DoomV: one virtio-blk device, one partition, mounted by the kernel from
-# root= on the command line. Listed here so remounts and fsck work.
-LABEL=ubunturoot  /  ext4  defaults,noatime  0 1
-FSTAB
-# DoomV's console is the SBI console, which Linux exposes as hvc0.
-# console=hvc0 on the command line is enough for systemd to start a getty
-# on it by itself (serial-getty@hvc0), so no unit file is needed here --
-# but the device has to be in securetty for root to be allowed to log in.
-grep -qx hvc0 "$W/mnt/etc/securetty" 2>/dev/null || echo hvc0 >> "$W/mnt/etc/securetty"
-# Nothing in this machine provides a network, and systemd-networkd-wait-online
-# blocks the boot for two minutes waiting for one.
-chroot "$W/mnt" systemctl disable systemd-networkd-wait-online.service 2>/dev/null || true
-rm -f "$W/mnt/usr/bin/$(basename "$QEMU")"
+echo "=== DOOMV-STAGE2-BEGIN ==="
+/debootstrap/debootstrap --second-stage
+rc=$?
+echo "=== DOOMV-STAGE2-SECOND-STAGE rc=$rc ==="
+
+if [ "$rc" = 0 ]; then
+	# Only worth configuring a system that finished unpacking.
+	echo "root:doomv" | chpasswd
+	echo doomv > /etc/hostname
+	printf 'LABEL=ubunturoot / ext4 defaults,noatime 0 1\n' > /etc/fstab
+	# DoomV's console is the SBI console, which Linux exposes as hvc0; once
+	# the framebuffer binds there is a tty1 as well. Both have to be in
+	# securetty for a root login to be permitted on them.
+	for t in hvc0 tty1; do
+		grep -qx "$t" /etc/securetty 2>/dev/null || echo "$t" >> /etc/securetty
+	done
+	# No NIC in this machine, so this unit would block the boot for two
+	# minutes waiting for a link that never comes up.
+	systemctl disable systemd-networkd-wait-online.service 2>/dev/null || true
+	rm -f /doomv-stage2
+	echo "=== DOOMV-STAGE2-OK ==="
+else
+	echo "=== DOOMV-STAGE2-FAILED ==="
+fi
+
+sync
+umount /proc /sys 2>/dev/null || true
+# SBI SRST, through the sifive,test0 device in the device tree. Without a way
+# for the guest to end the run, an unattended build sits at a dead prompt.
+poweroff -f 2>/dev/null || true
+echo "=== DOOMV-STAGE2-POWEROFF-FAILED ==="
+while true; do sleep 60; done
+STAGE2
+chmod 755 "$W/mnt/doomv-stage2"
 sync
 
 umount "$W/mnt"
@@ -143,13 +204,9 @@ cp "$W/disk.img" "$OUT"
 echo
 echo "wrote $OUT ($(du -h "$OUT" | cut -f1))"
 echo
-echo "Boot it with a DTB whose bootargs name the partition:"
+echo "Stage 1 done -- unpacked, not yet configured. Run stage 2 on DoomV:"
 echo
-echo "  sed 's|rdinit=/bin/sh|root=/dev/vda1 rootwait rw|' \\"
-echo "      tools/linux/dts/doomv.dts > /tmp/ubuntu.dts"
-echo "  dtc -I dts -O dtb -o ubuntu.dtb /tmp/ubuntu.dts"
-echo "  riscv_doom.exe -opensbi=... -kernel=... -dtb=ubuntu.dtb -disk=$OUT"
+echo "  tools/linux/ubuntu/boot-stage2.sh $OUT"
 echo
-echo "No -initrd, and no init= override: systemd has to be PID 1 or none of"
-echo "what makes this different from the BusyBox image happens. Log in as"
-echo "root / doomv."
+echo "That boots the image with init=/doomv-stage2 and lets the emulator run"
+echo "riscv64 dpkg against it. Expect it to take a long while."
