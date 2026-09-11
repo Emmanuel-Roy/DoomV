@@ -49,6 +49,8 @@ public:
 	// Hold the headless stdin feed until the guest's console has printed
 	// this string. See console_stdin_loop.
 	void set_console_expect(const char *needle) { memory.get_uart().expect(needle); }
+	void set_input_script(const char *path) { input_script_path = path; }
+	void set_canvas_dump(const char *path) { gui.set_canvas_dump(path); }
 
 	// Attach a raw image as the virtio-blk backing store. Returns false if
 	// it cannot be opened, which main reports rather than booting a machine
@@ -122,7 +124,7 @@ private:
 	uint8_t translate_key(uint32_t sdl_keysym) const;
 
 	// True from init_linux_boot, false from init -- selects which of
-	// translate_key/translate_console_key the input-polling loop in
+	// translate_key the input-polling loop in
 	// run() feeds SDL key events through.
 	bool linux_mode = false;
 
@@ -130,11 +132,14 @@ private:
 	// the Linux-boot console (UART RX). Best-effort: covers normal
 	// command typing (letters/digits/space/enter/backspace/tab/common
 	// QWERTY-shifted punctuation), not a full keyboard-layout engine.
-	uint8_t translate_console_key(uint32_t sdl_keysym) const;
 	// Headless stands in for the keyboard with stdin -- see the comment at
 	// the definition for why a guest console needs to be reachable from a
 	// pipe at all.
 	void console_stdin_loop();
+	// Drive the virtio keyboard and mouse from a script, so they are
+	// testable without a window and a person. See the definition.
+	void replay_input_script();
+	std::string input_script_path;
 
 	// CPU execution runs on its own thread so rendering isn't blocked on
 	// (or blocking) instruction bursts. Only this thread ever touches

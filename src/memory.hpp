@@ -4,6 +4,7 @@
 #include "aplic.hpp"
 #include "uart.hpp"
 #include "virtio_blk.hpp"
+#include "virtio_input.hpp"
 #include <cstdint>
 #include <mutex>
 #include <vector>
@@ -17,6 +18,45 @@ public:
 	static constexpr uint64_t MMIO_TICK  = 0x10000004;
 	static constexpr uint64_t MMIO_DEBUG = 0x10000008;
 	static constexpr uint64_t MMIO_FB    = 0x10001000;
+
+	// DOOM's mouse. A different shape from the Linux guest's, on purpose.
+	//
+	// Linux gets a virtio-input device and an event stream, because that is
+	// what an input device is. DOOM asks a different question: I_ReadMouse
+	// runs once a frame and wants "how far has it moved since I last
+	// asked", so this is a pair of accumulators and a button mask rather
+	// than a queue. The difference matters in the failure case -- if a
+	// frame is slow, movement should *merge* into the next reading rather
+	// than queue up behind it, which is right for a pointer and wrong for
+	// keys. It is also why the key queue next door is a queue.
+	//
+	// MMIO_MOUSE_MOVE: dx in bits 31-16, dy in 15-0, both signed 16-bit.
+	//                  Reading is destructive -- it returns the movement
+	//                  since the last read and zeroes the accumulator.
+	// MMIO_MOUSE_BTN:  bit 0 left, bit 1 right, bit 2 middle, held state.
+	//                  Reading does not clear it; a held button is a state
+	//                  and not an event. The bit order is DOOM's own (see
+	//                  d_event.h's ev_mouse), which is not evdev's.
+	static constexpr uint64_t MMIO_MOUSE_MOVE = 0x1000000C;
+	static constexpr uint64_t MMIO_MOUSE_BTN  = 0x10000010;
+
+	// Where the WAD is and how big it is, published rather than agreed.
+	//
+	// The guest used to hardcode its own copy of WAD_BASE, and the two
+	// drifted: RAM_SIZE grew from 256MB to 1GB so that Ubuntu would fit,
+	// WAD_BASE is RAM_BASE + RAM_SIZE, and the guest went on reading
+	// 0x90000000. DOOM then reported "Wad file doom1.wad doesn't have IWAD
+	// or PWAD id" -- it was reading a gigabyte short of the WAD and finding
+	// zeros. Nothing caught it because no test suite runs DOOM.
+	//
+	// A constant that has to be written down identically in two places
+	// will eventually be written down differently, and neither side can
+	// static_assert against the other across the emulation boundary. So
+	// the guest asks instead. Publishing the length too means one guest
+	// binary works with any WAD, where before it was compiled with the
+	// size of the WAD it was built alongside.
+	static constexpr uint64_t MMIO_WAD_BASE = 0x10000014;
+	static constexpr uint64_t MMIO_WAD_SIZE = 0x10000018;
 
 	// Stage 4's UART -- clear of MMIO_INPUT/TICK/DEBUG above (which end at
 	// 0x1000000B) and MMIO_FB below.
@@ -103,6 +143,33 @@ public:
 	static constexpr uint64_t VIRTIO_BASE = 0x10008000;
 	static constexpr uint64_t VIRTIO_SIZE = 0x1000;
 
+	// Two more virtio slots, for a keyboard and a mouse. Separate devices
+	// rather than one: the driver registers one input device per virtio
+	// device, and a single device claiming both keys and relative motion
+	// would be classified as a mouse with a hundred buttons by everything
+	// that looks at it -- the VT layer included.
+	//
+	// Not the next slots up from the disk, which is where they were put
+	// first and is inside DOOM's framebuffer. MMIO_FB is 320*200*4 bytes
+	// long, so its aperture runs 0x10001000..0x1003F7FF and covers every
+	// QEMU-convention virtio slot there is -- 0x10008000 included.
+	//
+	// The disk survives that overlap only because read32/write32 happen to
+	// test VIRTIO_BASE before MMIO_FB. read8/write8 test MMIO_FB first, and
+	// virtio-input is the first device here whose config space is read a
+	// byte at a time: the driver's reads came back as framebuffer bytes,
+	// which are zeros, so both devices probed, registered, and reported no
+	// name and no capabilities. A device that is there and answers nothing
+	// is a worse failure than one that is not there at all.
+	//
+	// So these sit past the aperture instead of relying on the order of a
+	// branch chain. Each still needs its own APLIC source: an MMIO virtio
+	// device has exactly one interrupt and there is no way to share it.
+	static constexpr uint64_t VIRTIO_KBD_BASE   = 0x10100000;
+	static constexpr uint64_t VIRTIO_MOUSE_BASE = 0x10101000;
+	static_assert(VIRTIO_KBD_BASE >= MMIO_FB + FB_SIZE,
+	              "input devices must not sit inside DOOM's framebuffer aperture");
+
 	Memory();
 
 	uint8_t  read8(uint64_t addr);
@@ -125,6 +192,10 @@ public:
 	bool load_wad(const uint8_t *wad_bytes, size_t len);
 
 	void push_key_event(bool pressed, uint8_t doom_keycode);
+	// DOOM's mouse, from the window thread. `doom_bit` is DOOM's own
+	// numbering: 0 left, 1 right, 2 middle.
+	void push_mouse_motion(int dx, int dy);
+	void push_mouse_button(int doom_bit, bool pressed);
 
 	// Instructions-per-ms calibrated to observed throughput: DoomSystem
 	// bursts 20000 instructions per render at ~60fps (~16.7ms/frame), so
@@ -176,6 +247,20 @@ public:
 	// render thread, which owns process exit.
 	bool poweroff_requested() const { return poweroff; }
 
+	// The two input devices, for the window's event handling to push into.
+	VirtioInput &get_keyboard() { return kbd_dev; }
+	VirtioInput &get_mouse() { return mouse_dev; }
+	// Hand any queued input events to the guest. Called from the CPU
+	// thread, which is the only thread allowed to touch guest memory and
+	// the queues; the window only ever enqueues.
+	void pump_input();
+	// Whether that is worth doing at all -- a lock-free check, so the
+	// caller can afford to ask often.
+	bool input_pending() const
+	{
+		return kbd_dev.has_pending() || mouse_dev.has_pending();
+	}
+
 	// Returns the number of FB writes since the last call, and resets
 	// the counter. Used for the doom_fps dashboard metric.
 	uint32_t take_fb_write_count();
@@ -200,10 +285,22 @@ private:
 	std::vector<uint8_t> lfb;
 	bool poweroff = false;
 
+	VirtioInput kbd_dev{VirtioInput::Kind::Keyboard, 2};
+	VirtioInput mouse_dev{VirtioInput::Kind::Mouse, 3};
+
 	// Pushed by the render thread (input polling lives there, tied to the
 	// SDL window), popped by the CPU thread on MMIO_INPUT reads -- the one
 	// piece of Memory state actually touched from both threads.
 	std::mutex key_mutex;
+	// Accumulated since DOOM last read them, under their own lock: the
+	// window thread adds, the CPU thread takes and zeroes.
+	std::mutex mouse_mutex;
+	int mouse_dx = 0, mouse_dy = 0;
+	uint32_t mouse_buttons = 0;
+
+	// Bytes actually loaded, for MMIO_WAD_SIZE.
+	uint32_t wad_len = 0;
+
 	uint32_t key_queue[16];
 	int key_queue_head;
 	int key_queue_tail;

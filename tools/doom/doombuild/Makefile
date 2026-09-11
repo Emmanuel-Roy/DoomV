@@ -140,24 +140,28 @@ ENGINE_SRCS = \
 PLATFORM_SRCS = doomgeneric_doomv.c w_file_doomv.c libc_shim.c
 ASM_SRCS      = start.S
 
-# WAD target: which real IWAD this build's WAD_LENGTH matches. The guest
-# binary doesn't embed the WAD itself -- the host loader places the real
-# file's bytes at WAD_BASE at runtime -- so WAD_FILE here is just the
-# reference for which one to actually hand the loader for a given build.
+# WAD target: which real IWAD to hand the loader for a given build. The
+# guest binary does not embed the WAD -- the host places the real file's
+# bytes in guest RAM at runtime -- so this is only a reference for which
+# file to pass.
+#
+# It used to also carry each WAD's byte length, compiled in as
+# -DWAD_LENGTH. That is gone: the guest asks the host for the WAD's
+# address and length at runtime (MMIO_WAD_BASE/MMIO_WAD_SIZE, see
+# doomv_mmio.h), which is what stops the two sides' memory maps drifting
+# apart the way they did. One consequence worth having: the four output
+# binaries now differ in name only, and any of them will run whichever WAD
+# it is given.
 WAD ?= free
 
 ifeq ($(WAD),free)
-	WAD_FILE   = DOOM1.WAD
-	WAD_LENGTH = 4196020
+	WAD_FILE = DOOM1.WAD
 else ifeq ($(WAD),doom)
-	WAD_FILE   = DOOM.WAD
-	WAD_LENGTH = 12408292
+	WAD_FILE = DOOM.WAD
 else ifeq ($(WAD),doom2)
-	WAD_FILE   = DOOM2.WAD
-	WAD_LENGTH = 14604584
+	WAD_FILE = DOOM2.WAD
 else ifeq ($(WAD),finaldoom)
-	WAD_FILE   = TNT.WAD
-	WAD_LENGTH = 18195736
+	WAD_FILE = TNT.WAD
 else
 	$(error Unknown WAD target '$(WAD)', expected free, doom, doom2, or finaldoom)
 endif
@@ -170,7 +174,7 @@ free doom doom2 finaldoom:
 	$(MAKE) $(OUT) WAD=$@
 
 $(OUT): $(ASM_SRCS) $(PLATFORM_SRCS) $(ENGINE_SRCS)
-	$(CC) $(CFLAGS) -DWAD_LENGTH=$(WAD_LENGTH) $(LDFLAGS) -o $@ $^
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $^
 
 # Portable file deletion. GNU Make's built-in $(RM) is hardcoded to `rm -f`,
 # which cmd does not have -- so `make clean` used to fail depending on which

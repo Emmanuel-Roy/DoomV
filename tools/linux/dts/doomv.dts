@@ -308,5 +308,40 @@
 			interrupt-parent = <&aplic>;
 			interrupts = <1 4>;
 		};
+
+		// A keyboard and a mouse, as virtio-input devices. Two nodes and
+		// not one: the driver registers one input device per virtio
+		// device, so a single device claiming both keys and relative
+		// motion would be classified as a mouse with a hundred buttons
+		// by everything downstream, the VT layer included.
+		//
+		// These are what make the framebuffer console usable rather than
+		// only watchable. The UART carries characters to hvc0; a console
+		// on tty0 takes its keystrokes from an input device, the way
+		// drivers/tty/vt/keyboard.c has always done, so without these
+		// the window could show a login prompt and not accept a login.
+		//
+		// Separate interrupts because an MMIO virtio device has exactly
+		// one and there is no way for two devices to share it.
+		// Past 0x1003F800, not in the 0x10009000/0x1000A000 slots the
+		// QEMU convention would suggest: DOOM's framebuffer aperture is
+		// 320*200*4 bytes at 0x10001000 and covers all of them. The disk
+		// above gets away with it because the emulator's 32-bit access
+		// paths test the virtio range first; a device whose config space
+		// is read a byte at a time does not, and reads framebuffer zeros
+		// instead. See the note on VIRTIO_KBD_BASE in src/memory.hpp.
+		virtio_mmio@10100000 {
+			compatible = "virtio,mmio";
+			reg = <0x0 0x10100000 0x0 0x1000>;
+			interrupt-parent = <&aplic>;
+			interrupts = <2 4>;
+		};
+
+		virtio_mmio@10101000 {
+			compatible = "virtio,mmio";
+			reg = <0x0 0x10101000 0x0 0x1000>;
+			interrupt-parent = <&aplic>;
+			interrupts = <3 4>;
+		};
 	};
 };

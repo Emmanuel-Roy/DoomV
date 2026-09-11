@@ -287,6 +287,11 @@ src/
   extensions/            one file per extension (ext_i.cpp, ext_m.cpp, ext_v_*.cpp, ...)
   debugger.*             breakpoints, halt conditions, crash/signature dumps
   gui.*                  the SDL window, framebuffer scaling, and the debug dashboard
+  uart.*                 8250-compatible serial, which is the SBI console
+  virtio_blk.*           virtio-blk over MMIO: the root disk
+  virtio_input.*         virtio-input over MMIO: the keyboard and the mouse
+  timer.* aplic.* imsic.*  CLINT timer and the AIA interrupt controllers
+  mmu.* pmp.*            Sv39/48/57 translation with a TLB, and the PMP
 ```
 
 Each extension owns its own decode + execute logic in its own file under
@@ -326,6 +331,8 @@ riscv_doom.exe -opensbi=<f> -kernel=<f> -dtb=<f> -initrd=<f> [options]   # Linux
 | `-disk=<path>` | Raw disk image for the virtio-blk device. A whole-device filesystem or a partitioned image both work; the kernel finds the partition table itself. |
 | `-fbdump=<path>` | Write the Linux framebuffer to this file as a binary PPM, with a non-black pixel count on stdout. Written when the run stops and periodically while it runs. |
 | `-expect=<text>` | Hold the headless stdin feed until the guest's console prints this string. |
+| `-input=<path>` | Replay a script of keyboard and mouse events into the guest. The only way to exercise the input devices without a window and a person -- see [Input](#input). |
+| `-guidump=<path>` | Write the composed window -- dashboard included -- to this file as a binary PPM, every 60th frame. |
 
 `-ng` is what makes the conformance suites practical. With a window open a
 finished test never exits on its own and has to be killed from outside, so
@@ -362,6 +369,78 @@ for anything unattended -- see
 [tools/linux/ubuntu/](tools/linux/ubuntu/README.md), where the build is four
 hours long and the alternative is watching it.
 
+<a id="input"></a>
+### Input
+
+The window's keyboard and mouse reach the guest, and how depends on what is
+running.
+
+**Linux** gets two `virtio-input` devices, a keyboard and a mouse, at
+`0x10100000` and `0x10101000`. They are real input devices: the keyboard
+binds the VT layer's `kbd` handler, so the framebuffer console can be typed
+at and logged into, and both appear as `/dev/input/event*` for anything that
+wants to read them directly.
+
+```
+$ cat /proc/bus/input/devices
+N: Name="DoomV Keyboard"
+H: Handlers=sysrq kbd event0
+B: EV=3
+B: KEY=ffffffffffffffff fffffffffffffffe
+
+N: Name="DoomV Mouse"
+H: Handlers=mouse0 event1
+B: EV=7
+B: REL=143
+```
+
+Two devices rather than one, because the driver registers one input device
+per virtio device: a single device claiming both keys and relative motion is
+classified as a mouse with a hundred buttons by everything downstream.
+
+Keys are forwarded as **scancodes**, not characters. An evdev code names a
+physical key and the guest applies its own keymap, exactly as on real
+hardware -- translating from keysyms instead would apply the host's layout
+and then let the guest apply a second one on top. Characters are a separate
+path: the serial console on `hvc0` gets them from SDL's own text input,
+which resolves layout, modifiers and dead keys, plus ANSI sequences for the
+arrows and navigation block and control characters for Ctrl+letter. Both
+devices are fed every event, because which one a guest is listening to
+depends on its `console=` setting and this side cannot know.
+
+**DOOM** has no drivers, so it gets two MMIO registers instead:
+`MMIO_MOUSE_MOVE` at `0x1000000C` (dx in bits 31-16, dy in 15-0, signed,
+destructive read) and `MMIO_MOUSE_BTN` at `0x10000010` (held buttons). That
+is a deliberately different shape from the key queue next door: DOOM reads
+the mouse once a frame and wants "how far since I last asked", so movement
+*merges* when a frame runs long instead of queueing behind it. The port
+posts an `ev_mouse` from `DG_DrawFrame`, and DOOM's own `mousex`/`mousey`
+path does the rest -- mouse look and menu navigation both work.
+
+Three keys belong to the window rather than the guest:
+
+| Key | |
+| --- | --- |
+| F9 | Resume from a debugger halt |
+| Ctrl+Alt+G | Grab the mouse (hide the pointer, deliver deltas with no window edge to hit) |
+| Ctrl+Alt+F | Give a Linux framebuffer the whole window instead of the dashboard's display box |
+
+Ctrl+Alt rather than more function keys because a bare function key is not
+free -- DOOM binds all twelve, so F10 and F11 would have cost it "quit game"
+and the gamma control.
+
+`-input=<path>` replays a script of events so none of this needs a person:
+
+```
+key 30 1        # a key down, evdev code for Linux, doomkeys.h code for DOOM
+key 30 0
+type echo hello # as press/release pairs, US layout
+rel 40 -20      # relative mouse movement
+btn left 1
+wheel 1
+sleep 500       # host milliseconds, not guest
+```
+
 ### The display
 
 There are two framebuffers, and which one the window shows depends on how
@@ -373,9 +452,16 @@ up inside a dashboard that shows registers, CSRs and a trace log alongside.
 A Linux guest gets a 1024x768 linear aperture at `0x50000000`, declared to
 the kernel as a `simple-framebuffer` node in the device tree. The kernel's
 `simplefb` driver binds to it and `fbcon` draws a 128x48 character console
-into it, which the window then shows full-screen with the dashboard
-suppressed -- a 1024x768 console squeezed into the dashboard's game box
-would put three source pixels into one and turn the text to grey.
+into it, which the window shows in the same box DOOM's display uses, with
+the registers, CSRs and trace log still alongside. A source of a different
+shape is letterboxed rather than stretched -- the box's 1.6 aspect ratio was
+picked for DOOM's 320x200 -- and scaling down uses the nearest source pixel
+rather than blending, because blending neighbours is exactly what destroys
+the one-pixel stems in 8x16 console text.
+
+1024x768 into an 840x525 box is still 0.68x, which is legible but not
+comfortable, so **Ctrl+Alt+F** hands the framebuffer the whole window for
+when reading the console is the job rather than watching the machine.
 
 The aperture sits deliberately *outside* the device tree's memory node,
 which is what stops Linux allocating over it without needing a
@@ -391,7 +477,12 @@ serial the headless harnesses read. The order decides which becomes
 `/dev/console` and the last one wins, so `hvc0` last puts the shell on the
 serial where a script can drive it.
 
-Key bindings live in `controls.json` if you want to remap them.
+Key bindings live in `controls.json` if you want to remap them. The mouse is
+not in there: DOOM's own `mousebfire`/`mousebforward` defaults apply, and
+mouse look works because the port posts an `ev_mouse` and DOOM already had
+everything downstream of that. Press Ctrl+Alt+G to grab the pointer first --
+without that it stops at the window edge, which is a short distance to turn
+in.
 
 The guest side — the actual Doom binary that runs *on* this CPU — is built
 separately in `tools/doom/doombuild/`: a cross-compiled `doomgeneric` with a

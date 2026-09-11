@@ -19,6 +19,13 @@ cp "$SBI/build/platform/generic/firmware/fw_jump.elf" "$OUT/fw_jump.elf"
 echo '=== Linux (pinned gitlink; source stays on the WSL filesystem) ==='
 KERNEL="$(pinned_source linux tools/linux/linux/src https://github.com/torvalds/linux.git)"
 make -C "$KERNEL" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- defconfig
+# VIRTIO_INPUT + INPUT_EVDEV: the keyboard and mouse. The framebuffer
+# console above is only half a console without them -- fbcon draws on
+# tty0, and the VT layer takes its keystrokes from an input device, not
+# from the serial port. Without VIRTIO_INPUT the window shows a login
+# prompt that cannot be typed at. EVDEV is for everything in userspace
+# that wants a pointer, which reads /dev/input/event* rather than asking
+# the VT layer anything.
 # MAGIC_SYSRQ: riscv defconfig leaves it off, and `echo o >
 # /proc/sysrq-trigger` is the only way a guest running something other than
 # systemd as PID 1 can power the machine off. Ubuntu's stage-2 build is
@@ -36,7 +43,7 @@ make -C "$KERNEL" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- defconfig
 "$KERNEL/scripts/config" --file "$KERNEL/.config" --enable RISCV_SBI_V01 \
     --enable NONPORTABLE --enable HVC_RISCV_SBI --enable BLK_DEV_INITRD --enable BINFMT_SCRIPT \
     --enable FB --enable FB_SIMPLE --enable FRAMEBUFFER_CONSOLE \
-    --enable MAGIC_SYSRQ
+    --enable MAGIC_SYSRQ --enable VIRTIO_INPUT --enable INPUT_EVDEV
 make -C "$KERNEL" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- olddefconfig
 make -C "$KERNEL" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- Image -j"$JOBS"
 cp "$KERNEL/arch/riscv/boot/Image" "$OUT/Image"

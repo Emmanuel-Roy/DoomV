@@ -46,10 +46,12 @@ int _read(int fd, char *buf, int len)
 		return -1;
 	}
 
-	if (iwad_fd_offset >= WAD_LENGTH) return 0;
-	if (iwad_fd_offset + (uint32_t)len > WAD_LENGTH) len = (int)(WAD_LENGTH - iwad_fd_offset);
+	const uint32_t wad_len = doomv_wad_size();
+	if (iwad_fd_offset >= wad_len) return 0;
+	if (iwad_fd_offset + (uint32_t)len > wad_len) len = (int)(wad_len - iwad_fd_offset);
 
-	const volatile uint8_t *src = (const volatile uint8_t *)(uintptr_t)(WAD_BASE + iwad_fd_offset);
+	const volatile uint8_t *src =
+		(const volatile uint8_t *)(uintptr_t)(doomv_wad_base() + iwad_fd_offset);
 	for (int i = 0; i < len; i++) buf[i] = (char)src[i];
 	iwad_fd_offset += (uint32_t)len;
 
@@ -77,11 +79,11 @@ int _lseek(int fd, int offset, int whence)
 	switch (whence) {
 	case SEEK_SET: new_offset = (uint32_t)offset; break;
 	case SEEK_CUR: new_offset = iwad_fd_offset + (uint32_t)offset; break;
-	case SEEK_END: new_offset = WAD_LENGTH + (uint32_t)offset; break;
+	case SEEK_END: new_offset = doomv_wad_size() + (uint32_t)offset; break;
 	default: errno = EINVAL; return -1;
 	}
 
-	if (new_offset > WAD_LENGTH) { errno = EINVAL; return -1; }
+	if (new_offset > doomv_wad_size()) { errno = EINVAL; return -1; }
 	iwad_fd_offset = new_offset;
 	return (int)new_offset;
 }
@@ -113,7 +115,7 @@ void *_sbrk(int incr)
 	if (heap_ptr == 0) heap_ptr = &end;
 
 	char *prev = heap_ptr;
-	if ((uintptr_t)(heap_ptr + incr) > WAD_BASE) {
+	if ((uintptr_t)(heap_ptr + incr) > doomv_wad_base()) {
 		errno = ENOMEM;
 		return (void *)-1;
 	}

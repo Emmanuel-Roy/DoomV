@@ -313,17 +313,41 @@ void Gui::render(const Snapshot &snap)
 	int box_w = (int)(GAME_BOX_W * scale_x);
 	int box_h = (int)(GAME_BOX_H * scale_y);
 
-	// A Linux framebuffer gets the whole window, and the dashboard panels
-	// are not drawn over it. This is not a preference about screen real
-	// estate: DOOM's 320x200 scaled *up* into a 280-design-unit box is the
-	// case the box was built for, and a 1024x768 console scaled *down* into
-	// the same box puts three source pixels into one destination pixel,
-	// which turns 8x16 console text into unreadable grey. Either the
-	// framebuffer is small and the dashboard is the point, or it is large
-	// and the framebuffer is.
-	const bool fb_fullscreen = (snap.fb_w != Memory::FB_W || snap.fb_h != Memory::FB_H);
+	// A Linux framebuffer goes in the same box DOOM's does, so the
+	// registers, CSRs and trace log stay on screen while Linux runs. They
+	// are the reason this window is not just a display.
+	//
+	// Two adjustments make that work rather than merely fit. The box's 1.6
+	// aspect ratio was chosen for DOOM's 320x200; a 4:3 console stretched
+	// to it is visibly wrong, so a source of a different shape is
+	// letterboxed inside the box instead of filled to it. And the scaling
+	// is nearest rather than bilinear whenever the source is larger than
+	// the box, because blending neighbours is exactly what destroys the
+	// one-pixel stems in 8x16 console text.
+	//
+	// 1024x768 into 840x525 is still 0.68x, which is legible but not
+	// comfortable, so Ctrl+Alt+F hands the framebuffer the whole window
+	// for when reading the console is the job, rather than watching the
+	// machine run it. See Gui::toggle_fb_fullscreen.
+	const bool fb_is_linux = (snap.fb_w != Memory::FB_W || snap.fb_h != Memory::FB_H);
+	const bool fb_fullscreen = fb_is_linux && fb_full;
 	if (fb_fullscreen) {
 		box_x = 0; box_y = 0; box_w = canvas_w; box_h = canvas_h;
+	}
+	if (fb_is_linux && snap.fb_w > 0 && snap.fb_h > 0) {
+		// Fit, preserving aspect: shrink the long axis and re-centre in
+		// whichever dimension gave way.
+		const long long by_w = (long long)box_w * snap.fb_h;
+		const long long by_h = (long long)box_h * snap.fb_w;
+		if (by_w > by_h) {
+			const int fit_w = (int)(by_h / snap.fb_h);
+			box_x += (box_w - fit_w) / 2;
+			box_w = fit_w;
+		} else if (by_h > by_w) {
+			const int fit_h = (int)(by_w / snap.fb_w);
+			box_y += (box_h - fit_h) / 2;
+			box_h = fit_h;
+		}
 	}
 
 	// Bilinear, not nearest-neighbor: at native 320x200 scaled ~3-4x, hard
@@ -341,7 +365,10 @@ void Gui::render(const Snapshot &snap)
 	struct Sample { int i0, i1; uint32_t frac; };
 	static std::vector<Sample> sx_lut, sy_lut;
 	static int last_box_w = -1, last_box_h = -1, last_src_w = -1, last_src_h = -1;
-	const bool nearest = fb_fullscreen;
+	// Nearest whenever the source is bigger than the box it is going into,
+	// which for a 1024x768 console is always. Interpolation is only right
+	// when scaling up.
+	const bool nearest = (snap.fb_w > box_w || snap.fb_h > box_h);
 	if (box_w != last_box_w || box_h != last_box_h
 	    || snap.fb_w != last_src_w || snap.fb_h != last_src_h) {
 		sx_lut.resize(box_w > 0 ? box_w : 0);
@@ -403,12 +430,13 @@ void Gui::render(const Snapshot &snap)
 		}
 	}
 
-	// With the framebuffer filling the window there is nowhere to put the
-	// dashboard, and half-drawing it over the guest's console is worse than
-	// not drawing it: present and return.
+	// Only in the full-window mode is there nowhere to put the
+	// dashboard. Half-drawing it over the guest's console would be worse
+	// than not drawing it, so present and return.
 	if (fb_fullscreen) {
 		SDL_UpdateTexture(texture, nullptr, screen_buf.data(), canvas_w * (int)sizeof(uint32_t));
 		SDL_RenderCopy(renderer, texture, nullptr, nullptr);
+		dump_canvas();
 		SDL_RenderPresent(renderer);
 		return;
 	}
@@ -620,18 +648,117 @@ void Gui::render(const Snapshot &snap)
 
 	SDL_UpdateTexture(texture, nullptr, screen_buf.data(), canvas_w * 4);
 	SDL_RenderCopy(renderer, texture, nullptr, nullptr);
+	dump_canvas();
 	SDL_RenderPresent(renderer);
 }
 
-std::vector<RawKeyEvent> Gui::poll_input()
+void Gui::dump_canvas()
 {
-	std::vector<RawKeyEvent> events;
+	if (canvas_dump_path.empty()) return;
+	// Every 60th frame rather than every frame: this is a debugging aid
+	// watched from outside the process, and what it needs is a file that
+	// is never very stale, not one rewritten at the frame rate.
+	if (canvas_dump_frames++ % 60 != 0) return;
+	if (screen_buf.empty() || canvas_w <= 0 || canvas_h <= 0) return;
+
+	FILE *f = std::fopen(canvas_dump_path.c_str(), "wb");
+	if (!f) return;
+	std::fprintf(f, "P6\n%d %d 255\n", canvas_w, canvas_h);
+	// screen_buf is SDL_PIXELFORMAT_RGB888, which is 32-bit xRGB in host
+	// order despite the name -- the byte the name leaves out is the unused
+	// one. PPM wants three bytes per pixel, so drop it.
+	std::vector<uint8_t> row((size_t)canvas_w * 3);
+	for (int y = 0; y < canvas_h; y++) {
+		const uint32_t *src = &screen_buf[(size_t)y * canvas_w];
+		for (int x = 0; x < canvas_w; x++) {
+			row[x * 3 + 0] = (uint8_t)(src[x] >> 16);
+			row[x * 3 + 1] = (uint8_t)(src[x] >> 8);
+			row[x * 3 + 2] = (uint8_t)(src[x]);
+		}
+		std::fwrite(row.data(), 1, row.size(), f);
+	}
+	std::fclose(f);
+}
+
+void Gui::set_mouse_captured(bool on)
+{
+	// SDL_SetRelativeMouseMode hides the cursor, warps it back to the
+	// centre after every motion event, and reports deltas -- which is the
+	// only way to give a guest a pointer that can keep moving in one
+	// direction. SDL_TRUE/FALSE rather than a bool: this is the C API.
+	if (SDL_SetRelativeMouseMode(on ? SDL_TRUE : SDL_FALSE) == 0) captured = on;
+}
+
+std::vector<RawInputEvent> Gui::poll_input()
+{
+	std::vector<RawInputEvent> events;
 
 	SDL_Event e;
 	while (SDL_PollEvent(&e)) {
 		if (e.type == SDL_QUIT) exit(0);
-		if (e.type == SDL_KEYDOWN) events.push_back({(uint32_t)e.key.keysym.sym, true});
-		if (e.type == SDL_KEYUP) events.push_back({(uint32_t)e.key.keysym.sym, false});
+
+		switch (e.type) {
+		case SDL_KEYDOWN:
+		case SDL_KEYUP: {
+			RawInputEvent ev;
+			ev.kind = RawInputEvent::Kind::Key;
+			ev.sdl_keysym = (uint32_t)e.key.keysym.sym;
+			ev.sdl_scancode = (uint32_t)e.key.keysym.scancode;
+			ev.mods = (uint16_t)e.key.keysym.mod;
+			ev.pressed = (e.type == SDL_KEYDOWN);
+			// Repeats are passed along rather than filtered. A guest with
+			// its own input layer does its own repeat from the held state,
+			// so forwarding the host's would double it; a serial console
+			// has no held state and needs the host's, or holding a key
+			// types one character. The consumer knows which it is, so
+			// both get the event and one of them ignores it -- see the
+			// repeat handling in DoomSystem::run.
+			ev.repeat = (e.key.repeat != 0);
+			events.push_back(ev);
+			break;
+		}
+		case SDL_TEXTINPUT: {
+			// One event per composed character. SDL hands over UTF-8 with
+			// the host's keyboard layout, modifiers and any dead-key
+			// composition already resolved, which is the whole reason to
+			// use it rather than deriving characters from keysyms.
+			RawInputEvent ev;
+			ev.kind = RawInputEvent::Kind::Text;
+			std::snprintf(ev.text, sizeof(ev.text), "%s", e.text.text);
+			events.push_back(ev);
+			break;
+		}
+		case SDL_MOUSEMOTION: {
+			// xrel/yrel are deltas in both modes, so this works captured
+			// or not; uncaptured it just stops at the window edge.
+			if (e.motion.xrel == 0 && e.motion.yrel == 0) break;
+			RawInputEvent ev;
+			ev.kind = RawInputEvent::Kind::MouseMotion;
+			ev.dx = e.motion.xrel;
+			ev.dy = e.motion.yrel;
+			events.push_back(ev);
+			break;
+		}
+		case SDL_MOUSEBUTTONDOWN:
+		case SDL_MOUSEBUTTONUP: {
+			RawInputEvent ev;
+			ev.kind = RawInputEvent::Kind::MouseButton;
+			ev.button = e.button.button;
+			ev.pressed = (e.type == SDL_MOUSEBUTTONDOWN);
+			events.push_back(ev);
+			break;
+		}
+		case SDL_MOUSEWHEEL: {
+			RawInputEvent ev;
+			ev.kind = RawInputEvent::Kind::MouseWheel;
+			ev.dx = e.wheel.x;
+			ev.dy = e.wheel.y;
+			events.push_back(ev);
+			break;
+		}
+		default:
+			break;
+		}
 	}
 
 	return events;

@@ -134,6 +134,13 @@ a real 1024x768 framebuffer rather than a serial log -- Ubuntu being
 *displayed* by the emulator, not merely logged by it. Pass `-ng` for the log
 instead.
 
+You can type at it, too: the device tree carries a `virtio-input` keyboard
+and mouse, and the keyboard binds the VT layer's own handler, so `doomv
+login:` on tty1 is a prompt rather than a picture of one. Ctrl+Alt+F gives
+the framebuffer the whole window if the console in the dashboard's display
+box is too small to read comfortably; Ctrl+Alt+G grabs the mouse. See
+[Input](../../../README.md#input).
+
 Two things not to do:
 
 * **No `-initrd`.** With an initramfs present the kernel runs that instead

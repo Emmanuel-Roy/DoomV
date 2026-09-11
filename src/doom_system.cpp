@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <cstring>
 #include <fstream>
+#include <sstream>
 #include <cstdlib>
 #include <chrono>
 #include <thread>
@@ -123,55 +124,6 @@ uint8_t DoomSystem::translate_key(uint32_t sdl_keysym) const
 		if (sdl_keysym >= 0x20 && sdl_keysym < 0x7f) return (uint8_t)sdl_keysym;
 		return 0;
 	}
-}
-
-uint8_t DoomSystem::translate_console_key(uint32_t sdl_keysym) const
-{
-	switch (sdl_keysym) {
-	case SDLK_RETURN:    return '\r';
-	case SDLK_BACKSPACE: return 0x7f;
-	case SDLK_TAB:       return '\t';
-	case SDLK_ESCAPE:    return 0x1b;
-	default: break;
-	}
-
-	// SDL_Keycode is already ASCII for unshifted printable keys (a-z as
-	// lowercase, digits, space, and most punctuation) -- shift only needs
-	// handling for letters (case) and the punctuation keys whose shifted
-	// glyph isn't just "the next character along".
-	bool shift = (SDL_GetModState() & KMOD_SHIFT) != 0;
-	if (sdl_keysym >= 'a' && sdl_keysym <= 'z') {
-		return shift ? (uint8_t)(sdl_keysym - 'a' + 'A') : (uint8_t)sdl_keysym;
-	}
-	if (shift) {
-		switch (sdl_keysym) {
-		case '1': return '!';
-		case '2': return '@';
-		case '3': return '#';
-		case '4': return '$';
-		case '5': return '%';
-		case '6': return '^';
-		case '7': return '&';
-		case '8': return '*';
-		case '9': return '(';
-		case '0': return ')';
-		case '-': return '_';
-		case '=': return '+';
-		case '[': return '{';
-		case ']': return '}';
-		case '\\': return '|';
-		case ';': return ':';
-		case '\'': return '"';
-		case ',': return '<';
-		case '.': return '>';
-		case '/': return '?';
-		case '`': return '~';
-		default: break;
-		}
-	}
-
-	if (sdl_keysym >= 0x20 && sdl_keysym < 0x7f) return (uint8_t)sdl_keysym;
-	return 0;
 }
 
 void DoomSystem::step()
@@ -397,7 +349,15 @@ void DoomSystem::cpu_loop()
 		for (int i = 0; i < 200000; i++) {
 			if (debugger.halted) break;
 			step();
+			// Deliver queued input part-way through the burst, not just
+			// between bursts. A burst is about 30ms of wall time, and a
+			// mouse sampled at 30Hz is a mouse that feels broken; this
+			// lands around 1.6kHz instead. pump_input is two relaxed
+			// atomic loads when there is nothing queued, which is almost
+			// always, so the hot path pays for a branch and no more.
+			if ((i & 0xFFF) == 0xFFF) memory.pump_input();
 		}
+		memory.pump_input();
 		publish_snapshot();
 
 		// The guest asking to be turned off. Memory has recorded writes to
@@ -425,8 +385,8 @@ void DoomSystem::cpu_loop()
 
 // Host stdin -> the guest's UART receive ring, for headless runs.
 //
-// The window's keyboard path (translate_console_key, in run()) is the only
-// way anything ever reached the guest console, which meant a -ng boot was
+// The window's keyboard path (in run()) is the only way anything ever
+// reached the guest console, which meant a -ng boot was
 // write-only: you could read the kernel log and never answer it. That is
 // fine for the test suites, which do not interact, and wrong for everything
 // else -- logging in, running a command and reading what it printed, or
@@ -469,6 +429,402 @@ void DoomSystem::console_stdin_loop()
 	// it does.
 }
 
+
+// SDL scancode -> Linux evdev keycode.
+//
+// A scancode, not a keysym, because that is the layer a keyboard reports
+// at: evdev codes name *physical keys*, and the guest applies its own
+// keymap to them. Translating from keysyms instead would apply the host's
+// layout and then let the guest apply another one on top, so a Dvorak host
+// driving a US guest would type mojibake. This way the guest's own
+// `loadkeys` setting is what decides, exactly as on real hardware.
+//
+// The codes are from include/uapi/linux/input-event-codes.h. They are the
+// classic AT set and all fall in 1..127, which is the range the keyboard
+// device declares in its EV_BITS config (see VirtioInput::config_payload).
+static uint16_t evdev_keycode(uint32_t scancode)
+{
+	switch (scancode) {
+	// Letters. SDL orders these alphabetically and Linux orders them by
+	// position on the board, so there is no arithmetic to be had here.
+	case SDL_SCANCODE_A: return 30;
+	case SDL_SCANCODE_B: return 48;
+	case SDL_SCANCODE_C: return 46;
+	case SDL_SCANCODE_D: return 32;
+	case SDL_SCANCODE_E: return 18;
+	case SDL_SCANCODE_F: return 33;
+	case SDL_SCANCODE_G: return 34;
+	case SDL_SCANCODE_H: return 35;
+	case SDL_SCANCODE_I: return 23;
+	case SDL_SCANCODE_J: return 36;
+	case SDL_SCANCODE_K: return 37;
+	case SDL_SCANCODE_L: return 38;
+	case SDL_SCANCODE_M: return 50;
+	case SDL_SCANCODE_N: return 49;
+	case SDL_SCANCODE_O: return 24;
+	case SDL_SCANCODE_P: return 25;
+	case SDL_SCANCODE_Q: return 16;
+	case SDL_SCANCODE_R: return 19;
+	case SDL_SCANCODE_S: return 31;
+	case SDL_SCANCODE_T: return 20;
+	case SDL_SCANCODE_U: return 22;
+	case SDL_SCANCODE_V: return 47;
+	case SDL_SCANCODE_W: return 17;
+	case SDL_SCANCODE_X: return 45;
+	case SDL_SCANCODE_Y: return 21;
+	case SDL_SCANCODE_Z: return 44;
+	// Digit row. Both are contiguous, but SDL puts 0 after 9 and Linux
+	// puts it after 9 as well -- KEY_1..KEY_0 is 2..11 -- so this one does
+	// map arithmetically, and is written out anyway to stay checkable.
+	case SDL_SCANCODE_1: return 2;
+	case SDL_SCANCODE_2: return 3;
+	case SDL_SCANCODE_3: return 4;
+	case SDL_SCANCODE_4: return 5;
+	case SDL_SCANCODE_5: return 6;
+	case SDL_SCANCODE_6: return 7;
+	case SDL_SCANCODE_7: return 8;
+	case SDL_SCANCODE_8: return 9;
+	case SDL_SCANCODE_9: return 10;
+	case SDL_SCANCODE_0: return 11;
+	case SDL_SCANCODE_MINUS:        return 12;
+	case SDL_SCANCODE_EQUALS:       return 13;
+	case SDL_SCANCODE_BACKSPACE:    return 14;
+	case SDL_SCANCODE_TAB:          return 15;
+	case SDL_SCANCODE_LEFTBRACKET:  return 26;
+	case SDL_SCANCODE_RIGHTBRACKET: return 27;
+	case SDL_SCANCODE_RETURN:       return 28;
+	case SDL_SCANCODE_SEMICOLON:    return 39;
+	case SDL_SCANCODE_APOSTROPHE:   return 40;
+	case SDL_SCANCODE_GRAVE:        return 41;
+	case SDL_SCANCODE_BACKSLASH:    return 43;
+	case SDL_SCANCODE_NONUSHASH:    return 43; // same key on ISO boards
+	case SDL_SCANCODE_NONUSBACKSLASH: return 86;
+	case SDL_SCANCODE_COMMA:        return 51;
+	case SDL_SCANCODE_PERIOD:       return 52;
+	case SDL_SCANCODE_SLASH:        return 53;
+	case SDL_SCANCODE_SPACE:        return 57;
+	case SDL_SCANCODE_ESCAPE:       return 1;
+	case SDL_SCANCODE_CAPSLOCK:     return 58;
+	// Modifiers. These have to be forwarded as keys of their own: the
+	// guest tracks shift/ctrl/alt state itself from press and release, and
+	// a host-side "this keypress had shift held" bit is not something
+	// evdev has a way to express.
+	case SDL_SCANCODE_LSHIFT: return 42;
+	case SDL_SCANCODE_RSHIFT: return 54;
+	case SDL_SCANCODE_LCTRL:  return 29;
+	case SDL_SCANCODE_RCTRL:  return 97;
+	case SDL_SCANCODE_LALT:   return 56;
+	case SDL_SCANCODE_RALT:   return 100;
+	case SDL_SCANCODE_LGUI:   return 125;
+	case SDL_SCANCODE_RGUI:   return 126;
+	case SDL_SCANCODE_APPLICATION: return 127;
+	case SDL_SCANCODE_F1:  return 59;
+	case SDL_SCANCODE_F2:  return 60;
+	case SDL_SCANCODE_F3:  return 61;
+	case SDL_SCANCODE_F4:  return 62;
+	case SDL_SCANCODE_F5:  return 63;
+	case SDL_SCANCODE_F6:  return 64;
+	case SDL_SCANCODE_F7:  return 65;
+	case SDL_SCANCODE_F8:  return 66;
+	case SDL_SCANCODE_F9:  return 67;
+	case SDL_SCANCODE_F10: return 68;
+	case SDL_SCANCODE_F11: return 87;
+	case SDL_SCANCODE_F12: return 88;
+	case SDL_SCANCODE_PRINTSCREEN: return 99;
+	case SDL_SCANCODE_SCROLLLOCK:  return 70;
+	case SDL_SCANCODE_PAUSE:       return 119;
+	case SDL_SCANCODE_INSERT:      return 110;
+	case SDL_SCANCODE_HOME:        return 102;
+	case SDL_SCANCODE_PAGEUP:      return 104;
+	case SDL_SCANCODE_DELETE:      return 111;
+	case SDL_SCANCODE_END:         return 107;
+	case SDL_SCANCODE_PAGEDOWN:    return 109;
+	case SDL_SCANCODE_RIGHT:       return 106;
+	case SDL_SCANCODE_LEFT:        return 105;
+	case SDL_SCANCODE_DOWN:        return 108;
+	case SDL_SCANCODE_UP:          return 103;
+	case SDL_SCANCODE_NUMLOCKCLEAR: return 69;
+	case SDL_SCANCODE_KP_DIVIDE:   return 98;
+	case SDL_SCANCODE_KP_MULTIPLY: return 55;
+	case SDL_SCANCODE_KP_MINUS:    return 74;
+	case SDL_SCANCODE_KP_PLUS:     return 78;
+	case SDL_SCANCODE_KP_ENTER:    return 96;
+	case SDL_SCANCODE_KP_1: return 79;
+	case SDL_SCANCODE_KP_2: return 80;
+	case SDL_SCANCODE_KP_3: return 81;
+	case SDL_SCANCODE_KP_4: return 75;
+	case SDL_SCANCODE_KP_5: return 76;
+	case SDL_SCANCODE_KP_6: return 77;
+	case SDL_SCANCODE_KP_7: return 71;
+	case SDL_SCANCODE_KP_8: return 72;
+	case SDL_SCANCODE_KP_9: return 73;
+	case SDL_SCANCODE_KP_0: return 82;
+	case SDL_SCANCODE_KP_PERIOD: return 83;
+	default: return 0;   // nothing this device claims to have
+	}
+}
+
+// A keypress as bytes for a *serial* console, which is a different problem
+// from the one above.
+//
+// The UART carries characters, not keys, so the only things translated here
+// are the ones that have no character: the arrows and the navigation block
+// become the ANSI sequences a terminal would send, and Ctrl+letter becomes
+// its control character. Everything printable is deliberately absent --
+// SDL_TEXTINPUT delivers that, with the host's layout and any dead-key
+// composition already applied, and re-deriving it from keysym plus a shift
+// bit is what the previous hand-rolled table did. That table covered a US
+// layout and silently produced the wrong punctuation on every other one.
+//
+// Returns the number of bytes written to `out` (at most 4).
+static int console_key_bytes(const RawInputEvent &ev, uint8_t out[4])
+{
+	const bool ctrl = (ev.mods & KMOD_CTRL) != 0;
+
+	// Ctrl+letter -> 0x01..0x1a. Ctrl+C has to work at a shell prompt and
+	// it produces no text-input event, so this is the only path for it.
+	if (ctrl && ev.sdl_keysym >= 'a' && ev.sdl_keysym <= 'z') {
+		out[0] = (uint8_t)(ev.sdl_keysym - 'a' + 1);
+		return 1;
+	}
+	// The handful of non-letter control characters worth having: Ctrl+[ is
+	// escape, Ctrl+\ and Ctrl+] are quit and the telnet escape, Ctrl+space
+	// is NUL.
+	if (ctrl) {
+		switch (ev.sdl_keysym) {
+		case SDLK_LEFTBRACKET:  out[0] = 0x1b; return 1;
+		case SDLK_BACKSLASH:    out[0] = 0x1c; return 1;
+		case SDLK_RIGHTBRACKET: out[0] = 0x1d; return 1;
+		case SDLK_SPACE:        out[0] = 0x00; return 1;
+		default: break;
+		}
+	}
+
+	switch (ev.sdl_keysym) {
+	// Return sends CR, not LF. The guest's line discipline has ICRNL set
+	// and converts it; send LF and the shell is handed a character it does
+	// not treat as end-of-line, so the command is typed and never runs.
+	case SDLK_RETURN:
+	case SDLK_KP_ENTER:  out[0] = '\r'; return 1;
+	// DEL rather than BS: that is what a terminal's backspace key sends,
+	// and what readline and the kernel's line editor both expect.
+	case SDLK_BACKSPACE: out[0] = 0x7f; return 1;
+	case SDLK_TAB:       out[0] = '\t'; return 1;
+	case SDLK_ESCAPE:    out[0] = 0x1b; return 1;
+	default: break;
+	}
+
+	// CSI sequences. Three bytes for the cursor keys, four for the
+	// navigation block, which is the shape a VT100 and every terminal
+	// since has used.
+	const char *csi = nullptr;
+	switch (ev.sdl_keysym) {
+	case SDLK_UP:       csi = "[A"; break;
+	case SDLK_DOWN:     csi = "[B"; break;
+	case SDLK_RIGHT:    csi = "[C"; break;
+	case SDLK_LEFT:     csi = "[D"; break;
+	case SDLK_HOME:     csi = "[H"; break;
+	case SDLK_END:      csi = "[F"; break;
+	case SDLK_INSERT:   csi = "[2~"; break;
+	case SDLK_DELETE:   csi = "[3~"; break;
+	case SDLK_PAGEUP:   csi = "[5~"; break;
+	case SDLK_PAGEDOWN: csi = "[6~"; break;
+	default: return 0;
+	}
+	out[0] = 0x1b;
+	int n = 1;
+	for (const char *p = csi; *p && n < 4; p++) out[n++] = (uint8_t)*p;
+	return n;
+}
+
+
+// Replay a script of input events into the keyboard and mouse.
+//
+// This exists because the devices are otherwise untestable. Their events
+// come from SDL, so exercising them needs a window, and a window needs a
+// person -- which means "the keyboard works" would be a claim resting on
+// someone having typed at it once and not on anything reproducible. With
+// this, the whole chain is checkable from a script: event to virtio queue
+// to evdev to the VT layer to a shell to fbcon to the framebuffer, ending
+// in a -fbdump you can read.
+//
+// The format is one command per line, `#` comments and blank lines
+// ignored:
+//
+//   key <code> <0|1>         a key up or down
+//   type <text>              that text as press/release pairs, US layout
+//   rel <dx> <dy>            relative mouse movement
+//   btn <left|middle|right> <0|1>
+//   wheel <v>                vertical wheel clicks, positive is up
+//   sleep <ms>               host milliseconds, not guest
+//
+// `key` is in whichever numbering the guest's keyboard uses, because there
+// are two and neither is a superset of the other: evdev codes for a Linux
+// boot (see evdev_keycode), and DOOM's own codes from doomkeys.h for a
+// bare-metal one, where 27 is escape and 13 is return. `rel`, `btn` and
+// `wheel` likewise go to whichever mouse the mode has -- virtio-input for
+// Linux, the MMIO accumulators for DOOM.
+//
+// Every command syncs, and there is a small delay after each one. Both are
+// deliberate: an input report is only delivered at a SYN, and the guest
+// drains its queue at emulated speed, so a script that fires a hundred
+// events with no pacing tests the ring's overflow behaviour rather than
+// the thing it meant to test.
+void DoomSystem::replay_input_script()
+{
+	// Wait for the guest to be somewhere that can receive input, the same
+	// gate the stdin feed uses and for the same reason: keys delivered
+	// before a tty exists go nowhere.
+	while (!run_finished && !memory.get_uart().expect_seen())
+		std::this_thread::sleep_for(std::chrono::milliseconds(1));
+
+	std::ifstream f(input_script_path);
+	if (!f) {
+		std::cout << "cannot open input script: " << input_script_path << std::endl;
+		return;
+	}
+
+	// US layout, for `type` only. This is a keyboard emulator's one
+	// unavoidable layout assumption: the script says "type a", and the
+	// only way to turn that into a physical key is to pick a layout. The
+	// real input path never does this -- it forwards scancodes and lets
+	// the guest's own keymap decide (see evdev_keycode) -- so this table
+	// is test scaffolding and not part of how the device works.
+	struct Chord { char ch; uint16_t code; bool shift; };
+	static const Chord chords[] = {
+		{'a',30,0},{'b',48,0},{'c',46,0},{'d',32,0},{'e',18,0},{'f',33,0},
+		{'g',34,0},{'h',35,0},{'i',23,0},{'j',36,0},{'k',37,0},{'l',38,0},
+		{'m',50,0},{'n',49,0},{'o',24,0},{'p',25,0},{'q',16,0},{'r',19,0},
+		{'s',31,0},{'t',20,0},{'u',22,0},{'v',47,0},{'w',17,0},{'x',45,0},
+		{'y',21,0},{'z',44,0},
+		{'1',2,0},{'2',3,0},{'3',4,0},{'4',5,0},{'5',6,0},
+		{'6',7,0},{'7',8,0},{'8',9,0},{'9',10,0},{'0',11,0},
+		{' ',57,0},{'-',12,0},{'=',13,0},{'[',26,0},{']',27,0},
+		{';',39,0},{'\'',40,0},{'`',41,0},{'\\',43,0},{',',51,0},
+		{'.',52,0},{'/',53,0},{'\n',28,0},
+		{'A',30,1},{'B',48,1},{'C',46,1},{'D',32,1},{'E',18,1},{'F',33,1},
+		{'G',34,1},{'H',35,1},{'I',23,1},{'J',36,1},{'K',37,1},{'L',38,1},
+		{'M',50,1},{'N',49,1},{'O',24,1},{'P',25,1},{'Q',16,1},{'R',19,1},
+		{'S',31,1},{'T',20,1},{'U',22,1},{'V',47,1},{'W',17,1},{'X',45,1},
+		{'Y',21,1},{'Z',44,1},
+		{'!',2,1},{'@',3,1},{'#',4,1},{'$',5,1},{'%',6,1},{'^',7,1},
+		{'&',8,1},{'*',9,1},{'(',10,1},{')',11,1},{'_',12,1},{'+',13,1},
+		{'{',26,1},{'}',27,1},{':',39,1},{'"',40,1},{'~',41,1},{'|',43,1},
+		{'<',51,1},{'>',52,1},{'?',53,1},
+	};
+
+	const auto tap = [&](uint16_t code, bool shift) {
+		VirtioInput &kbd = memory.get_keyboard();
+		if (shift) { kbd.push(VirtioInput::EV_KEY, 42, 1); kbd.sync(); }
+		kbd.push(VirtioInput::EV_KEY, code, 1);
+		kbd.sync();
+		kbd.push(VirtioInput::EV_KEY, code, 0);
+		kbd.sync();
+		if (shift) { kbd.push(VirtioInput::EV_KEY, 42, 0); kbd.sync(); }
+	};
+
+	std::string line;
+	while (!run_finished && std::getline(f, line)) {
+		// Tolerate CRLF: this file is as likely to have been written on
+		// Windows as not, and a trailing CR turns every argument into a
+		// parse error a long way from its cause.
+		while (!line.empty() && (line.back() == '\r' || line.back() == '\n'))
+			line.pop_back();
+		if (line.empty() || line[0] == '#') continue;
+
+		std::istringstream in(line);
+		std::string cmd;
+		in >> cmd;
+
+		if (cmd == "sleep") {
+			int ms = 0;
+			in >> ms;
+			std::this_thread::sleep_for(std::chrono::milliseconds(ms));
+			continue;
+		}
+		if (cmd == "key") {
+			int code = 0, val = 0;
+			in >> code >> val;
+			if (linux_mode) {
+				VirtioInput &kbd = memory.get_keyboard();
+				kbd.push(VirtioInput::EV_KEY, (uint16_t)code, (uint32_t)val);
+				kbd.sync();
+			} else {
+				memory.push_key_event(val != 0, (uint8_t)code);
+			}
+		} else if (cmd == "type") {
+			// The rest of the line verbatim, spaces included, so `type
+			// echo hello` does what it looks like.
+			std::string text;
+			std::getline(in, text);
+			if (!text.empty() && text[0] == ' ') text.erase(0, 1);
+			for (char ch : text) {
+				if (!linux_mode) {
+					// DOOM's key codes are ASCII for everything
+					// printable, so there is no table to consult.
+					memory.push_key_event(true, (uint8_t)ch);
+					memory.push_key_event(false, (uint8_t)ch);
+					std::this_thread::sleep_for(std::chrono::milliseconds(20));
+					continue;
+				}
+				bool found = false;
+				for (const Chord &c : chords) {
+					if (c.ch != ch) continue;
+					tap(c.code, c.shift);
+					found = true;
+					break;
+				}
+				if (!found)
+					std::cout << "input script: no key for '" << ch << "'" << std::endl;
+				std::this_thread::sleep_for(std::chrono::milliseconds(20));
+			}
+		} else if (cmd == "rel") {
+			int dx = 0, dy = 0;
+			in >> dx >> dy;
+			if (!linux_mode) {
+				memory.push_mouse_motion(dx, dy);
+			} else {
+				VirtioInput &ms = memory.get_mouse();
+				if (dx) ms.push(VirtioInput::EV_REL, VirtioInput::REL_X, (uint32_t)dx);
+				if (dy) ms.push(VirtioInput::EV_REL, VirtioInput::REL_Y, (uint32_t)dy);
+				ms.sync();
+			}
+		} else if (cmd == "btn") {
+			std::string which;
+			int val = 0;
+			in >> which >> val;
+			if (!linux_mode) {
+				int bit = 0;
+				if (which == "right")  bit = 1;
+				if (which == "middle") bit = 2;
+				memory.push_mouse_button(bit, val != 0);
+			} else {
+				uint16_t code = VirtioInput::BTN_LEFT;
+				if (which == "right")  code = VirtioInput::BTN_RIGHT;
+				if (which == "middle") code = VirtioInput::BTN_MIDDLE;
+				VirtioInput &ms = memory.get_mouse();
+				ms.push(VirtioInput::EV_KEY, code, (uint32_t)val);
+				ms.sync();
+			}
+		} else if (cmd == "wheel") {
+			int v = 0;
+			in >> v;
+			// DOOM has no wheel: doomgeneric's key hook carries no axis
+			// for it and DOOM itself predates the hardware.
+			if (linux_mode) {
+				VirtioInput &ms = memory.get_mouse();
+				ms.push(VirtioInput::EV_REL, VirtioInput::REL_WHEEL, (uint32_t)v);
+				ms.sync();
+			}
+		} else {
+			std::cout << "input script: unknown command '" << cmd << "'" << std::endl;
+			continue;
+		}
+		std::this_thread::sleep_for(std::chrono::milliseconds(30));
+	}
+	std::cout << "input script finished" << std::endl;
+}
+
 void DoomSystem::run()
 {
 	// CPU execution and rendering run on separate threads: instruction
@@ -479,6 +835,13 @@ void DoomSystem::run()
 	// Debugger stays exclusively CPU-thread-owned, so it needs no locking.
 	std::thread cpu_thread(&DoomSystem::cpu_loop, this);
 	cpu_thread.detach();
+
+	// A scripted input replay runs in either mode and whether or not there
+	// is a window: the point of it is to exercise the input path without a
+	// person, and DOOM needs that as much as Linux does -- more, since
+	// checking DOOM's mouse means watching the rendered view change.
+	if (!input_script_path.empty())
+		std::thread(&DoomSystem::replay_input_script, this).detach();
 
 	// Headless: nothing to draw and nothing to poll, so this thread just
 	// waits for the guest to finish and then ends the process. Without
@@ -495,22 +858,129 @@ void DoomSystem::run()
 	}
 
 	while (true) {
-		for (const RawKeyEvent &ev : gui.poll_input()) {
-			// Intercepted before either mode forwards anything to the guest,
-			// so the resume key is never seen as Doom input or console input.
-			if (ev.pressed && ev.sdl_keysym == SDLK_F9) {
-				resume_requested = true;
+		for (const RawInputEvent &ev : gui.poll_input()) {
+			// The window's own keys, intercepted before either mode
+			// forwards anything, so the guest never sees them as input.
+			//
+			// Ctrl+Alt for the two new ones rather than more function
+			// keys. A bare function key is not free: DOOM binds all
+			// twelve, so F10 would have been "quit game" and F11 the
+			// gamma control, and a guest that has taken the mouse needs a
+			// way out that is not also a key it might mean to press.
+			// Ctrl+Alt+G for grab is the convention every other emulator
+			// uses. F9 stays as it is -- it predates this and is already
+			// documented -- and it costs DOOM its quickload.
+			if (ev.kind == RawInputEvent::Kind::Key && ev.pressed) {
+				const bool ctrl_alt = (ev.mods & KMOD_CTRL) && (ev.mods & KMOD_ALT);
+				if (ev.sdl_keysym == SDLK_F9) { resume_requested = true; continue; }
+				if (ctrl_alt && ev.sdl_keysym == SDLK_g) {
+					gui.set_mouse_captured(!gui.mouse_captured());
+					continue;
+				}
+				// Only in Linux mode, where there is a framebuffer big
+				// enough for the question to arise. In DOOM mode this
+				// would do nothing and cost the guest a keystroke.
+				if (ctrl_alt && ev.sdl_keysym == SDLK_f && linux_mode) {
+					gui.toggle_fb_fullscreen();
+					continue;
+				}
+			}
+
+			if (!linux_mode) {
+				// DOOM needs both key edges: movement is held down rather
+				// than typed. The mouse goes into accumulators instead of
+				// a queue -- see the MMIO_MOUSE_MOVE comment in memory.hpp
+				// for why those are different shapes.
+				switch (ev.kind) {
+				case RawInputEvent::Kind::Key:
+					memory.push_key_event(ev.pressed, translate_key(ev.sdl_keysym));
+					break;
+				case RawInputEvent::Kind::MouseMotion:
+					memory.push_mouse_motion(ev.dx, ev.dy);
+					break;
+				case RawInputEvent::Kind::MouseButton: {
+					// DOOM's own bit order, from d_event.h: 0 left,
+					// 1 right, 2 middle. Not evdev's, and not SDL's.
+					int bit = -1;
+					if (ev.button == SDL_BUTTON_LEFT)   bit = 0;
+					if (ev.button == SDL_BUTTON_RIGHT)  bit = 1;
+					if (ev.button == SDL_BUTTON_MIDDLE) bit = 2;
+					memory.push_mouse_button(bit, ev.pressed);
+					break;
+				}
+				default:
+					break;
+				}
 				continue;
 			}
-			if (linux_mode) {
-				// One byte per keypress, not per press+release -- unlike
-				// Doom's own key_queue (which needs up/down edges for
-				// movement), a console only ever wants the character once.
-				if (!ev.pressed) continue;
-				uint8_t ch = translate_console_key(ev.sdl_keysym);
-				if (ch != 0) memory.get_uart().push_rx(ch);
-			} else {
-				memory.push_key_event(ev.pressed, translate_key(ev.sdl_keysym));
+
+			// Linux gets the same event twice over, through two devices
+			// that are not alternatives to each other. The virtio
+			// keyboard is a real input device, so it drives the
+			// framebuffer console, and anything that reads /dev/input; the
+			// UART is the serial console on hvc0. Which one a given guest
+			// is listening to depends on its own console= setting, and
+			// this side has no way to know -- so both are fed, and the one
+			// nothing is reading costs a few queued events.
+			switch (ev.kind) {
+			case RawInputEvent::Kind::Key: {
+				// Auto-repeat is the host's, and the guest's input layer
+				// does its own from the held state. Forwarding a repeat
+				// as a fresh press would make the guest see a key pressed
+				// twice without being released, so the keyboard gets only
+				// real edges. The serial console has no held state and
+				// does want repeats, which is why this is filtered here
+				// and not in poll_input.
+				if (!ev.repeat) {
+					const uint16_t code = evdev_keycode(ev.sdl_scancode);
+					if (code) {
+						VirtioInput &kbd = memory.get_keyboard();
+						kbd.push(VirtioInput::EV_KEY, code, ev.pressed ? 1 : 0);
+						kbd.sync();
+					}
+				}
+				if (ev.pressed) {
+					uint8_t bytes[4];
+					const int n = console_key_bytes(ev, bytes);
+					for (int i = 0; i < n; i++) memory.get_uart().push_rx(bytes[i]);
+				}
+				break;
+			}
+			case RawInputEvent::Kind::Text:
+				// Printable characters, for the serial console only. The
+				// keyboard above already sent the key that produced them.
+				for (const char *p = ev.text; *p; p++)
+					memory.get_uart().push_rx((uint8_t)*p);
+				break;
+			case RawInputEvent::Kind::MouseMotion: {
+				VirtioInput &ms = memory.get_mouse();
+				if (ev.dx) ms.push(VirtioInput::EV_REL, VirtioInput::REL_X, (uint32_t)ev.dx);
+				if (ev.dy) ms.push(VirtioInput::EV_REL, VirtioInput::REL_Y, (uint32_t)ev.dy);
+				// One SYN for the pair: a report is a complete state
+				// change, and splitting X from Y makes a diagonal
+				// movement arrive as two separate steps.
+				ms.sync();
+				break;
+			}
+			case RawInputEvent::Kind::MouseButton: {
+				uint16_t code = 0;
+				if (ev.button == SDL_BUTTON_LEFT)   code = VirtioInput::BTN_LEFT;
+				if (ev.button == SDL_BUTTON_RIGHT)  code = VirtioInput::BTN_RIGHT;
+				if (ev.button == SDL_BUTTON_MIDDLE) code = VirtioInput::BTN_MIDDLE;
+				if (code) {
+					VirtioInput &ms = memory.get_mouse();
+					ms.push(VirtioInput::EV_KEY, code, ev.pressed ? 1 : 0);
+					ms.sync();
+				}
+				break;
+			}
+			case RawInputEvent::Kind::MouseWheel: {
+				VirtioInput &ms = memory.get_mouse();
+				if (ev.dy) ms.push(VirtioInput::EV_REL, VirtioInput::REL_WHEEL, (uint32_t)ev.dy);
+				if (ev.dx) ms.push(VirtioInput::EV_REL, VirtioInput::REL_HWHEEL, (uint32_t)ev.dx);
+				ms.sync();
+				break;
+			}
 			}
 		}
 

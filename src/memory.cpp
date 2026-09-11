@@ -132,6 +132,12 @@ uint8_t Memory::read8(uint64_t addr)
 		return lfb[addr - LFB_BASE];
 	if (addr >= UART_BASE && addr < UART_BASE + UART_SIZE)
 		return uart.read(addr - UART_BASE);
+	// virtio-input's config space is a packed struct of bytes, so unlike
+	// the block device these have to answer narrow reads.
+	if (addr >= VIRTIO_KBD_BASE && addr < VIRTIO_KBD_BASE + VIRTIO_SIZE)
+		return kbd_dev.read8(addr - VIRTIO_KBD_BASE);
+	if (addr >= VIRTIO_MOUSE_BASE && addr < VIRTIO_MOUSE_BASE + VIRTIO_SIZE)
+		return mouse_dev.read8(addr - VIRTIO_MOUSE_BASE);
 	return 0;
 }
 
@@ -162,9 +168,31 @@ uint32_t Memory::read32(uint64_t addr)
 	if (addr == MMIO_TICK) {
 		return tick_counter;
 	}
+	if (addr == MMIO_MOUSE_MOVE) {
+		std::lock_guard<std::mutex> lock(mouse_mutex);
+		// Saturate rather than wrap. A wrapped delta is a pointer that
+		// jumps the other way, and a mouse moved further than 32767 units
+		// between two frames is not a movement anything should try to
+		// reproduce faithfully.
+		const int cx = mouse_dx < -32768 ? -32768 : (mouse_dx > 32767 ? 32767 : mouse_dx);
+		const int cy = mouse_dy < -32768 ? -32768 : (mouse_dy > 32767 ? 32767 : mouse_dy);
+		mouse_dx = 0;
+		mouse_dy = 0;
+		return ((uint32_t)(uint16_t)(int16_t)cx << 16) | (uint32_t)(uint16_t)(int16_t)cy;
+	}
+	if (addr == MMIO_MOUSE_BTN) {
+		std::lock_guard<std::mutex> lock(mouse_mutex);
+		return mouse_buttons;
+	}
+	// WAD_BASE fits in 32 bits and the guest is happy with a 32-bit
+	// pointer for it, so one word each.
+	if (addr == MMIO_WAD_BASE) return (uint32_t)WAD_BASE;
+	if (addr == MMIO_WAD_SIZE) return wad_len;
 	if (addr >= CLINT_BASE && addr < CLINT_BASE + CLINT_SIZE) return timer.read32(addr - CLINT_BASE);
 	if (addr >= APLIC_BASE && addr < APLIC_BASE + APLIC_SIZE) return aplic.read32(addr - APLIC_BASE);
 	if (addr >= VIRTIO_BASE && addr < VIRTIO_BASE + VIRTIO_SIZE) return disk.read32(addr - VIRTIO_BASE);
+	if (addr >= VIRTIO_KBD_BASE && addr < VIRTIO_KBD_BASE + VIRTIO_SIZE) return kbd_dev.read32(addr - VIRTIO_KBD_BASE);
+	if (addr >= VIRTIO_MOUSE_BASE && addr < VIRTIO_MOUSE_BASE + VIRTIO_SIZE) return mouse_dev.read32(addr - VIRTIO_MOUSE_BASE);
 	if (addr >= IMSIC_M_BASE && addr < IMSIC_M_BASE + IMSIC_SIZE) return 0; // seteipnum_le reads as zero, per spec
 	if (addr >= IMSIC_S_BASE && addr < IMSIC_S_BASE + IMSIC_SIZE) return 0;
 
@@ -219,6 +247,10 @@ void Memory::write8(uint64_t addr, uint8_t val)
 		std::fflush(stdout);
 	} else if (addr >= UART_BASE && addr < UART_BASE + UART_SIZE) {
 		uart.write(addr - UART_BASE, val);
+	} else if (addr >= VIRTIO_KBD_BASE && addr < VIRTIO_KBD_BASE + VIRTIO_SIZE) {
+		kbd_dev.write8(addr - VIRTIO_KBD_BASE, val);
+	} else if (addr >= VIRTIO_MOUSE_BASE && addr < VIRTIO_MOUSE_BASE + VIRTIO_SIZE) {
+		mouse_dev.write8(addr - VIRTIO_MOUSE_BASE, val);
 	}
 }
 
@@ -292,6 +324,14 @@ void Memory::write32(uint64_t addr, uint32_t val)
 	// A virtio register write can start I/O, which needs to read
 	// descriptors out of guest memory and raise an interrupt -- hence the
 	// device taking both back rather than being self-contained.
+	if (addr >= VIRTIO_KBD_BASE && addr < VIRTIO_KBD_BASE + VIRTIO_SIZE) {
+		kbd_dev.write32(addr - VIRTIO_KBD_BASE, val, *this, aplic);
+		return;
+	}
+	if (addr >= VIRTIO_MOUSE_BASE && addr < VIRTIO_MOUSE_BASE + VIRTIO_SIZE) {
+		mouse_dev.write32(addr - VIRTIO_MOUSE_BASE, val, *this, aplic);
+		return;
+	}
 	if (addr >= VIRTIO_BASE && addr < VIRTIO_BASE + VIRTIO_SIZE) {
 		disk.write32(addr - VIRTIO_BASE, val, *this, aplic);
 		return;
@@ -366,6 +406,7 @@ bool Memory::load_wad(const uint8_t *wad_bytes, size_t len)
 {
 	if (len > WAD_SIZE) return false;
 	std::memcpy(&ram[RAM_SIZE], wad_bytes, len);
+	wad_len = (uint32_t)len;
 	return true;
 }
 
@@ -377,6 +418,21 @@ void Memory::push_key_event(bool pressed, uint8_t doom_keycode)
 
 	key_queue[key_queue_tail] = ((uint32_t)pressed << 8) | doom_keycode;
 	key_queue_tail = next;
+}
+
+void Memory::push_mouse_motion(int dx, int dy)
+{
+	std::lock_guard<std::mutex> lock(mouse_mutex);
+	mouse_dx += dx;
+	mouse_dy += dy;
+}
+
+void Memory::push_mouse_button(int doom_bit, bool pressed)
+{
+	if (doom_bit < 0 || doom_bit > 2) return;
+	std::lock_guard<std::mutex> lock(mouse_mutex);
+	if (pressed) mouse_buttons |= (1u << doom_bit);
+	else         mouse_buttons &= ~(1u << doom_bit);
 }
 
 void Memory::step_instructions(uint32_t count)
@@ -411,6 +467,8 @@ bool Memory::is_backed(uint64_t addr, unsigned size) const
 	if (in(MMIO_FB, FB_SIZE)) return true;
 	if (in(LFB_BASE, LFB_SIZE)) return true;
 	if (in(TEST_BASE, TEST_SIZE)) return true;
+	if (in(VIRTIO_KBD_BASE, VIRTIO_SIZE)) return true;
+	if (in(VIRTIO_MOUSE_BASE, VIRTIO_SIZE)) return true;
 	if (in(UART_BASE, UART_SIZE)) return true;
 	if (in(CLINT_BASE, CLINT_SIZE)) return true;
 	if (in(APLIC_BASE, APLIC_SIZE)) return true;
@@ -421,6 +479,20 @@ bool Memory::is_backed(uint64_t addr, unsigned size) const
 	// bytes; an eight-byte access spanning two of them is not a thing the
 	// hardware answers.
 	if (in(MMIO_INPUT, 4) || in(MMIO_TICK, 4) || in(MMIO_DEBUG, 4)) return true;
+	if (in(MMIO_MOUSE_MOVE, 4) || in(MMIO_MOUSE_BTN, 4)) return true;
+	if (in(MMIO_WAD_BASE, 4) || in(MMIO_WAD_SIZE, 4)) return true;
 
 	return false;
+}
+
+// Hand any queued input events to the guest.
+//
+// The window enqueues on its own thread; this runs on the CPU thread,
+// which is the only one entitled to touch guest memory or the device's
+// queue state. Both devices are pumped because a click and the motion
+// before it come from different devices and neither is worth delaying.
+void Memory::pump_input()
+{
+	kbd_dev.pump(*this, aplic);
+	mouse_dev.pump(*this, aplic);
 }

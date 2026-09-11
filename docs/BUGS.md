@@ -313,6 +313,14 @@ of console output (`2667bf1`, re-verified in `936df17`).
 152. [The fix for the poweroff was written for a kernel that could not run it](#bug152)
 153. [Not a bug: a screenshot is not evidence](#bug153)
 
+<a id="part-xii-toc"></a>
+### Part XII — A keyboard and a mouse, and the constant that drifted (2026-09-11)
+
+154. [DOOM had been unable to find its WAD since RAM grew](#bug154)
+155. [The framebuffer aperture shadowed the new devices, in the byte paths only](#bug155)
+156. [A console keyboard rebuilt from keysyms only works on one layout](#bug156)
+157. [Not a bug: the test that measured the test](#bug157)
+
 <a id="part-vii"></a>
 ### Part VII — Cross-cutting
 
@@ -6704,4 +6712,199 @@ The pixel count is the part worth keeping. A cleared console with a login
 prompt on it lights about a thousand of 786432 pixels, and two lines of 8x16
 text disappear entirely when a 1024x768 image is scaled down to glance at.
 The bounding box and the count are the measurement; the thumbnail is not.
+
+## Part XII — A keyboard and a mouse, and the constant that drifted
+
+Adding real input devices -- `virtio-input` keyboard and mouse for Linux,
+MMIO registers for DOOM -- was a feature, not a bug hunt. It turned up
+three things anyway, and the first is the worst bug in this document that
+nothing was testing.
+
+### 154. DOOM had been unable to find its WAD since RAM grew to 1GB
+<a id="bug154"></a>
+
+**Symptom.**
+
+```
+W_Init: Init WADfiles.
+ adding doom1.wad
+Wad file doom1.wad doesn't have IWAD or PWAD id
+```
+
+The WAD on disk is fine: 4196020 bytes, first four bytes `IWAD`.
+
+**Root cause.** Two copies of one constant, and one of them moved.
+
+The host places the WAD immediately above RAM:
+
+```cpp
+static constexpr uint64_t WAD_BASE = RAM_BASE + RAM_SIZE;
+```
+
+The guest had its own copy in `tools/doom/doombuild/doomv_mmio.h`:
+
+```c
+#define RAM_SIZE     0x10000000u   // 256MB
+#define WAD_BASE     0x90000000u
+```
+
+`RAM_SIZE` was raised from 256MB to 1GB so that a distribution would fit --
+systemd in 256MB is not workable and `apt` is hopeless -- which moved
+`WAD_BASE` from `0x90000000` to `0xC0000000`. The guest went on reading
+`0x90000000`, a gigabyte short, where it found zeros.
+
+So the change that made Ubuntu possible broke DOOM, and DOOM is the thing
+this emulator is named after. Nothing caught it because no suite runs DOOM:
+the six suites cover the ISA, the privileged architecture, the vector unit
+and a Linux boot, and the bare-metal guest is checked by looking at it.
+Between one look and the next, it stopped working.
+
+**Fix.** Not "update the other copy", which would leave the same trap armed
+for the next time either number changes. The guest asks:
+
+```c
+#define MMIO_WAD_BASE 0x10000014u
+#define MMIO_WAD_SIZE 0x10000018u
+```
+
+Nothing can `static_assert` across the emulation boundary, so the only
+durable fix for a constant that must match on both sides is for one side to
+stop having a copy. Publishing the length as well removed a second
+duplication -- it had been compiled in as `-DWAD_LENGTH` from a table of
+four hardcoded file sizes in the guest Makefile -- and as a side effect the
+four output binaries now differ only in name, and any of them runs whichever
+WAD it is handed.
+
+**Evidence.** `I_InitGraphics: framebuffer: x_res: 320, y_res: 200` and a
+title screen in the window, from the same command that produced the error
+above.
+
+### 155. The framebuffer aperture shadowed the new devices, in the byte paths only
+<a id="bug155"></a>
+
+**Symptom.** Both `virtio-input` devices probed, registered, and were
+useless:
+
+```
+I: Bus=0006 Vendor=0000 Product=0000 Version=0000
+N: Name=""
+H: Handlers=event0
+B: EV=1
+```
+
+No name, and `EV=1` is `EV_SYN` alone -- the bit the kernel sets itself. A
+device that is present and answers nothing, which is a worse failure than a
+device that is absent: absent is diagnosable.
+
+**Root cause.** I had put the devices at `0x10009000` and `0x1000A000`,
+following the QEMU convention of virtio slots next to the disk's
+`0x10008000`. DOOM's framebuffer is `320*200*4` bytes at `0x10001000`, so
+its aperture runs to `0x1003F7FF` and covers all of them.
+
+The disk had been living inside that aperture the whole time without
+trouble, because `read32`/`write32` happen to test the virtio range before
+`MMIO_FB`. `read8`/`write8` test `MMIO_FB` first -- and `virtio-input` is
+the first device here whose config space is read a byte at a time, because
+it is a packed struct of `u8`s and a 128-byte union rather than a few
+words. So every config read returned a framebuffer byte, which is zero.
+
+The one non-zero field was a red herring that cost twenty minutes:
+`Bus=0006` is `BUS_VIRTUAL`, which the driver assigns itself and only
+overwrites if the device's `ID_DEVIDS` answer is long enough. It looked like
+evidence that config space was working.
+
+**Fix.** Moved to `0x10100000` and `0x10101000`, past the aperture, with a
+`static_assert` that they are:
+
+```cpp
+static_assert(VIRTIO_KBD_BASE >= MMIO_FB + FB_SIZE,
+              "input devices must not sit inside DOOM's framebuffer aperture");
+```
+
+Reordering the branch chain would also have worked and would have left the
+next device to rediscover this. The overlap that remains -- the disk at
+`0x10008000` -- is noted where it is, since moving a working device's
+address is a device-tree-compatibility change and not a bug fix.
+
+### 156. A console keyboard rebuilt from keysyms only works on one layout
+<a id="bug156"></a>
+
+Not a crash; a design that could not be right. Worth recording because the
+wrong version looked completely reasonable and passed every test anyone
+would think to run on a US keyboard.
+
+`translate_console_key` turned an SDL keysym plus a shift bit into a
+character, with a hand-written table of the shifted punctuation:
+
+```cpp
+if (shift) {
+        switch (sdl_keysym) {
+        case '1': return '!';
+        case '2': return '@';
+        ...
+```
+
+Every line of that table is a claim about the *host's* keyboard layout.
+Shift+2 is `@` on a US board, `"` on a UK one, `~` on a French one. And a
+layout is not a table of pairs anyway -- dead keys compose over the
+following keystroke, and AltGr is a third level the shift bit cannot
+express.
+
+The replacement uses the two facts SDL already knows. `SDL_TEXTINPUT`
+delivers composed characters with layout, modifiers and dead keys already
+resolved, which is the entire problem solved by the platform that owns it.
+And `SDL_KEYDOWN`'s *scancode* names the physical key, which is what an
+evdev keyboard reports and what lets the guest apply its own keymap -- so a
+guest running `loadkeys dvorak` behaves the way it would on hardware. The
+only thing left in the keysym path is what genuinely has no character: the
+arrows and navigation block as CSI sequences, and Ctrl+letter.
+
+The 96-entry chord table that remains in `replay_input_script` is the same
+assumption, deliberately: a script that says `type a` has to pick a layout
+to turn that into a key. It is test scaffolding, it is labelled as such, and
+it is not on the path any real keystroke takes.
+
+### 157. Not a bug: the test that measured the test
+<a id="bug157"></a>
+
+The mouse appeared not to work. Events were reaching the guest's queue --
+instrumentation showed seven delivered into 8-byte writable descriptors, the
+used ring published, the APLIC source configured (`cfg=6`), the interrupt
+pending and enabled in the IMSIC (`eie=1 thr=0 deliv=1`) -- and `dd
+if=/dev/input/event1` sat blocked forever.
+
+Every layer measured as working and the whole did not, which is the shape of
+a problem that is not in any of the layers. It was in the test:
+
+```
+~ # (dd if=/dev/input/event1 bs=24 coinput script finished
+unt=6 2>/dev/null | od -An -tx1; echo MOUSE
+-READ-DONE) &
+```
+
+`input script finished` is interleaved into the middle of the shell's echo
+of the command. The script had sent every event and exited while the guest
+was still *typing the command that would read them* -- the guest runs at
+about 6.6 MIPS, and forking a subshell takes it a while. `virtio_input`
+drops events when no client has the device open, correctly, so all seven
+went in the bin.
+
+The fix was `sleep 45000` instead of `sleep 6000`. Then:
+
+```
+ 02 00 00 00 28 00 00 00     type=EV_REL code=REL_X value=+40
+ 02 00 01 00 ec ff ff ff     type=EV_REL code=REL_Y value=-20
+```
+
+which is `rel 40 -20`, exactly as sent.
+
+Two things worth keeping. Instrumenting every layer was not wasted -- it is
+what turned "the mouse does not work" into "every layer works", which is the
+observation that points at the harness. And a guest whose clock is driven by
+retired instructions makes timing assumptions from the host side wrong in a
+way that has nothing to do with how fast the host is: the same script passes
+or fails depending on how much work the guest has to do first, and the only
+robust answer is to key off something the guest emits rather than off a
+delay. `-expect` does that for the console; the input script still cannot,
+because a mouse has nothing to say.
 

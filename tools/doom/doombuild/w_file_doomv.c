@@ -4,23 +4,27 @@
 // indirection (stdc/mmap backend selection) entirely.
 
 #include <stddef.h>
+#include <stdint.h>
 
 #include "doomv_mmio.h"
 #include "doomtype.h"
 #include "w_file.h"
 
-#ifndef WAD_LENGTH
-#error "WAD_LENGTH must be defined by the build (see guest Makefile)"
-#endif
-
 wad_file_t *W_OpenFile(char *path)
 {
 	(void)path; // no real filesystem to search, always the embedded WAD
 
+	// Both come from the host, which is the only side that knows either.
+	// This used to be a hardcoded WAD_BASE plus a WAD_LENGTH baked in by
+	// the Makefile at build time; the address drifted out of step with
+	// src/memory.hpp and DOOM stopped finding its WAD. Asking cannot
+	// drift, and taking the length from the host as well means this
+	// binary runs whichever WAD it is handed rather than only the one it
+	// was compiled beside.
 	static wad_file_t wad;
 	wad.file_class = NULL;
-	wad.mapped = (byte *)WAD_BASE;
-	wad.length = WAD_LENGTH;
+	wad.mapped = (byte *)(uintptr_t)doomv_wad_base();
+	wad.length = (int)doomv_wad_size();
 
 	return &wad;
 }

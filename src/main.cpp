@@ -17,6 +17,8 @@ int main(int argc, char *argv[])
 	bool have_sig = false;
 	std::string fb_dump_path;
 	std::string expect_text;
+	std::string input_script;
+	std::string gui_dump_path;
 	std::string opensbi_path, kernel_path, dtb_path, initrd_path;
 	uint64_t tohost_addr = 0;
 	std::string disk_path;
@@ -62,6 +64,15 @@ int main(int argc, char *argv[])
 			// so a pipe needs a prompt to wait for -- see
 			// DoomSystem::console_stdin_loop and Uart::expect.
 			expect_text = arg.substr(8);
+		} else if (arg.rfind("-guidump=", 0) == 0) {
+			// The composed window as a PPM -- the dashboard included, not
+			// just the guest's display. See Gui::set_canvas_dump.
+			gui_dump_path = arg.substr(9);
+		} else if (arg.rfind("-input=", 0) == 0) {
+			// Replay a script of keyboard and mouse events. The only way
+			// to exercise the input devices without a window -- see
+			// DoomSystem::replay_input_script.
+			input_script = arg.substr(7);
 		} else if (arg.rfind("-disk=", 0) == 0) {
 			// A raw disk image, attached as virtio-blk. This is what lets a
 			// real distribution root filesystem be mounted rather than
@@ -129,6 +140,8 @@ int main(int argc, char *argv[])
 	if (have_sig) system.set_signature_range(sig_begin, sig_end, "signature.log");
 	if (!fb_dump_path.empty()) system.set_fb_dump(fb_dump_path.c_str());
 	if (!expect_text.empty()) system.set_console_expect(expect_text.c_str());
+	if (!input_script.empty()) system.set_input_script(input_script.c_str());
+	if (!gui_dump_path.empty()) system.set_canvas_dump(gui_dump_path.c_str());
 	if (tohost_addr) system.watch_tohost(tohost_addr);
 
 	system.run();
