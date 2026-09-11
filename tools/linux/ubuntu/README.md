@@ -59,7 +59,8 @@ boots Linux is that it can run the distribution's own tooling. If DoomV can
 configure a hundred Ubuntu packages then it is running real riscv64 userspace
 under real load, which is a far stronger statement than any conformance suite
 makes -- and if it cannot, that is a bug worth finding. Expect it to take a
-long while; DoomV runs around 13 MIPS and this is a great deal of dpkg.
+long while -- a Linux boot measures about 6.6 MIPS
+(`tools/verification/bench_boot.sh`), and this is a great deal of dpkg.
 
 The guest ends the run itself, through SBI SRST and the `sifive,test0` device
 in the device tree, so stage 2 is unattended. Without that device a guest's
@@ -147,8 +148,12 @@ heartbeat produced no output at all. Anything scripted inside a guest that
 means to wait for a wall-clock interval has to be scaled, or keyed off work
 done rather than time passed.
 
-**Speed.** DoomV runs around 13 MIPS, so a systemd boot that takes two
-seconds on hardware takes minutes here. That is expected, not a fault, and
+**Speed.** A Linux boot measures about 6.6 MIPS -- run
+`tools/verification/bench_boot.sh` to check it on your machine -- so a
+systemd boot that takes two seconds on hardware takes minutes here. The
+figure is worth measuring rather than assuming: it was 1.67 MIPS before a
+TLB, a `read16` fast path and a PMP region cache, which is a 4x difference
+in how long anything on this page takes. That is expected, not a fault, and
 it is why `-ng` exists for the test suites — but for this image you want the
 window, since the point is to log in and look around.
 
