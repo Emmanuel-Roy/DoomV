@@ -209,6 +209,13 @@ if [ "$rc" = 0 ]; then
 	# No NIC in this machine, so this unit would block the boot for two
 	# minutes waiting for a link that never comes up.
 	systemctl disable systemd-networkd-wait-online.service 2>/dev/null || true
+	# A login prompt on the framebuffer, which is the whole point of having
+	# one. getty-static.service covers tty2-tty6 "if dbus and logind are not
+	# available" -- tty1 is normally logind's job through autovt, and there
+	# is no logind on an image this small. So the window reached a fully
+	# booted system and showed nothing: fbcon is cleared when systemd takes
+	# over and then nobody writes to it.
+	systemctl enable getty@tty1.service 2>/dev/null || true
 	rm -f /doomv-stage2
 	echo "=== DOOMV-STAGE2-OK ==="
 else
@@ -216,10 +223,25 @@ else
 fi
 
 sync
-umount /proc /sys 2>/dev/null || true
-# SBI SRST, through the sifive,test0 device in the device tree. Without a way
-# for the guest to end the run, an unattended build sits at a dead prompt.
+# /proc stays mounted: the poweroff below goes through
+# /proc/sysrq-trigger, and unmounting it first is how you get a script that
+# cannot turn the machine off.
+umount /sys 2>/dev/null || true
+# End the run. Without a way for the guest to do this, an unattended build
+# sits at a dead prompt forever.
+#
+# sysrq first, because it is the one that works from here: `poweroff` in this
+# rootfs is systemd's, and systemd's poweroff wants to talk to a running
+# systemd -- which there is not, since this script is PID 1. That is how the
+# first version reached DOOMV-STAGE2-OK and then printed
+# DOOMV-STAGE2-POWEROFF-FAILED and sat in its own sleep loop.
+#
+# `echo o` is sysrq's power-off, handled in the kernel with no userspace
+# involved, and it reaches DoomV's sifive,test0 device through SBI SRST.
+echo o > /proc/sysrq-trigger 2>/dev/null || true
+# And the fallbacks, in case CONFIG_MAGIC_SYSRQ is off.
 poweroff -f 2>/dev/null || true
+reboot -f 2>/dev/null || true
 echo "=== DOOMV-STAGE2-POWEROFF-FAILED ==="
 while true; do sleep 60; done
 STAGE2
