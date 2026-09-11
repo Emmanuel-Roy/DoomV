@@ -166,8 +166,27 @@ that will never come up.
 
 ## Status
 
-Not yet booted. The block path it depends on is verified: `../rootfs/mkdisk.sh`
-builds a GPT-partitioned image and DoomV boots BusyBox from `/dev/vda1`
-through it, so virtio-blk reports the right capacity, the primary GPT parses,
-and the partition mounts. What is untested is everything systemd does after
-that.
+Built and booted. Stage 1 unpacked 104 packages on the host; DoomV ran stage 2
+and `dpkg` configured all 104 of them -- `dpkg -l` on the finished image shows
+104 `install ok installed` and nothing left unpacked, and `/sbin/init` is
+systemd. Booting that image reaches `Welcome to Ubuntu 24.04 LTS!`, `Reached
+target multi-user.target` and a `doomv login:` prompt.
+
+The framebuffer is verified the same way, with `-fbdump=<path>` rather than a
+screenshot -- a screenshot of an SDL window is not evidence, since
+`CopyFromScreen` captures whatever is actually on top of that rectangle and
+`PrintWindow` returns black for GPU-composited content. The dump comes from
+`Memory::linux_framebuffer()` itself, so it cannot be the wrong window. On the
+Ubuntu boot it holds two lines of 8x16 fbcon text at the top left:
+
+```
+Ubuntu 24.04 LTS doomv tty1
+
+doomv login: _
+```
+
+which is getty's issue banner, rendered by the kernel into DoomV's
+framebuffer. Its pixel count is small (about a thousand lit pixels of
+786432) because that is all a cleared console with a login prompt on it
+*is* -- worth knowing before concluding from a thumbnail that the screen is
+blank.

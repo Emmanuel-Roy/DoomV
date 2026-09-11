@@ -101,3 +101,7 @@ tools/verification/tests/archtest/sail_trace*.txt
 tohost.log
 tools/verification/tests/suites/out/
 tools/verification/tests/suites/ref/
+
+# Framebuffer dumps from -fbdump=<path>, and anything converted from one.
+*.ppm
+fb*.png
