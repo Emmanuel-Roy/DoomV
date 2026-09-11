@@ -196,6 +196,7 @@ to be the one that is wrong, but it does not decide anything.
 | riscv-tests | the Berkeley suite, 377 applicable of 667 | **377 / 377** |
 | damo-rv-priv-ats | hypervisor, the only H coverage that exists anywhere -- 43 groups | **43 / 43 groups** |
 | Linux | OpenSBI + 6.12 + busybox, ext4 root over virtio-blk | boots to an interactive shell, in a 1024x768 framebuffer console |
+| Ubuntu 24.04 | 104 packages, configured by DoomV running Ubuntu's own `dpkg`, systemd as PID 1 | boots to `doomv login:` |
 | DOOM | bare-metal, no OS | plays |
 
 `riscv-vector-tests` is the suite that covers the vector ISA at the width
@@ -208,6 +209,17 @@ M-mode's illegal-instruction path directly, and that is where the last
 failure anywhere in this project turned out to be: `mstatus.TSR` was
 writable and never read, so an S-mode `SRET` returned when it should have
 trapped.
+
+The Ubuntu row is the one no conformance suite can stand in for. Nothing
+about it is checked against a reference model -- it either configures a
+hundred packages or it does not. Stage 1 unpacks the `.debs` on the host
+with `debootstrap --foreign`, which executes no riscv64 code; stage 2 is
+booted with `init=/doomv-stage2` and **DoomV** runs Ubuntu's own `dpkg`,
+the maintainer scripts, and the perl and shell they fork. The usual way to
+do that step is `qemu-user-static` and binfmt, which is deliberately not
+what happens here: an emulator that boots Linux should be able to run the
+distribution's own tooling, and if it cannot, that is a bug worth finding.
+See [tools/linux/ubuntu/](tools/linux/ubuntu/README.md).
 
 Every suite runs headless (`-ng`), which is what makes them practical to
 run at all: arch-test's 663 tests take about 40 seconds and the 43-group
