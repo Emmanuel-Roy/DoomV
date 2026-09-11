@@ -115,7 +115,7 @@ bool load_elf_generic(std::ifstream &file, std::vector<uint8_t> &ram)
 } // namespace
 
 Memory::Memory()
-	: ram(RAM_SIZE + WAD_SIZE, 0), fb(FB_SIZE, 0),
+	: ram(RAM_SIZE + WAD_SIZE, 0), fb(FB_SIZE, 0), lfb(LFB_SIZE, 0),
 	  key_queue_head(0), key_queue_tail(0), instr_count(0), tick_counter(0), ms_accum(0), fb_write_count(0),
 	  aplic(imsic_s)
 {
@@ -128,6 +128,8 @@ uint8_t Memory::read8(uint64_t addr)
 		return ram[addr - RAM_BASE];
 	if (addr >= MMIO_FB && addr < MMIO_FB + FB_SIZE)
 		return fb[addr - MMIO_FB];
+	if (addr >= LFB_BASE && addr < LFB_BASE + LFB_SIZE)
+		return lfb[addr - LFB_BASE];
 	if (addr >= UART_BASE && addr < UART_BASE + UART_SIZE)
 		return uart.read(addr - UART_BASE);
 	return 0;
@@ -168,6 +170,17 @@ uint32_t Memory::read32(uint64_t addr)
 		std::memcpy(&val, &ram[addr - RAM_BASE], sizeof(val));
 		return val;
 	}
+	// The Linux framebuffer is plain storage, so it gets the same
+	// word-at-a-time treatment RAM does. Correctness does not need this --
+	// the fallthrough below reaches it a byte at a time -- but a full
+	// repaint is three megabytes, and three million dispatches to move it
+	// is the difference between a console that scrolls and one that does
+	// not.
+	if (addr >= LFB_BASE && addr <= LFB_BASE + LFB_SIZE - 4) {
+		uint32_t val;
+		std::memcpy(&val, &lfb[addr - LFB_BASE], sizeof(val));
+		return val;
+	}
 
 	return (uint32_t)read16(addr) | ((uint32_t)read16(addr + 2) << 16);
 }
@@ -186,6 +199,8 @@ void Memory::write8(uint64_t addr, uint8_t val)
 {
 	if (addr >= RAM_BASE && addr < RAM_BASE + RAM_SIZE + WAD_SIZE) {
 		ram[addr - RAM_BASE] = val;
+	} else if (addr >= LFB_BASE && addr < LFB_BASE + LFB_SIZE) {
+		lfb[addr - LFB_BASE] = val;
 	} else if (addr >= MMIO_FB && addr < MMIO_FB + FB_SIZE) {
 		fb[addr - MMIO_FB] = val;
 		fb_write_count++;
@@ -280,6 +295,21 @@ void Memory::write32(uint64_t addr, uint32_t val)
 		return;
 	}
 
+	if (addr >= LFB_BASE && addr <= LFB_BASE + LFB_SIZE - 4) {
+		std::memcpy(&lfb[addr - LFB_BASE], &val, sizeof(val));
+		return;
+	}
+
+	// sifive,test0. OpenSBI's generic platform implements SBI SRST through
+	// this register, so a guest's `poweroff` arrives here as 0x5555. The
+	// flag is only set; the render thread owns process exit, because it is
+	// the thread that also owns the window.
+	if (addr >= TEST_BASE && addr < TEST_BASE + TEST_SIZE) {
+		const uint32_t cmd = val & 0xFFFF;
+		if (cmd == 0x5555 || cmd == 0x7777 || cmd == 0x3333) poweroff = true;
+		return;
+	}
+
 	write8(addr + 0, (val >> 0) & 0xFF);
 	write8(addr + 1, (val >> 8) & 0xFF);
 	write8(addr + 2, (val >> 16) & 0xFF);
@@ -369,6 +399,8 @@ bool Memory::is_backed(uint64_t addr, unsigned size) const
 	if (in(RAM_BASE, RAM_SIZE + WAD_SIZE)) return true;
 
 	if (in(MMIO_FB, FB_SIZE)) return true;
+	if (in(LFB_BASE, LFB_SIZE)) return true;
+	if (in(TEST_BASE, TEST_SIZE)) return true;
 	if (in(UART_BASE, UART_SIZE)) return true;
 	if (in(CLINT_BASE, CLINT_SIZE)) return true;
 	if (in(APLIC_BASE, APLIC_SIZE)) return true;

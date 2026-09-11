@@ -19,8 +19,15 @@ cp "$SBI/build/platform/generic/firmware/fw_jump.elf" "$OUT/fw_jump.elf"
 echo '=== Linux (pinned gitlink; source stays on the WSL filesystem) ==='
 KERNEL="$(pinned_source linux tools/linux/linux/src https://github.com/torvalds/linux.git)"
 make -C "$KERNEL" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- defconfig
+# FB + FB_SIMPLE + FRAMEBUFFER_CONSOLE: the graphical console. riscv
+# defconfig builds the fbdev core but no framebuffer *driver*, so the
+# simple-framebuffer node in tools/linux/dts/doomv.dts has nothing to bind
+# to and the kernel settles for "Console: colour dummy device 80x25" -- a
+# console that exists and displays nowhere. These three give fbcon a real
+# device, which is what puts Linux in the DoomV window.
 "$KERNEL/scripts/config" --file "$KERNEL/.config" --enable RISCV_SBI_V01 \
-    --enable NONPORTABLE --enable HVC_RISCV_SBI --enable BLK_DEV_INITRD --enable BINFMT_SCRIPT
+    --enable NONPORTABLE --enable HVC_RISCV_SBI --enable BLK_DEV_INITRD --enable BINFMT_SCRIPT \
+    --enable FB --enable FB_SIMPLE --enable FRAMEBUFFER_CONSOLE
 make -C "$KERNEL" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- olddefconfig
 make -C "$KERNEL" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- Image -j"$JOBS"
 cp "$KERNEL/arch/riscv/boot/Image" "$OUT/Image"

@@ -286,8 +286,23 @@ void DoomSystem::publish_snapshot()
 {
 	Snapshot snap;
 
-	const uint32_t *fb32 = reinterpret_cast<const uint32_t *>(memory.framebuffer());
-	std::copy(fb32, fb32 + Memory::FB_W * Memory::FB_H, snap.framebuffer.begin());
+	// Two framebuffers, one window. DOOM's is the 320x200 buffer
+	// doomgeneric hands us through MMIO_FB; Linux's is the 1024x768 linear
+	// aperture at LFB_BASE that simple-framebuffer writes. Which one is
+	// live is decided by how the machine was started, not by which has been
+	// written -- an unwritten framebuffer is black, and a black screen is a
+	// legitimate thing for a Linux guest to be showing before fbcon takes
+	// over.
+	if (linux_mode) {
+		snap.fb_w = Memory::LFB_W;
+		snap.fb_h = Memory::LFB_H;
+		snap.framebuffer.resize((size_t)Memory::LFB_W * Memory::LFB_H);
+		const uint32_t *lfb32 = reinterpret_cast<const uint32_t *>(memory.linux_framebuffer());
+		std::copy(lfb32, lfb32 + (size_t)Memory::LFB_W * Memory::LFB_H, snap.framebuffer.begin());
+	} else {
+		const uint32_t *fb32 = reinterpret_cast<const uint32_t *>(memory.framebuffer());
+		std::copy(fb32, fb32 + Memory::FB_W * Memory::FB_H, snap.framebuffer.begin());
+	}
 
 	for (int i = 0; i < 32; i++) snap.x[i] = regs.read_x(i);
 	for (int i = 0; i < 32; i++) std::memcpy(&snap.v_lo[i], regs.read_v(i), sizeof(uint64_t));

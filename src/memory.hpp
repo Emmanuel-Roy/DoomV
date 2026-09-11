@@ -27,6 +27,44 @@ public:
 	static constexpr int FB_H = 200;
 	static constexpr uint32_t FB_SIZE = FB_W * FB_H * 4; // 32bpp, matches doomgeneric's native output
 
+	// The Linux framebuffer, which is a different device from DOOM's above
+	// and deliberately not the same memory. DOOM writes its 320x200 through
+	// MMIO_FB because doomgeneric hands us exactly that buffer; Linux wants
+	// a linear aperture it can ioremap and a resolution worth looking at,
+	// and the two cannot share a base because MMIO_FB's 256KB would have to
+	// grow across the virtio window at 0x10008000.
+	//
+	// 0x50000000 is clear of everything: RAM starts at 0x80000000, the
+	// IMSIC files sit at 0x24/0x28000000, and the platform devices are all
+	// under 0x11000000. Being *outside* the device tree's memory node is
+	// what keeps Linux from allocating over it -- no reserved-memory entry
+	// needed, which is how a carved-out framebuffer aperture works on real
+	// hardware too.
+	//
+	// The geometry is a constant rather than something the guest selects.
+	// simple-framebuffer has no mode-setting protocol at all: the driver
+	// reads width, height, stride and format out of the device tree and
+	// trusts them, so these three numbers and the framebuffer@ node in
+	// tools/linux/dts/doomv.dts have to agree exactly. They are checked
+	// against each other by a static_assert on the size below and by
+	// nothing at all on the width, so changing one means changing both.
+	static constexpr uint64_t LFB_BASE = 0x50000000;
+	static constexpr int LFB_W = 1024;
+	static constexpr int LFB_H = 768;
+	static constexpr uint32_t LFB_STRIDE = LFB_W * 4;
+	static constexpr uint64_t LFB_SIZE = (uint64_t)LFB_STRIDE * LFB_H;
+
+	// sifive,test0 -- the "test finisher". One 32-bit register: 0x5555
+	// powers off, 0x7777 reboots, 0x3333 fails with a code in the high
+	// half. It exists because OpenSBI's generic platform implements SBI
+	// SRST by looking for exactly this device in the device tree, and
+	// without it a guest calling `poweroff` gets "not supported" and spins.
+	// A machine that cannot be shut down by the thing running on it cannot
+	// be scripted, which matters for a rootfs build that has to hand
+	// control back when it finishes.
+	static constexpr uint64_t TEST_BASE = 0x00100000;
+	static constexpr uint64_t TEST_SIZE = 0x1000;
+
 	// RAM_BASE moved from the original 0x10041000 for Stage 3: OpenSBI's
 	// `generic` platform build hardcodes its own load/entry address
 	// (FW_TEXT_START, see tools/linux/opensbi/build.sh) to 0x80000000 and
@@ -132,6 +170,11 @@ public:
 	void step_instructions(uint32_t count);
 
 	const uint8_t *framebuffer() const { return fb.data(); }
+	const uint8_t *linux_framebuffer() const { return lfb.data(); }
+
+	// Set by a guest write to the sifive,test0 register; polled by the
+	// render thread, which owns process exit.
+	bool poweroff_requested() const { return poweroff; }
 
 	// Returns the number of FB writes since the last call, and resets
 	// the counter. Used for the doom_fps dashboard metric.
@@ -154,6 +197,8 @@ private:
 	// so one backing buffer covers both -- see the memory map in PLAN.md.
 	std::vector<uint8_t> ram;
 	std::vector<uint8_t> fb;
+	std::vector<uint8_t> lfb;
+	bool poweroff = false;
 
 	// Pushed by the render thread (input polling lives there, tied to the
 	// SDL window), popped by the CPU thread on MMIO_INPUT reads -- the one

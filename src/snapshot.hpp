@@ -11,6 +11,12 @@
 // and avoids needing locks scattered through it.
 struct Snapshot {
 	std::vector<uint32_t> framebuffer = std::vector<uint32_t>(Memory::FB_W * Memory::FB_H, 0);
+	// Which geometry `framebuffer` actually holds. DOOM's is 320x200 and
+	// Linux's is LFB_W x LFB_H, and the renderer scales whichever it is
+	// given to the window -- so the dimensions travel with the pixels
+	// rather than being a compile-time constant the renderer assumes.
+	int fb_w = Memory::FB_W;
+	int fb_h = Memory::FB_H;
 	uint64_t x[32] = {};
 	// Just the low 64 bits of each 128-bit V register -- plenty for a
 	// dashboard display (they're all zero until V is actually implemented

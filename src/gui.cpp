@@ -313,35 +313,63 @@ void Gui::render(const Snapshot &snap)
 	int box_w = (int)(GAME_BOX_W * scale_x);
 	int box_h = (int)(GAME_BOX_H * scale_y);
 
+	// A Linux framebuffer gets the whole window, and the dashboard panels
+	// are not drawn over it. This is not a preference about screen real
+	// estate: DOOM's 320x200 scaled *up* into a 280-design-unit box is the
+	// case the box was built for, and a 1024x768 console scaled *down* into
+	// the same box puts three source pixels into one destination pixel,
+	// which turns 8x16 console text into unreadable grey. Either the
+	// framebuffer is small and the dashboard is the point, or it is large
+	// and the framebuffer is.
+	const bool fb_fullscreen = (snap.fb_w != Memory::FB_W || snap.fb_h != Memory::FB_H);
+	if (fb_fullscreen) {
+		box_x = 0; box_y = 0; box_w = canvas_w; box_h = canvas_h;
+	}
+
 	// Bilinear, not nearest-neighbor: at native 320x200 scaled ~3-4x, hard
 	// pixel blocks looked wrong for the game view (dashboard text stays
 	// sharp block-fills on purpose, this is just the rendered scene).
 	// Fixed-point (8-bit fraction) so the per-pixel blend is pure integer
 	// math, no floats in the hot loop.
+	//
+	// Interpolation is only right when scaling up. Text being scaled down
+	// wants the nearest source pixel, because blending neighbours is
+	// precisely what destroys a one-pixel stem -- so the LUT is built with
+	// a zero fraction and both taps on the same pixel there, which turns
+	// the same blend loop below into a plain copy without a second code
+	// path.
 	struct Sample { int i0, i1; uint32_t frac; };
 	static std::vector<Sample> sx_lut, sy_lut;
-	static int last_box_w = -1, last_box_h = -1;
-	if (box_w != last_box_w || box_h != last_box_h) {
+	static int last_box_w = -1, last_box_h = -1, last_src_w = -1, last_src_h = -1;
+	const bool nearest = fb_fullscreen;
+	if (box_w != last_box_w || box_h != last_box_h
+	    || snap.fb_w != last_src_w || snap.fb_h != last_src_h) {
 		sx_lut.resize(box_w > 0 ? box_w : 0);
 		sy_lut.resize(box_h > 0 ? box_h : 0);
 		for (int x = 0; x < box_w; x++) {
-			float src = ((float)x + 0.5f) * Memory::FB_W / box_w - 0.5f;
+			float src = ((float)x + 0.5f) * snap.fb_w / box_w - 0.5f;
 			int i0 = (int)std::floor(src);
 			float frac = src - (float)i0;
 			if (i0 < 0) { i0 = 0; frac = 0.0f; }
-			int i1 = (i0 + 1 < Memory::FB_W) ? i0 + 1 : i0;
+			if (i0 >= snap.fb_w) i0 = snap.fb_w - 1;
+			int i1 = (i0 + 1 < snap.fb_w) ? i0 + 1 : i0;
+			if (nearest) { if (frac >= 0.5f) i0 = i1; i1 = i0; frac = 0.0f; }
 			sx_lut[x] = { i0, i1, (uint32_t)(frac * 256.0f) };
 		}
 		for (int y = 0; y < box_h; y++) {
-			float src = ((float)y + 0.5f) * Memory::FB_H / box_h - 0.5f;
+			float src = ((float)y + 0.5f) * snap.fb_h / box_h - 0.5f;
 			int i0 = (int)std::floor(src);
 			float frac = src - (float)i0;
 			if (i0 < 0) { i0 = 0; frac = 0.0f; }
-			int i1 = (i0 + 1 < Memory::FB_H) ? i0 + 1 : i0;
+			if (i0 >= snap.fb_h) i0 = snap.fb_h - 1;
+			int i1 = (i0 + 1 < snap.fb_h) ? i0 + 1 : i0;
+			if (nearest) { if (frac >= 0.5f) i0 = i1; i1 = i0; frac = 0.0f; }
 			sy_lut[y] = { i0, i1, (uint32_t)(frac * 256.0f) };
 		}
 		last_box_w = box_w;
 		last_box_h = box_h;
+		last_src_w = snap.fb_w;
+		last_src_h = snap.fb_h;
 	}
 
 	const uint32_t *fb32 = snap.framebuffer.data();
@@ -350,8 +378,8 @@ void Gui::render(const Snapshot &snap)
 		if (ty < 0 || ty >= canvas_h) continue;
 
 		const Sample &ys = sy_lut[y];
-		const uint32_t *row0 = fb32 + ys.i0 * Memory::FB_W;
-		const uint32_t *row1 = fb32 + ys.i1 * Memory::FB_W;
+		const uint32_t *row0 = fb32 + (size_t)ys.i0 * snap.fb_w;
+		const uint32_t *row1 = fb32 + (size_t)ys.i1 * snap.fb_w;
 		uint32_t *dst_row = &screen_buf[(size_t)ty * canvas_w];
 
 		for (int x = 0; x < box_w; x++) {
@@ -373,6 +401,16 @@ void Gui::render(const Snapshot &snap)
 			}
 			dst_row[tx] = out;
 		}
+	}
+
+	// With the framebuffer filling the window there is nowhere to put the
+	// dashboard, and half-drawing it over the guest's console is worse than
+	// not drawing it: present and return.
+	if (fb_fullscreen) {
+		SDL_UpdateTexture(texture, nullptr, screen_buf.data(), canvas_w * (int)sizeof(uint32_t));
+		SDL_RenderCopy(renderer, texture, nullptr, nullptr);
+		SDL_RenderPresent(renderer);
+		return;
 	}
 
 	char buf[96];

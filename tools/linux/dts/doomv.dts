@@ -13,11 +13,73 @@
 	compatible = "doomv,virt";
 	model = "DoomV";
 
+	// simple-framebuffer: a linear aperture the kernel ioremaps and draws
+	// into, which is all DoomV's SDL window needs to display Linux. It sits
+	// at 0x50000000, *outside* the memory node below, so Linux never
+	// allocates over it -- the same arrangement a carved-out framebuffer
+	// has on real hardware, and the reason no reserved-memory entry is
+	// needed.
+	//
+	// There is no mode-setting protocol in this binding at all: the driver
+	// takes width, height, stride and format from these properties and
+	// trusts them. They must match Memory::LFB_W/LFB_H/LFB_STRIDE in
+	// src/memory.hpp exactly, and nothing checks that they do.
+	//
+	// x8r8g8b8 rather than a8r8g8b8 because the window is opaque and the
+	// renderer's texture is SDL_PIXELFORMAT_RGB888, which is XRGB8888 --
+	// the same 32-bit layout with the alpha byte ignored. Claiming an alpha
+	// channel that is never read would have the console composite against
+	// whatever the high byte happened to be.
+	framebuffer@50000000 {
+		compatible = "simple-framebuffer";
+		reg = <0x0 0x50000000 0x0 0x300000>;   // 1024 * 768 * 4
+		width = <1024>;
+		height = <768>;
+		stride = <4096>;                        // 1024 * 4
+		format = "x8r8g8b8";
+	};
+
+	// sifive,test0 -- one 32-bit register: 0x5555 powers off, 0x7777
+	// reboots, 0x3333 fails. OpenSBI's generic platform implements SBI SRST
+	// by finding exactly this compatible string, so without this node a
+	// guest's `poweroff` returns "not supported" and the machine spins
+	// forever. With it, the thing running inside can end the run -- which
+	// is what makes a long unattended job (a rootfs build, say) scriptable
+	// rather than something to watch.
+	poweroff: test@100000 {
+		compatible = "sifive,test1", "sifive,test0", "syscon";
+		reg = <0x0 0x00100000 0x0 0x1000>;
+	};
+
+	reboot-syscon {
+		compatible = "syscon-reboot";
+		regmap = <&poweroff>;
+		offset = <0x0>;
+		value = <0x7777>;
+	};
+
+	poweroff-syscon {
+		compatible = "syscon-poweroff";
+		regmap = <&poweroff>;
+		offset = <0x0>;
+		value = <0x5555>;
+	};
+
 	chosen {
 		// rdinit=/bin/sh: exec BusyBox's own shell applet directly as
 		// PID 1 out of the initramfs below -- no init script needed
 		// (see tools/linux/rootfs/README.md).
-		bootargs = "earlycon=sbi console=hvc0 ignore_loglevel rdinit=/bin/sh";
+		// console=tty0 *and* console=hvc0, in that order. Both are
+		// registered, so printk goes to the framebuffer console and to the
+		// SBI serial -- the window shows the boot and the log still has it,
+		// which is what keeps the headless harnesses working unchanged.
+		//
+		// The order decides which becomes /dev/console, and it is the *last*
+		// one that wins: hvc0 last means the shell lands on the serial, where
+		// a script can drive it. Putting tty0 last instead silences the log
+		// from the moment a real console registers, which looks exactly like
+		// a hang.
+		bootargs = "earlycon=sbi console=tty0 console=hvc0 ignore_loglevel rdinit=/bin/sh";
 		stdout-path = "/soc/serial@10000100";
 
 		// tools/linux/rootfs/initramfs.cpio, loaded by Memory::load_blob at

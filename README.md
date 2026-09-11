@@ -195,7 +195,7 @@ to be the one that is wrong, but it does not decide anything.
 | riscv-vector-tests | 3042 generated V tests at VLEN=128, signature-diffed against Sail | **3042 / 3042** |
 | riscv-tests | the Berkeley suite, 377 applicable of 667 | **377 / 377** |
 | damo-rv-priv-ats | hypervisor, the only H coverage that exists anywhere -- 43 groups | **43 / 43 groups** |
-| Linux | OpenSBI + 6.12 + busybox, ext4 root over virtio-blk | boots to an interactive shell |
+| Linux | OpenSBI + 6.12 + busybox, ext4 root over virtio-blk | boots to an interactive shell, in a 1024x768 framebuffer console |
 | DOOM | bare-metal, no OS | plays |
 
 `riscv-vector-tests` is the suite that covers the vector ISA at the width
