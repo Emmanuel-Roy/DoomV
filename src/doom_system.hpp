@@ -74,6 +74,22 @@ public:
 	// Paired with add_breakpoint: when set, halting also dumps [begin, end)
 	// to `path` via Debugger::dump_signature, matching riscv-arch-test's
 	// signature-region convention for comparing against a reference sim.
+	// Where to write the Linux framebuffer when the run stops, as a PPM.
+	//
+	// This exists because screenshotting the window turned out not to be a
+	// usable way to check whether the framebuffer works. CopyFromScreen
+	// grabs whatever is on screen at the window's coordinates -- another
+	// window, if this one is not on top, and SetForegroundWindow is
+	// routinely refused to a background process. PrintWindow captures the
+	// window's own device context but comes back black for GPU-composited
+	// SDL content. Both failure modes look exactly like "the framebuffer is
+	// empty", which is how an afternoon went into the wrong hypothesis.
+	//
+	// Dumping the pixels the emulator actually holds settles it with no
+	// window involved, and works headless.
+	void set_fb_dump(const char *path) { fb_dump_path = path; }
+	void dump_framebuffer();
+
 	void set_signature_range(uint64_t begin, uint64_t end, const char *path)
 	{
 		sig_begin = begin;
@@ -86,6 +102,8 @@ private:
 	bool has_sig_range = false;
 	uint64_t sig_begin = 0, sig_end = 0;
 	std::string sig_path;
+	std::string fb_dump_path;
+	unsigned fb_dump_tick = 0;
 
 	Memory memory;
 	Registers regs;

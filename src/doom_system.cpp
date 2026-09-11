@@ -1,4 +1,5 @@
 #include "doom_system.hpp"
+#include <iostream>
 #include <SDL2/SDL.h>
 #include <algorithm>
 #include <cstdio>
@@ -189,6 +190,7 @@ void DoomSystem::step()
 	if (debugger.should_halt(pc, false)) {
 		debugger.dump_log(regs, memory, "crash.log");
 		if (has_sig_range) debugger.dump_signature(memory, sig_begin, sig_end, sig_path.c_str());
+		dump_framebuffer();
 		run_finished = true;
 		return;
 	}
@@ -282,8 +284,42 @@ void DoomSystem::watch_tohost(uint64_t addr)
 	memory.watch_tohost(addr);
 }
 
+
+// Writes the Linux framebuffer as a binary PPM -- the simplest format that
+// needs no library and that anything can read. Called wherever a run stops.
+void DoomSystem::dump_framebuffer()
+{
+	if (fb_dump_path.empty()) return;
+	std::ofstream f(fb_dump_path, std::ios::binary);
+	if (!f.is_open()) return;
+	f << "P6\n" << Memory::LFB_W << " " << Memory::LFB_H << " " << 255 << "\n";
+	const uint32_t *px = reinterpret_cast<const uint32_t *>(memory.linux_framebuffer());
+	uint64_t nonzero = 0;
+	for (size_t i = 0; i < (size_t)Memory::LFB_W * Memory::LFB_H; i++) {
+		const uint32_t v = px[i];
+		if (v & 0x00FFFFFFu) nonzero++;
+		const char rgb[3] = { (char)((v >> 16) & 0xFF), (char)((v >> 8) & 0xFF), (char)(v & 0xFF) };
+		f.write(rgb, 3);
+	}
+	// The count is the answer to the question this was added for: whether
+	// anything has been drawn at all. A picture needs a viewer; a number
+	// does not.
+	std::cout << "framebuffer: " << nonzero << " of "
+	          << (uint64_t)Memory::LFB_W * Memory::LFB_H
+	          << " pixels non-black, written to " << fb_dump_path << "\n";
+	std::cout.flush();
+}
+
 void DoomSystem::publish_snapshot()
 {
+	// Refresh the framebuffer dump periodically, not only when the run
+	// stops. A Linux guest reaches a login prompt and then sits there
+	// forever, so "when it stops" never arrives -- and the whole point of
+	// the dump is to be able to check what is on the screen of a machine
+	// that is still running. Every 200th publish is a few seconds apart and
+	// costs one 2MB write.
+	if (!fb_dump_path.empty() && ++fb_dump_tick % 200 == 0) dump_framebuffer();
+
 	Snapshot snap;
 
 	// Two framebuffers, one window. DOOM's is the 320x200 buffer

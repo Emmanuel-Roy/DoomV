@@ -15,6 +15,7 @@ int main(int argc, char *argv[])
 	bool have_breakpoint = false;
 	uint64_t sig_begin = 0, sig_end = 0;
 	bool have_sig = false;
+	std::string fb_dump_path;
 	std::string opensbi_path, kernel_path, dtb_path, initrd_path;
 	uint64_t tohost_addr = 0;
 	std::string disk_path;
@@ -50,6 +51,10 @@ int main(int argc, char *argv[])
 			dtb_path = arg.substr(5);
 		} else if (arg.rfind("-initrd=", 0) == 0) {
 			initrd_path = arg.substr(8);
+		} else if (arg.rfind("-fbdump=", 0) == 0) {
+			// Write the Linux framebuffer to this file when the run stops.
+			// See DoomSystem::set_fb_dump for why screenshots would not do.
+			fb_dump_path = arg.substr(8);
 		} else if (arg.rfind("-disk=", 0) == 0) {
 			// A raw disk image, attached as virtio-blk. This is what lets a
 			// real distribution root filesystem be mounted rather than
@@ -115,6 +120,7 @@ int main(int argc, char *argv[])
 	}
 	if (have_breakpoint) system.add_breakpoint(breakpoint);
 	if (have_sig) system.set_signature_range(sig_begin, sig_end, "signature.log");
+	if (!fb_dump_path.empty()) system.set_fb_dump(fb_dump_path.c_str());
 	if (tohost_addr) system.watch_tohost(tohost_addr);
 
 	system.run();
