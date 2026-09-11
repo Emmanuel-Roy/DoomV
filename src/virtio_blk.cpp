@@ -28,6 +28,31 @@ constexpr uint8_t BLK_S_UNSUPP = 2;
 // to legacy layout rules the register interface here does not implement.
 constexpr uint32_t FEAT_HI_VERSION_1 = 1u << 0;
 
+// 64-bit file positioning, because `long` is 32 bits on this toolchain and a
+// disk image is the one file here that outgrows it. Both of the calls these
+// replace failed silently and differently:
+//
+//   ftell  on a 4GiB image returns -1 (the size is exactly 2^32), so the
+//          capacity came out zero, the guest saw "[vda] 0 512-byte logical
+//          blocks", and the kernel panicked with "Unable to mount root fs on
+//          unknown-block(254,1)" -- a message about the *partition* that says
+//          nothing about the device having no size.
+//
+//   fseek  with the offset cast to long wrapped every access past 2GiB back
+//          into the low half of the image. That one is worse: it does not
+//          fail, it reads and writes the wrong sectors, so a filesystem
+//          larger than 2GiB would corrupt itself quietly.
+//
+// MinGW spells these _fseeki64/_ftelli64; POSIX has fseeko/ftello with off_t
+// 64 bits wide once _FILE_OFFSET_BITS says so.
+#if defined(_WIN32)
+static inline int seek64(std::FILE *f, int64_t off, int whence) { return _fseeki64(f, off, whence); }
+static inline int64_t tell64(std::FILE *f) { return _ftelli64(f); }
+#else
+static inline int seek64(std::FILE *f, int64_t off, int whence) { return fseeko(f, (off_t)off, whence); }
+static inline int64_t tell64(std::FILE *f) { return (int64_t)ftello(f); }
+#endif
+
 } // namespace
 
 VirtioBlk::~VirtioBlk()
@@ -49,10 +74,10 @@ bool VirtioBlk::open(const std::string &path, bool read_only)
 	}
 	if (!file) return false;
 	ro = read_only;
-	std::fseek(file, 0, SEEK_END);
-	long end = std::ftell(file);
+	if (seek64(file, 0, SEEK_END) != 0) return false;
+	const int64_t end = tell64(file);
 	capacity = end > 0 ? (uint64_t)end : 0;
-	std::fseek(file, 0, SEEK_SET);
+	seek64(file, 0, SEEK_SET);
 	return true;
 }
 
@@ -132,7 +157,7 @@ bool VirtioBlk::do_io(Memory &mem, uint32_t type, uint64_t sector,
 {
 	const uint64_t off = sector * SECTOR;
 	if (off + buf_len > capacity) return false;
-	if (std::fseek(file, (long)off, SEEK_SET) != 0) return false;
+	if (seek64(file, (int64_t)off, SEEK_SET) != 0) return false;
 
 	// The payload moves a byte at a time through Memory rather than by bulk
 	// pointer, because the guest buffer is a *physical* address that need

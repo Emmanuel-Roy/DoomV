@@ -302,6 +302,7 @@ of console output (`2667bf1`, re-verified in `936df17`).
 145. [An envcfg bit that advertised an extension the hart does not have](#bug145)
 146. [`mstatus.TSR` was stored and never consulted](#bug146)
 147. [The envcfg registers were a blacklist where they should be a whitelist](#bug147)
+148. [virtio-blk's file offsets were 32 bits wide](#bug148)
 
 <a id="part-vii"></a>
 ### Part VII — Cross-cutting
@@ -4687,7 +4688,7 @@ yet clean." See [What remains](#remains).
 <a id="patterns"></a>
 ## Recurring patterns
 
-Reading 147 bugs in order, the same small number of mechanisms account for
+Reading 148 bugs in order, the same small number of mechanisms account for
 nearly all of them. They are listed here in rough order of how much they
 cost.
 
@@ -6355,3 +6356,49 @@ cost a failing assertion each and one cost a wrong conclusion published in
 this document. A blacklist gets that class of bug wrong once per future
 extension; a whitelist gets it right by construction. The fix is worth more
 than the bugs it closes today.
+
+### 148. virtio-blk's file offsets were 32 bits wide
+<a id="bug148"></a>
+
+**Symptom.** A 4 GiB Ubuntu image would not boot: the guest reported
+
+```
+virtio_blk virtio0: [vda] 0 512-byte logical blocks (0 B/0 B)
+VFS: Cannot open root device "/dev/vda1" or unknown-block(254,1): error -6
+Kernel panic - not syncing: VFS: Unable to mount root fs on unknown-block(254,1)
+```
+
+The same code had been mounting a 192 MiB image correctly for two commits.
+
+**Root cause.** Two truncations on the same path, both from `long` being 32
+bits on this toolchain.
+
+`std::ftell` was used to measure the image. 4 GiB is *exactly* 2^32, so it
+returned -1, the `end > 0` guard turned that into a capacity of zero, and the
+device honestly advertised a disk with no sectors on it. The kernel's panic
+names the partition it could not find, which says nothing about the device
+having no size -- and 254,1 is exactly what a *missing partition table* looks
+like too, which is the wrong place to start looking.
+
+The second one is worse and had not been triggered yet:
+`std::fseek(file, (long)off, SEEK_SET)` wrapped every access past 2 GiB back
+into the low half of the image. That does not fail. It reads and writes the
+wrong sectors, so any filesystem larger than 2 GiB would have corrupted
+itself quietly while appearing to work.
+
+**Why it went unnoticed.** Every image used until now was small. The
+partitioned-root test two commits earlier was 192 MiB, chosen because it was
+quick to build -- which is exactly the size that cannot exercise either bug.
+A 32-bit offset is invisible until the file is bigger than the type, and
+"bigger than the type" for a disk image means "the first realistic one".
+
+**Resolution.** `_fseeki64`/`_ftelli64` on Windows, `fseeko`/`ftello`
+elsewhere, behind two one-line helpers. Capacity now reads 8388608 sectors
+and the partition mounts.
+
+**Note.** The interesting part is the pairing. One truncation produced a loud
+failure that stopped the boot; the other produced silent data corruption on
+the same line of reasoning, and only the loud one was reachable with the
+images in use. Finding the first is what made anyone look at the second,
+which is an argument for chasing a bug to its cause rather than to its
+symptom.
