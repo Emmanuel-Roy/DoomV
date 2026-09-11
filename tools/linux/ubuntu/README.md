@@ -138,6 +138,15 @@ Two things not to do:
 workable but tight, and `apt` is not. If the boot dies in the OOM killer,
 that pair is the thing to raise, and both must be changed together.
 
+**A guest-side timer is not a wall clock.** Guest time here is driven by
+retired instructions -- `mtime` advances once per instruction and
+`timebase-frequency` is 1e9 -- so one guest second is a billion instructions,
+which is minutes of real time. A `sleep 60` inside the guest is a
+three-and-a-half *hour* wait, which is how the first version of the stage-2
+heartbeat produced no output at all. Anything scripted inside a guest that
+means to wait for a wall-clock interval has to be scaled, or keyed off work
+done rather than time passed.
+
 **Speed.** DoomV runs around 13 MIPS, so a systemd boot that takes two
 seconds on hardware takes minutes here. That is expected, not a fault, and
 it is why `-ng` exists for the test suites — but for this image you want the

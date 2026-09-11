@@ -176,8 +176,15 @@ echo "=== DOOMV-STAGE2-BEGIN ==="
 # written, which is not something the log can tell you.
 ( while [ ! -f /debootstrap/debootstrap.log ]; do sleep 5; done
   tail -n +1 -F /debootstrap/debootstrap.log ) &
+#
+# The sleep is one second, not sixty, and that is not a typo. Guest time on
+# this machine is driven by retired instructions -- mtime advances once per
+# instruction and timebase-frequency is 1e9 -- so one guest second is a
+# billion instructions, which at ~4.75 MIPS is about three and a half wall
+# minutes. A `sleep 60` here is a three-and-a-half *hour* heartbeat, which
+# is how the first version of this produced no output at all.
 ( while true; do
-    sleep 60
+    sleep 1
     n=$(ls /var/lib/dpkg/info/*.list 2>/dev/null | wc -l)
     echo "=== DOOMV-STAGE2-HEARTBEAT unpacked=$n ==="
     sync
