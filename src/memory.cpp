@@ -137,6 +137,16 @@ uint8_t Memory::read8(uint64_t addr)
 
 uint16_t Memory::read16(uint64_t addr)
 {
+	// The same RAM fast path read32 has, and it matters more: this is the
+	// instruction fetch. Every fetch reads a halfword, a four-byte
+	// instruction reads two, and each one was walking the whole MMIO
+	// dispatch chain twice over through read8 -- four dispatches to fetch
+	// one instruction out of plain memory.
+	if (addr >= RAM_BASE && addr <= RAM_BASE + RAM_SIZE + WAD_SIZE - 2) {
+		uint16_t val;
+		std::memcpy(&val, &ram[addr - RAM_BASE], sizeof(val));
+		return val;
+	}
 	return (uint16_t)read8(addr) | ((uint16_t)read8(addr + 1) << 8);
 }
 
