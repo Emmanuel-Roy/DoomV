@@ -210,3 +210,32 @@ framebuffer. Its pixel count is small (about a thousand lit pixels of
 786432) because that is all a cleared console with a login prompt on it
 *is* -- worth knowing before concluding from a thumbnail that the screen is
 blank.
+
+And it is a prompt rather than a picture of one. With the `virtio-input`
+keyboard in the device tree, a scripted login reaches a root shell and runs
+a command, all of it through the emulated keyboard and all of it read back
+out of the framebuffer:
+
+```
+tools/linux/ubuntu/boot.sh   # or, scripted and headless:
+riscv_doom.exe -ng -expect='doomv login:' -input=login.script \
+  -fbdump=fb.ppm -kernel=build/linux/Image -dtb=... -disk=ubuntu.img
+```
+
+```
+doomv login: root
+Password:
+  ... the Ubuntu MOTD ...
+root@doomv:~# uname -srm
+Linux 6.12.0 riscv64
+root@doomv:~#
+```
+
+Two things about scripting that guest. `-expect` is matched against the raw
+byte stream, and systemd colourises unit names -- `Started
+getty@tty1.service` is really `Started \e[0;1;39mgetty@tty1.service`, so a
+needle spanning the space never fires and the script silently sends
+nothing. `doomv login:` is contiguous and safe. And the waits have to be
+generous: authenticating a password means `crypt()`, which at 6.6 MIPS is
+not quick, and typing during it gets echoed by the tty before `login` has
+finished, which looks alarming and is harmless.

@@ -196,7 +196,7 @@ to be the one that is wrong, but it does not decide anything.
 | riscv-tests | the Berkeley suite, 377 applicable of 667 | **377 / 377** |
 | damo-rv-priv-ats | hypervisor, the only H coverage that exists anywhere -- 43 groups | **43 / 43 groups** |
 | Linux | OpenSBI + 6.12 + busybox, ext4 root over virtio-blk | boots to an interactive shell, in a 1024x768 framebuffer console |
-| Ubuntu 24.04 | 104 packages, configured by DoomV running Ubuntu's own `dpkg`, systemd as PID 1 | boots to `doomv login:` |
+| Ubuntu 24.04 | 104 packages, configured by DoomV running Ubuntu's own `dpkg`, systemd as PID 1 | boots, and logs in at the framebuffer console |
 | DOOM | bare-metal, no OS | plays |
 
 `riscv-vector-tests` is the suite that covers the vector ISA at the width
@@ -362,6 +362,14 @@ re-guessed every time the guest changes speed.
 Newlines are translated to CR on the way in, because that is what pressing
 return sends and `ICRNL` is what the guest's line discipline is expecting.
 Feed a raw LF and the command is typed but never runs.
+
+Pick the needle carefully: it is matched against the raw byte stream, and a
+guest's output is not plain text. systemd colourises unit names, so its
+`Started getty@tty1.service` is really `Started \e[0;1;39mgetty@tty1.service`
+and a needle spanning the space never matches -- the gate then waits
+forever and the feed sends nothing, which looks exactly like input not
+working. Something contiguous and unstyled, like a shell prompt or
+`login:`, is the safe choice.
 
 That example also ends the run: `sifive,test0` is in the device tree, so a
 guest's poweroff reaches the emulator and the process exits 0. That matters
