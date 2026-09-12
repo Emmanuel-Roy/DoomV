@@ -125,8 +125,22 @@ install.
 ## Booting
 
 ```
-tools/linux/ubuntu/boot.sh
+python scripts/boot.py ubuntu            # window, systemd, log in as root
+python scripts/boot.py ubuntu --no-build # skip the kernel rebuild
+python scripts/boot.py ubuntu --headless # no window; kernel log on stdout
+python scripts/boot.py ubuntu --login    # headless self-check, see below
 ```
+
+`tools/linux/ubuntu/boot.sh` does the same thing from MSYS2/Git Bash and
+compiles its own device tree through WSL; the Python script uses the
+`ubuntu.dtb` that `scripts/build_linux.sh` already produces, so it needs no
+WSL round trip to start.
+
+`--login` is the unattended check: it boots headless, waits for the login
+prompt, and then types a username, a password and a command **through the
+emulated keyboard**, so it exercises the virtio-input device and the VT
+layer rather than just the boot. It leaves `build/logs/ubuntu-login.log` and
+a framebuffer dump beside it.
 
 Log in as `root` / `doomv`. That opens a window, and with `FB_SIMPLE` in the
 kernel and the `framebuffer@50000000` node in the device tree the console is

@@ -15,16 +15,26 @@ python scripts/build.py doom
 python scripts/build.py linux
 python scripts/build.py all
 
-# Boot either guest. Linux --smoke exits after BusyBox proves userspace runs.
+# Boot a guest. Linux --smoke exits after BusyBox proves userspace runs;
+# Ubuntu --login logs in through the emulated keyboard and exits.
 python scripts/boot.py doom
 python scripts/boot.py linux
 python scripts/boot.py linux --smoke
+python scripts/boot.py ubuntu
+python scripts/boot.py ubuntu --login
 
 # Run every regression suite, or name the suites to run.
 python scripts/verify.py
 python scripts/verify.py --quick
 python scripts/verify.py differential archtest
 ```
+
+`boot.py ubuntu` is the one boot script that cannot build its guest. The
+other two produce a userland in minutes from a cross-compiler; the Ubuntu
+image is built in two stages, the second of which is DoomV running Ubuntu's
+own `dpkg` for about four hours. So the image is an input, and the script
+says how to make one rather than starting that on your behalf --
+`tools/linux/ubuntu/README.md` has the two commands.
 
 `toolchain.ps1` deliberately does not install WSL itself. Install Ubuntu once
 with `wsl --install -d Ubuntu`, reboot if Windows requests it, and run the

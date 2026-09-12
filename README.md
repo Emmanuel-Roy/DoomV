@@ -514,6 +514,7 @@ python scripts/build.py all
 # Boot either guest; --smoke proves Linux reaches BusyBox userspace.
 python scripts/boot.py doom
 python scripts/boot.py linux --smoke
+python scripts/boot.py ubuntu
 
 # All suites by default, or selected suites by name.
 python scripts/verify.py
