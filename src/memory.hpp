@@ -174,6 +174,19 @@ public:
 	// device has exactly one interrupt and there is no way to share it.
 	static constexpr uint64_t VIRTIO_KBD_BASE   = 0x10100000;
 	static constexpr uint64_t VIRTIO_MOUSE_BASE = 0x10101000;
+
+	// Storage drives: eight more virtio-blk slots, after the input devices,
+	// that the images in a drives/ folder are attached to (see
+	// DoomSystem::attach_drives). The device tree always declares all eight;
+	// a slot with nothing behind it reports device ID 0, which is how a
+	// driver probing a fixed MMIO slot learns it is empty, and Linux skips
+	// it without a message. So adding a drive needs no device tree change --
+	// the same arrangement QEMU's virt board uses for its virtio slots.
+	//
+	// APLIC sources 4 to 11, one each.
+	static constexpr int NUM_DRIVES = 8;
+	static constexpr uint64_t VIRTIO_DRIVE_BASE = 0x10102000;
+	static constexpr uint32_t DRIVE_IRQ_BASE = 4;
 	static_assert(VIRTIO_KBD_BASE >= MMIO_FB + FB_SIZE,
 	              "input devices must not sit inside DOOM's framebuffer aperture");
 
@@ -283,6 +296,7 @@ public:
 	// typed bytes into the UART's RX ring.
 	Uart &get_uart() { return uart; }
 	VirtioBlk &get_disk() { return disk; }
+	VirtioBlk &get_drive(int i) { return drives[i]; }
 
 private:
 	// RAM and WAD are contiguous (RAM_BASE..RAM_BASE+RAM_SIZE == WAD_BASE),
@@ -318,6 +332,12 @@ private:
 	uint32_t fb_write_count;
 
 	VirtioBlk disk;
+	VirtioBlk drives[NUM_DRIVES]{
+		VirtioBlk(DRIVE_IRQ_BASE + 0), VirtioBlk(DRIVE_IRQ_BASE + 1),
+		VirtioBlk(DRIVE_IRQ_BASE + 2), VirtioBlk(DRIVE_IRQ_BASE + 3),
+		VirtioBlk(DRIVE_IRQ_BASE + 4), VirtioBlk(DRIVE_IRQ_BASE + 5),
+		VirtioBlk(DRIVE_IRQ_BASE + 6), VirtioBlk(DRIVE_IRQ_BASE + 7),
+	};
 
 	// Declaration order matters here: aplic's constructor takes a
 	// reference to imsic_s, so imsic_s must finish constructing first --

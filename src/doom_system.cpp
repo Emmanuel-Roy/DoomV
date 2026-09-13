@@ -2,6 +2,9 @@
 #include <iostream>
 #include <SDL2/SDL.h>
 #include <algorithm>
+#include <cctype>
+#include <climits>
+#include <dirent.h>
 #include <cstdio>
 #include <cstring>
 #include <fstream>
@@ -18,6 +21,70 @@ DoomSystem::DoomSystem() : decoder(core, regs, memory)
 bool DoomSystem::attach_disk(const std::string &path)
 {
 	return memory.get_disk().open(path, /*read_only=*/false);
+}
+
+// A path in a form two spellings of the same file agree on, for spotting
+// that a drive image is also the root disk. Best effort: if the file
+// cannot be resolved, the path as given is compared instead.
+static std::string full_path(const std::string &path)
+{
+#ifdef _WIN32
+	char buf[4096];
+	if (_fullpath(buf, path.c_str(), sizeof(buf))) {
+		std::string s(buf);
+		for (char &c : s) c = (char)std::tolower((unsigned char)c);
+		return s;
+	}
+#else
+	char buf[PATH_MAX];
+	if (realpath(path.c_str(), buf)) return std::string(buf);
+#endif
+	return path;
+}
+
+void DoomSystem::attach_drives(const std::string &dir, const std::string &skip)
+{
+	// opendir rather than std::filesystem: this compiler's MinGW runtime
+	// predates a usable <filesystem>, and dirent does the one thing needed.
+	DIR *d = opendir(dir.c_str());
+	if (!d) return;
+	std::vector<std::string> names;
+	while (dirent *e = readdir(d)) {
+		const std::string name = e->d_name;
+		// Raw images only, by extension. Anything else in the folder -- the
+		// README, a half-copied file under another name -- is left alone.
+		if (name.size() > 4 && name.compare(name.size() - 4, 4, ".img") == 0)
+			names.push_back(name);
+	}
+	closedir(d);
+	// Name order, so a drive keeps its device name from one boot to the
+	// next: Linux numbers virtio disks in probe order, which is slot order.
+	std::sort(names.begin(), names.end());
+
+	const std::string skip_full = skip.empty() ? std::string() : full_path(skip);
+	int slot = 0;
+	for (const std::string &name : names) {
+		const std::string path = dir + "/" + name;
+		if (!skip_full.empty() && full_path(path) == skip_full) {
+			std::cout << "drives: " << name << " is the root disk, not attaching it twice\n";
+			continue;
+		}
+		if (slot == Memory::NUM_DRIVES) {
+			std::cout << "drives: only " << Memory::NUM_DRIVES
+			          << " slots; ignoring " << name << " and anything after it\n";
+			break;
+		}
+		VirtioBlk &drive = memory.get_drive(slot);
+		if (!drive.open(path, /*read_only=*/false)) {
+			std::cout << "drives: cannot open " << path << ", skipping it\n";
+			continue;
+		}
+		std::cout << "drives: " << name << " -> slot " << slot << ", "
+		          << (drive.capacity_sectors() * VirtioBlk::SECTOR) / (1024 * 1024) << " MiB"
+		          << (drive.read_only() ? ", read-only" : "") << "\n";
+		slot++;
+	}
+	std::cout << std::flush;
 }
 
 bool DoomSystem::init(const char *wad_path, const char *elf_path)

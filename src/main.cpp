@@ -22,6 +22,10 @@ int main(int argc, char *argv[])
 	std::string opensbi_path, kernel_path, dtb_path, initrd_path;
 	uint64_t tohost_addr = 0;
 	std::string disk_path;
+	// Where storage drive images are looked for on a Linux boot. Relative
+	// to the working directory, which is the repository root for every
+	// script in scripts/. Empty turns the scan off.
+	std::string drives_dir = "drives";
 	bool headless = false;
 	for (int i = 1; i < argc; i++) {
 		std::string arg = argv[i];
@@ -73,6 +77,10 @@ int main(int argc, char *argv[])
 			// to exercise the input devices without a window -- see
 			// DoomSystem::replay_input_script.
 			input_script = arg.substr(7);
+		} else if (arg.rfind("-drives=", 0) == 0) {
+			// A folder of raw *.img files to attach as extra virtio disks,
+			// after the root disk. -drives= with nothing turns it off.
+			drives_dir = arg.substr(8);
 		} else if (arg.rfind("-disk=", 0) == 0) {
 			// A raw disk image, attached as virtio-blk. This is what lets a
 			// real distribution root filesystem be mounted rather than
@@ -111,13 +119,16 @@ int main(int argc, char *argv[])
 	// block device. The other three are still mandatory -- there is no
 	// booting without firmware, a kernel and a device tree.
 	if (linux_boot && (opensbi_path.empty() || kernel_path.empty() || dtb_path.empty())) {
-		std::cout << "Usage: " << argv[0] << " -opensbi=<path> -kernel=<path> -dtb=<path> -initrd=<path> [-march=...] [-break=<hex_pc>] [-ng] [-disk=<img>] [-fbdump=<ppm>] [-expect=<text>]\n";
+		std::cout << "Usage: " << argv[0] << " -opensbi=<path> -kernel=<path> -dtb=<path> -initrd=<path> [-march=...] [-break=<hex_pc>] [-ng] [-disk=<img>] [-drives=<dir>] [-fbdump=<ppm>] [-expect=<text>]\n";
 		return -1;
 	}
 
 	DoomSystem system;
 	// Before init: init is what opens the window.
 	if (headless) system.set_headless();
+	// Storage drives only mean something to a guest with a device tree that
+	// declares their slots, which is a Linux boot.
+	if (linux_boot && !drives_dir.empty()) system.attach_drives(drives_dir, disk_path);
 	if (!disk_path.empty() && !system.attach_disk(disk_path)) {
 		std::cout << "cannot open disk image: " << disk_path << "\n";
 		return -1;

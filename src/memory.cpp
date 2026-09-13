@@ -191,6 +191,10 @@ uint32_t Memory::read32(uint64_t addr)
 	if (addr >= CLINT_BASE && addr < CLINT_BASE + CLINT_SIZE) return timer.read32(addr - CLINT_BASE);
 	if (addr >= APLIC_BASE && addr < APLIC_BASE + APLIC_SIZE) return aplic.read32(addr - APLIC_BASE);
 	if (addr >= VIRTIO_BASE && addr < VIRTIO_BASE + VIRTIO_SIZE) return disk.read32(addr - VIRTIO_BASE);
+	if (addr >= VIRTIO_DRIVE_BASE && addr < VIRTIO_DRIVE_BASE + NUM_DRIVES * VIRTIO_SIZE) {
+		const uint64_t off = addr - VIRTIO_DRIVE_BASE;
+		return drives[off / VIRTIO_SIZE].read32(off % VIRTIO_SIZE);
+	}
 	if (addr >= VIRTIO_KBD_BASE && addr < VIRTIO_KBD_BASE + VIRTIO_SIZE) return kbd_dev.read32(addr - VIRTIO_KBD_BASE);
 	if (addr >= VIRTIO_MOUSE_BASE && addr < VIRTIO_MOUSE_BASE + VIRTIO_SIZE) return mouse_dev.read32(addr - VIRTIO_MOUSE_BASE);
 	if (addr >= IMSIC_M_BASE && addr < IMSIC_M_BASE + IMSIC_SIZE) return 0; // seteipnum_le reads as zero, per spec
@@ -332,6 +336,11 @@ void Memory::write32(uint64_t addr, uint32_t val)
 		mouse_dev.write32(addr - VIRTIO_MOUSE_BASE, val, *this, aplic);
 		return;
 	}
+	if (addr >= VIRTIO_DRIVE_BASE && addr < VIRTIO_DRIVE_BASE + NUM_DRIVES * VIRTIO_SIZE) {
+		const uint64_t off = addr - VIRTIO_DRIVE_BASE;
+		drives[off / VIRTIO_SIZE].write32(off % VIRTIO_SIZE, val, *this, aplic);
+		return;
+	}
 	if (addr >= VIRTIO_BASE && addr < VIRTIO_BASE + VIRTIO_SIZE) {
 		disk.write32(addr - VIRTIO_BASE, val, *this, aplic);
 		return;
@@ -469,6 +478,7 @@ bool Memory::is_backed(uint64_t addr, unsigned size) const
 	if (in(TEST_BASE, TEST_SIZE)) return true;
 	if (in(VIRTIO_KBD_BASE, VIRTIO_SIZE)) return true;
 	if (in(VIRTIO_MOUSE_BASE, VIRTIO_SIZE)) return true;
+	if (in(VIRTIO_DRIVE_BASE, NUM_DRIVES * VIRTIO_SIZE)) return true;
 	if (in(UART_BASE, UART_SIZE)) return true;
 	if (in(CLINT_BASE, CLINT_SIZE)) return true;
 	if (in(APLIC_BASE, APLIC_SIZE)) return true;

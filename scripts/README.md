@@ -23,6 +23,9 @@ python scripts/boot.py linux --smoke
 python scripts/boot.py ubuntu
 python scripts/boot.py ubuntu --login
 
+# Make a storage drive; every *.img in drives/ is attached to Linux at boot.
+python scripts/mkdrive.py data 1G
+
 # Run every regression suite, or name the suites to run.
 python scripts/verify.py
 python scripts/verify.py --quick

@@ -57,6 +57,11 @@ public:
 	// whose disk silently reads as zeros -- a failure that surfaces much
 	// later as an unbootable filesystem.
 	bool attach_disk(const std::string &path);
+	// Attach every *.img in `dir`, in name order, to the storage drive
+	// slots. `skip` is the root disk's path, so an image that is already
+	// the root is not attached twice. Prints what it attached; a missing
+	// directory is not an error, since the folder is optional.
+	void attach_drives(const std::string &dir, const std::string &skip);
 
 	bool headless = false;
 	// Set by the CPU thread once a run has stopped *and* its crash log and

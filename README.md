@@ -288,7 +288,7 @@ src/
   debugger.*             breakpoints, halt conditions, crash/signature dumps
   gui.*                  the SDL window, framebuffer scaling, and the debug dashboard
   uart.*                 8250-compatible serial, which is the SBI console
-  virtio_blk.*           virtio-blk over MMIO: the root disk
+  virtio_blk.*           virtio-blk over MMIO: the root disk and the storage drives
   virtio_input.*         virtio-input over MMIO: the keyboard and the mouse
   timer.* aplic.* imsic.*  CLINT timer and the AIA interrupt controllers
   mmu.* pmp.*            Sv39/48/57 translation with a TLB, and the PMP
@@ -329,6 +329,7 @@ riscv_doom.exe -opensbi=<f> -kernel=<f> -dtb=<f> -initrd=<f> [options]   # Linux
 | `-dtb=<path>` | Flattened device tree. |
 | `-initrd=<path>` | Initramfs cpio archive. Omit it when booting from `-disk=` -- with an initramfs present the kernel runs that and never mounts the disk. |
 | `-disk=<path>` | Raw disk image for the virtio-blk device. A whole-device filesystem or a partitioned image both work; the kernel finds the partition table itself. |
+| `-drives=<dir>` | Folder of `*.img` storage drives to attach after the root disk on a Linux boot, in name order. Defaults to `drives`; `-drives=` turns it off. See [Storage drives](#drives). |
 | `-fbdump=<path>` | Write the Linux framebuffer to this file as a binary PPM, with a non-black pixel count on stdout. Written when the run stops and periodically while it runs. |
 | `-expect=<text>` | Hold the headless stdin feed until the guest's console prints this string. |
 | `-input=<path>` | Replay a script of keyboard and mouse events into the guest. The only way to exercise the input devices without a window and a person -- see [Input](#input). |
@@ -448,6 +449,26 @@ btn left 1
 wheel 1
 sleep 500       # host milliseconds, not guest
 ```
+
+<a id="drives"></a>
+### Storage drives
+
+Every `*.img` in `drives/` is attached to a Linux guest as another virtio
+disk at boot -- `/dev/vdb` onwards after Ubuntu's root disk, `/dev/vda`
+onwards in the BusyBox boot, in the order the names sort.
+
+```sh
+python scripts/mkdrive.py data 1G    # drives/data.img, formatted ext4, labelled "data"
+python scripts/boot.py ubuntu
+# in the guest:  mkdir -p /mnt/data && mount LABEL=data /mnt/data
+```
+
+The device tree always declares eight drive slots, after the input devices.
+An empty slot reports virtio device ID 0, which Linux skips without a word,
+so adding a drive is dropping a file in the folder -- no device tree change.
+A read-only image file is attached read-only and the guest is told, so a
+mount comes up read-only rather than failing on its first write. Details and
+limits in [drives/README.md](drives/README.md).
 
 ### The display
 

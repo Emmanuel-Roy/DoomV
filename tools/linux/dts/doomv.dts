@@ -343,5 +343,67 @@
 			interrupt-parent = <&aplic>;
 			interrupts = <3 4>;
 		};
+
+		// Eight storage drive slots, for the images in the drives/ folder
+		// (see Memory::VIRTIO_DRIVE_BASE). All eight are always declared;
+		// an empty one reports virtio device ID 0 and Linux skips it
+		// silently, so attaching a drive needs no change here. Attached
+		// drives appear after the root disk -- /dev/vdb onwards when there
+		// is one -- in the order the image names sort.
+		virtio_mmio@10102000 {
+			compatible = "virtio,mmio";
+			reg = <0x0 0x10102000 0x0 0x1000>;
+			interrupt-parent = <&aplic>;
+			interrupts = <4 4>;
+		};
+
+		virtio_mmio@10103000 {
+			compatible = "virtio,mmio";
+			reg = <0x0 0x10103000 0x0 0x1000>;
+			interrupt-parent = <&aplic>;
+			interrupts = <5 4>;
+		};
+
+		virtio_mmio@10104000 {
+			compatible = "virtio,mmio";
+			reg = <0x0 0x10104000 0x0 0x1000>;
+			interrupt-parent = <&aplic>;
+			interrupts = <6 4>;
+		};
+
+		virtio_mmio@10105000 {
+			compatible = "virtio,mmio";
+			reg = <0x0 0x10105000 0x0 0x1000>;
+			interrupt-parent = <&aplic>;
+			interrupts = <7 4>;
+		};
+
+		virtio_mmio@10106000 {
+			compatible = "virtio,mmio";
+			reg = <0x0 0x10106000 0x0 0x1000>;
+			interrupt-parent = <&aplic>;
+			interrupts = <8 4>;
+		};
+
+		virtio_mmio@10107000 {
+			compatible = "virtio,mmio";
+			reg = <0x0 0x10107000 0x0 0x1000>;
+			interrupt-parent = <&aplic>;
+			interrupts = <9 4>;
+		};
+
+		virtio_mmio@10108000 {
+			compatible = "virtio,mmio";
+			reg = <0x0 0x10108000 0x0 0x1000>;
+			interrupt-parent = <&aplic>;
+			interrupts = <10 4>;
+		};
+
+		virtio_mmio@10109000 {
+			compatible = "virtio,mmio";
+			reg = <0x0 0x10109000 0x0 0x1000>;
+			interrupt-parent = <&aplic>;
+			interrupts = <11 4>;
+		};
 	};
 };

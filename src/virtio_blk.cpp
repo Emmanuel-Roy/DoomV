@@ -98,7 +98,14 @@ uint32_t VirtioBlk::read32(uint64_t offset) const
 		// zeroes and the rest are optimisations this device does not
 		// implement, and claiming one it will not honour is worse than
 		// claiming none at all.
-		return device_feat_sel == 1 ? FEAT_HI_VERSION_1 : 0;
+		//
+		// Except VIRTIO_BLK_F_RO (bit 5), when the image could only be
+		// opened read-only. Then the guest knows before it writes: Linux
+		// marks the disk read-only and a mount falls back to ro, where
+		// without the bit every write fails as an I/O error long after the
+		// mount appeared to succeed.
+		if (device_feat_sel == 1) return FEAT_HI_VERSION_1;
+		return ro ? (1u << 5) : 0;
 	case REG_QUEUE_NUM_MAX:  return QUEUE_MAX;
 	case REG_QUEUE_READY:    return queue_ready;
 	case REG_INTERRUPT_STAT: return interrupt_status;
@@ -265,6 +272,6 @@ void VirtioBlk::process_queue(Memory &mem, Aplic &aplic)
 
 	if (completed) {
 		interrupt_status |= 1;   // the used ring was updated
-		aplic.assert_source(IRQ);
+		aplic.assert_source(irq);
 	}
 }

@@ -83,9 +83,12 @@ public:
 	// controller to signal completion through.
 	void write32(uint64_t offset, uint32_t value, Memory &mem, Aplic &aplic);
 
-	// The APLIC source this device drives. Fixed rather than configurable
-	// because the device tree has to name the same number.
-	static constexpr uint32_t IRQ = 1;
+	// The APLIC source this device drives. Each instance has its own -- an
+	// MMIO virtio device has exactly one interrupt and two devices cannot
+	// share it -- and the device tree has to name the same number for the
+	// same address. The root disk is source 1.
+	explicit VirtioBlk(uint32_t irq = 1) : irq(irq) {}
+	bool read_only() const { return ro; }
 
 	~VirtioBlk();
 
@@ -94,6 +97,7 @@ private:
 	bool do_io(Memory &mem, uint32_t type, uint64_t sector,
 	           uint64_t buf_addr, uint32_t buf_len);
 
+	const uint32_t irq;
 	FILE *file = nullptr;
 	uint64_t capacity = 0;   // bytes
 	bool ro = false;

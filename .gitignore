@@ -105,3 +105,8 @@ tools/verification/tests/suites/ref/
 # Framebuffer dumps from -fbdump=<path>, and anything converted from one.
 *.ppm
 fb*.png
+
+# Storage drive images for the Linux guest. The folder and its README are
+# tracked; the images are the user's data, and large.
+/drives/*
+!/drives/README.md
