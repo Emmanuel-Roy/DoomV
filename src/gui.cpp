@@ -374,11 +374,8 @@ constexpr int COMPACT_MIN_H = 1080;
 constexpr int COMPACT_BOX_X = 30;
 constexpr int COMPACT_BOX_Y = 8;
 
-DashLayout compact_layout(int fb_w, int fb_h)
+DashLayout compact_layout(int canvas_w)
 {
-	const int box_right = COMPACT_BOX_X + fb_w;   // 1054 for a 1024 console
-	const int box_bottom = COMPACT_BOX_Y + fb_h;  // 776
-
 	DashLayout L{};
 	L.shadow = 1;
 	L.title = {2.0f, 3.0f, 2};   // 16x24, 18 pitch
@@ -387,27 +384,43 @@ DashLayout compact_layout(int fb_w, int fb_h)
 
 	L.title_y = COMPACT_BOX_Y;   // headers level with the top of the console
 	L.list_y = COMPACT_BOX_Y + 24 + 14;
-	L.row_h = 30;                // the same pitch the design-unit rows have
+	// 16-pixel text on a 20-pixel pitch. The font leaves its bottom row
+	// blank and this text is capitals and hex, so the visible gap is six.
+	L.row_h = 20;
 
-	L.csr_x = box_right + 26;
-	// Eleven glyphs ("hcounteren:") plus one of gap; still a floor.
-	L.csr_value_offset = 12 * 9;
+	// CSRS and the register file are packed together against the right
+	// edge, with the same margin the console has on the left, so the slack
+	// sits between the console and the panels rather than inside them.
+	// Anchored to the canvas, not to 1920, so a wider window keeps them
+	// at the edge.
+	//
+	// The register file: "X00:" plus a gap, 16 hex digits, and two glyphs
+	// between the X and V columns.
+	L.reg_value_offset = 5 * 9;
+	L.reg_col_w = L.reg_value_offset + 16 * 9 + 18;
+	const int reg_total_w = L.reg_col_w + L.reg_value_offset + 16 * 9;
+	L.reg_x = canvas_w - COMPACT_BOX_X - reg_total_w;
 
-	// CSRS is 108 + 144 wide; a 60-pixel gap keeps the panels distinct.
-	L.reg_x = L.csr_x + L.csr_value_offset + 16 * 9 + 60;
-	L.reg_value_offset = 5 * 9;                     // "X00:" plus a gap
-	L.reg_col_w = L.reg_value_offset + 16 * 9 + 48;
+	// CSRS, 30 pixels to its left. The value column fits a nine-character
+	// name and its colon; it is a floor, so a longer name ("hcounteren")
+	// pushes only its own row's value across.
+	L.csr_value_offset = 10 * 9;
+	L.csr_x = L.reg_x - 30 - (L.csr_value_offset + 16 * 9);
 
-	// Under the console. Sixteen rows of 16-pixel text at an 18-pixel
-	// pitch is what fits below 776 in 1080; the text is all capitals and
-	// the font leaves its bottom row blank, so the visual gap is 4 pixels.
-	L.trace_x = COMPACT_BOX_X;
-	L.trace_y = box_bottom + 6;
-	L.trace_row_h = 18;
-	L.trace_title_x = COMPACT_BOX_X;
-	L.trace_title_w = fb_w;
-
+	// The trace log goes under both panels rather than under the console,
+	// so everything about the machine's state is in the one column beside
+	// it. It starts below the paused banner's two lines, which hang off the
+	// last register row, and spans CSRS and the register file together.
+	// Sixteen rows at an 18-pixel pitch end around y=1030; the longest
+	// disassembled line is about 50 glyphs, 450 pixels, well inside the
+	// 660 the column has.
 	L.banner_line_h = 20;
+	L.trace_x = L.csr_x;
+	L.trace_y = L.list_y + 32 * L.row_h + 2 * L.banner_line_h + 14;
+	L.trace_row_h = 18;
+	L.trace_title_x = L.csr_x;
+	L.trace_title_w = canvas_w - COMPACT_BOX_X - L.csr_x;
+
 	return L;
 }
 
@@ -580,7 +593,7 @@ void Gui::render(const Snapshot &snap)
 
 	char buf[96];
 
-	const DashLayout L = compact ? compact_layout(snap.fb_w, snap.fb_h)
+	const DashLayout L = compact ? compact_layout(canvas_w)
 	                             : doom_layout(GAME_BOX_X, GAME_BOX_Y, GAME_BOX_W, GAME_BOX_H);
 	text_ux = compact ? 1.0f : scale_x;
 	text_uy = compact ? 1.0f : scale_y;
