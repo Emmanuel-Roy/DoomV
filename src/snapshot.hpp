@@ -37,7 +37,7 @@ struct Snapshot {
 		uint16_t addr = 0;
 		uint64_t value = 0;
 	};
-	static constexpr int CSR_PANEL_SIZE = Registers::CSR_HISTORY_SIZE;
+	static constexpr int CSR_PANEL_SIZE = Registers::CSR_TOP;
 	CsrEntry csrs[CSR_PANEL_SIZE]{};
 	int csr_count = 0;
 };

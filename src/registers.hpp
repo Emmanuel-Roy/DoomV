@@ -113,16 +113,23 @@ public:
 	const HistoryEntry &history_at(int index) const;
 	int history_pos() const;
 
-	// Distinct CSR *addresses* touched by CSR instructions (exec_32ZICSR
-	// calls this once per CSRR*/CSRR*I), most-recently-used first -- for
-	// the dashboard's CSRs panel, which wants "what's actually in use"
-	// rather than every address in the 4096-entry space (nothing touches
-	// almost all of it). Separate from history[] above, which tracks
-	// executed instructions broadly, not CSR addresses specifically.
-	static constexpr int CSR_HISTORY_SIZE = 20;
+	// Which CSRs the guest is busy with, for the dashboard's CSRs panel.
+	//
+	// A sliding window, like the instruction trace: the last CSR_WINDOW
+	// CSR accesses (exec_32ZICSR records one per CSRR*/CSRR*I), with a
+	// count per address kept in step as accesses enter and leave it. The
+	// panel shows the CSR_TOP most frequent. That is a different question
+	// from "most recently touched", which is what this used to answer:
+	// recency lists every CSR a trap path brushes past, while frequency
+	// over a window shows what the machine is actually doing right now,
+	// and lets a CSR the guest stopped using fall off by itself.
+	static constexpr int CSR_WINDOW = 1024;
+	static constexpr int CSR_TOP = 10;
 	void record_csr_access(uint16_t addr);
-	uint16_t csr_history_at(int index) const; // 0 = most recently accessed
-	int csr_history_count() const;
+	// Fills `out` with up to `max` addresses, most frequent in the window
+	// first, and returns how many. Ties go to the lower address, so rows
+	// with equal counts do not swap places from one frame to the next.
+	int top_csrs(uint16_t out[], int max) const;
 
 	// The guest physical address of a G-stage fault, set by the MMU and
 	// consumed by the trap path. It cannot be written straight to a CSR at
@@ -171,6 +178,8 @@ private:
 	HistoryEntry history[HISTORY_SIZE];
 	int history_ptr;
 
-	uint16_t csr_history[CSR_HISTORY_SIZE];
-	int csr_history_len; // valid entries so far -- grows to CSR_HISTORY_SIZE, then stays
+	uint16_t csr_window[CSR_WINDOW];  // ring of recent accesses
+	int csr_window_pos;               // where the next one goes
+	int csr_window_len;               // grows to CSR_WINDOW, then stays
+	uint16_t csr_counts[4096];        // occurrences of each address in the ring
 };

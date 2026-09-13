@@ -195,7 +195,7 @@ to be the one that is wrong, but it does not decide anything.
 | riscv-vector-tests | 3042 generated V tests at VLEN=128, signature-diffed against Sail | **3042 / 3042** |
 | riscv-tests | the Berkeley suite, 377 applicable of 667 | **377 / 377** |
 | damo-rv-priv-ats | hypervisor, the only H coverage that exists anywhere -- 43 groups | **43 / 43 groups** |
-| Linux | OpenSBI + 6.12 + busybox, ext4 root over virtio-blk | boots to an interactive shell, in a 1024x768 framebuffer console |
+| Linux | OpenSBI + 6.12 + busybox, ext4 root over virtio-blk | boots to an interactive shell, in a 1168x1056 framebuffer console |
 | Ubuntu 24.04 | 104 packages, configured by DoomV running Ubuntu's own `dpkg`, systemd as PID 1 | boots, and logs in at the framebuffer console |
 | DOOM | bare-metal, no OS | plays |
 
@@ -457,9 +457,9 @@ the machine was started.
 DOOM writes its native 320x200 through `MMIO_FB`, and the window scales it
 up inside a dashboard that shows registers, CSRs and a trace log alongside.
 
-A Linux guest gets a 1024x768 linear aperture at `0x50000000`, declared to
+A Linux guest gets a 1168x1056 linear aperture at `0x50000000`, declared to
 the kernel as a `simple-framebuffer` node in the device tree. The kernel's
-`simplefb` driver binds to it and `fbcon` draws a 128x48 character console
+`simplefb` driver binds to it and `fbcon` draws a 146x66 character console
 into it. The window shows it at exactly 1:1, with the CSRs, register file
 and trace log still around it: in this mode the dashboard switches to a
 compact layout whose text is drawn at one screen pixel per font pixel

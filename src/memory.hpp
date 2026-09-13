@@ -84,13 +84,20 @@ public:
 	// The geometry is a constant rather than something the guest selects.
 	// simple-framebuffer has no mode-setting protocol at all: the driver
 	// reads width, height, stride and format out of the device tree and
-	// trusts them, so these three numbers and the framebuffer@ node in
-	// tools/linux/dts/doomv.dts have to agree exactly. They are checked
-	// against each other by a static_assert on the size below and by
-	// nothing at all on the width, so changing one means changing both.
+	// trusts them, so these numbers and the framebuffer@ node in
+	// tools/linux/dts/doomv.dts have to agree exactly: width, height, stride
+	// and the reg size. Nothing checks that they do -- the device tree is
+	// compiled separately and there is no build step that sees both -- so
+	// changing one means changing the other by hand.
 	static constexpr uint64_t LFB_BASE = 0x50000000;
-	static constexpr int LFB_W = 1024;
-	static constexpr int LFB_H = 768;
+	// 1168x1056: a 146x66 console in fbcon's 8x16 font. Sized to the GUI's
+	// compact layout rather than to a standard mode -- simple-framebuffer
+	// has no notion of one -- so that at 1920x1080 the console is shown at
+	// exactly 1:1 beside the register column, with even spacing around both
+	// (see compact_layout in gui.cpp). Width a multiple of 8 and height of
+	// 16, so fbcon's character grid fills it with no partial cell.
+	static constexpr int LFB_W = 1168;
+	static constexpr int LFB_H = 1056;
 	static constexpr uint32_t LFB_STRIDE = LFB_W * 4;
 	static constexpr uint64_t LFB_SIZE = (uint64_t)LFB_STRIDE * LFB_H;
 

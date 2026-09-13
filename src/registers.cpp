@@ -6,8 +6,10 @@
 Registers::Registers()
 	: pc(0), priv(PrivMode::M), frm(0), fflags(0),
 	  vtype(1ull << 63), vl(0), vstart(0), vxrm(0), vxsat(0),
-	  history_ptr(0), csr_history_len(0)
+	  history_ptr(0), csr_window_pos(0), csr_window_len(0)
 {
+	std::memset(csr_window, 0, sizeof(csr_window));
+	std::memset(csr_counts, 0, sizeof(csr_counts));
 	for (int i = 0; i < 32; i++) { x[i] = 0; f[i] = 0.0; std::memset(v[i], 0, VLEN_BYTES); }
 	for (int i = 0; i < 4096; i++) csr[i] = 0;
 	for (int i = 0; i < HISTORY_SIZE; i++) history[i] = {0, 0, DecodedInstruction{}};
@@ -171,25 +173,33 @@ int Registers::history_pos() const
 
 void Registers::record_csr_access(uint16_t addr)
 {
-	// Move-to-front: find it if already tracked, otherwise the insertion
-	// point is the end of the valid range (growing it, up to the cap).
-	int pos = csr_history_len;
-	for (int i = 0; i < csr_history_len; i++) {
-		if (csr_history[i] == addr) { pos = i; break; }
+	// Constant time, since this is on the path of every CSR instruction:
+	// the access leaving the window gives back its count, the new one
+	// takes one. Nothing is sorted here; top_csrs does that when asked.
+	addr &= 0xFFF;
+	if (csr_window_len == CSR_WINDOW) csr_counts[csr_window[csr_window_pos]]--;
+	else csr_window_len++;
+	csr_window[csr_window_pos] = addr;
+	csr_counts[addr]++;
+	csr_window_pos = (csr_window_pos + 1) % CSR_WINDOW;
+}
+
+int Registers::top_csrs(uint16_t out[], int max) const
+{
+	// A scan of all 4096 counts with a small insertion-sorted top list.
+	// It runs once per published snapshot, not per instruction, and at
+	// max=10 that is a few tens of thousands of comparisons at most.
+	int n = 0;
+	for (int a = 0; a < 4096; a++) {
+		const uint16_t c = csr_counts[a];
+		if (c == 0) continue;
+		if (n == max && c <= csr_counts[out[n - 1]]) continue;
+		int i = (n < max) ? n++ : n - 1;
+		// Strictly greater moves up, so an equal count stays behind the
+		// lower address already placed -- scanning upward makes that the
+		// stable tie-break.
+		while (i > 0 && csr_counts[out[i - 1]] < c) { out[i] = out[i - 1]; i--; }
+		out[i] = (uint16_t)a;
 	}
-	if (pos == csr_history_len && csr_history_len < CSR_HISTORY_SIZE) csr_history_len++;
-	else if (pos == csr_history_len) pos = CSR_HISTORY_SIZE - 1; // full and new -- evict the oldest
-
-	for (int i = pos; i > 0; i--) csr_history[i] = csr_history[i - 1];
-	csr_history[0] = addr;
-}
-
-uint16_t Registers::csr_history_at(int index) const
-{
-	return csr_history[index];
-}
-
-int Registers::csr_history_count() const
-{
-	return csr_history_len;
+	return n;
 }

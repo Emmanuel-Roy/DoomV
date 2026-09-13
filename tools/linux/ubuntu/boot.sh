@@ -3,7 +3,7 @@
 #
 # The window is the point here, unlike the test suites: with FB_SIMPLE in the
 # kernel and the framebuffer@50000000 node in the device tree, fbcon puts a
-# 1024x768 graphical console into DoomV's SDL window, and that is Ubuntu being
+# 1168x1056 graphical console into DoomV's SDL window, and that is Ubuntu being
 # displayed by the emulator rather than merely logged by it. Pass -ng if you
 # want the log instead.
 #

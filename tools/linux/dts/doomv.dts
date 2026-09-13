@@ -32,10 +32,10 @@
 	// whatever the high byte happened to be.
 	framebuffer@50000000 {
 		compatible = "simple-framebuffer";
-		reg = <0x0 0x50000000 0x0 0x300000>;   // 1024 * 768 * 4
-		width = <1024>;
-		height = <768>;
-		stride = <4096>;                        // 1024 * 4
+		reg = <0x0 0x50000000 0x0 0x4b4800>;   // 1168 * 1056 * 4
+		width = <1168>;
+		height = <1056>;
+		stride = <4672>;                        // 1168 * 4
 		format = "x8r8g8b8";
 	};
 

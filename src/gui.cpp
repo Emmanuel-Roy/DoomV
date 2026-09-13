@@ -298,14 +298,20 @@ struct TextStyle {
 // draw the same information: the design-unit layout that has always been
 // here, and a compact one for a Linux framebuffer.
 struct DashLayout {
+	int box_x, box_y;            // the display's origin, if the layout places it
 	int shadow;                  // drop-shadow offset
-	TextStyle title, reg, trace;
+	TextStyle title, reg, trace, trace_title;
 	int title_y, list_y, row_h;  // CSRS / REGISTER FILE headers and rows
 	int csr_x, csr_value_offset;
 	int reg_x, reg_col_w, reg_value_offset;
 	int trace_x, trace_y, trace_row_h;
-	int trace_title_x, trace_title_w;
+	int trace_title_x, trace_title_w, trace_title_h;
+	int trace_max_chars;         // 0: lines may run past trace_title_w
 	int banner_line_h;
+	int banner_y;
+	// 0: right-align the banner to the register file. Otherwise centre it
+	// over [banner_center_x, banner_center_x + banner_center_w).
+	int banner_center_x, banner_center_w;
 };
 
 // The original layout, in design units (see gui.hpp's DESIGN_W/H), built
@@ -349,8 +355,16 @@ DashLayout doom_layout(int box_x, int box_y, int box_w, int box_h)
 	L.trace_row_h = (int)(8 * L.trace.sy) + 4;
 	L.trace_title_x = box_x;
 	L.trace_title_w = box_w;
+	// The title is the trace text's own size and one row tall, and the
+	// longest lines are allowed to overhang the box by a few characters.
+	L.trace_title = L.trace;
+	L.trace_title_h = L.trace_row_h;
+	L.trace_max_chars = 0;
 
 	L.banner_line_h = 9;
+	L.banner_y = L.list_y + 32 * L.row_h;   // in the corner under x31/v31
+	L.banner_center_x = 0;
+	L.banner_center_w = 0;
 	return L;
 }
 
@@ -358,7 +372,7 @@ DashLayout doom_layout(int box_x, int box_y, int box_w, int box_h)
 //
 // The design-unit layout spends 13.5 pixels across on each register
 // character -- 1.7 screen pixels per font pixel -- and leaves the display a
-// box that shrinks a 1024x768 console to 700x525. This one draws the same
+// box that shrinks the console to fit. This one draws the same
 // panels with text at exactly one pixel per font pixel across and a 9 pixel
 // pitch. The font's glyphs sit in columns 1-7 with 2-pixel stems, so that is
 // the narrowest it can go and stay crisp, and it roughly halves every text
@@ -371,56 +385,96 @@ DashLayout doom_layout(int box_x, int box_y, int box_w, int box_h)
 // 1920x1080 canvas, and render() falls back to the design-unit one below it.
 constexpr int COMPACT_MIN_W = 1920;
 constexpr int COMPACT_MIN_H = 1080;
-constexpr int COMPACT_BOX_X = 30;
-constexpr int COMPACT_BOX_Y = 8;
 
-DashLayout compact_layout(int canvas_w)
+DashLayout compact_layout(int canvas_w, int canvas_h)
 {
 	DashLayout L{};
 	L.shadow = 1;
 	L.title = {2.0f, 3.0f, 2};   // 16x24, 18 pitch
-	L.reg = {1.0f, 2.0f, 1};     // 8x16, 9 pitch
-	L.trace = {1.0f, 2.0f, 1};
+	// 10x16 on a 10-pixel pitch. As wide as the column's 728 pixels allow:
+	// the two panels are 70 characters across between them, and the height
+	// is already spoken for by 32 register rows and the trace log, so the
+	// only room to grow is sideways. The 1.25x width puts the font's
+	// two-column strokes at 2 or 3 pixels, and its blank first column
+	// leaves a gap between letters.
+	L.reg = {1.25f, 2.0f, 0};
+	// 12x16 on a 13-pixel pitch, so a typical disassembled line fills the
+	// trace log's width (below). A 1.5x width alternates 1- and 2-pixel
+	// columns, but two adjacent columns always make 3 pixels, so the
+	// font's two-column strokes all come out the same.
+	L.trace = {1.5f, 2.0f, 1};
 
-	L.title_y = COMPACT_BOX_Y;   // headers level with the top of the console
-	L.list_y = COMPACT_BOX_Y + 24 + 14;
-	// 16-pixel text on a 20-pixel pitch. The font leaves its bottom row
+	const int console_w = Memory::LFB_W;
+	const int console_h = Memory::LFB_H;
+	const int pitch = (int)(8 * L.reg.sx + 0.5f) + L.reg.track;
+	const int hex_w = 16 * pitch;
+
+	// The register file: "X00:" plus a gap, 16 hex digits, and two
+	// characters between the X and V columns.
+	L.reg_value_offset = 5 * pitch;
+	L.reg_col_w = L.reg_value_offset + hex_w + 2 * pitch;
+	const int reg_w = L.reg_col_w + L.reg_value_offset + hex_w;
+	// CSRS: the value column fits a nine-character name and its colon. It
+	// is a floor, so a longer name pushes only its own row's value across.
+	L.csr_value_offset = 10 * pitch;
+	const int csr_w = L.csr_value_offset + hex_w;
+
+	// The console is centred vertically, and the same margin is used on
+	// the left and right, so the window has one margin all the way round.
+	L.box_y = (canvas_h - console_h) / 2;
+	const int margin = L.box_y;
+
+	// Left to right: margin, console, gap, CSRS, gap, register file,
+	// margin. Whatever is left after the fixed margins is split evenly
+	// between the two inner gaps, with an odd pixel going to the second.
+	const int slack_x = canvas_w - 2 * margin - console_w - csr_w - reg_w;
+	const int gap_x = slack_x / 2;
+	L.box_x = margin;
+	L.csr_x = L.box_x + console_w + gap_x;
+	L.reg_x = L.csr_x + csr_w + (slack_x - gap_x);
+	const int column_right = L.reg_x + reg_w;   // canvas_w - margin
+
+	// Top to bottom: the console centred, with equal margins above and
+	// below, and the column beside it spanning exactly the same top and
+	// bottom. Its three blocks -- the panels, the trace log, the paused
+	// banner -- are separated by two equal gaps. The banner's space is kept
+	// even while running, so nothing moves when the machine pauses.
+	const int top = L.box_y;
+	const int bottom = L.box_y + console_h;
+
+	const int glyph_h = 16;
+	// 16-pixel text on a 20-pixel pitch; the font leaves its bottom row
 	// blank and this text is capitals and hex, so the visible gap is six.
 	L.row_h = 20;
-
-	// CSRS and the register file are packed together against the right
-	// edge, with the same margin the console has on the left, so the slack
-	// sits between the console and the panels rather than inside them.
-	// Anchored to the canvas, not to 1920, so a wider window keeps them
-	// at the edge.
-	//
-	// The register file: "X00:" plus a gap, 16 hex digits, and two glyphs
-	// between the X and V columns.
-	L.reg_value_offset = 5 * 9;
-	L.reg_col_w = L.reg_value_offset + 16 * 9 + 18;
-	const int reg_total_w = L.reg_col_w + L.reg_value_offset + 16 * 9;
-	L.reg_x = canvas_w - COMPACT_BOX_X - reg_total_w;
-
-	// CSRS, 30 pixels to its left. The value column fits a nine-character
-	// name and its colon; it is a floor, so a longer name ("hcounteren")
-	// pushes only its own row's value across.
-	L.csr_value_offset = 10 * 9;
-	L.csr_x = L.reg_x - 30 - (L.csr_value_offset + 16 * 9);
-
-	// The trace log goes under both panels rather than under the console,
-	// so everything about the machine's state is in the one column beside
-	// it. It starts below the paused banner's two lines, which hang off the
-	// last register row, and spans CSRS and the register file together.
-	// Sixteen rows at an 18-pixel pitch end around y=1030; the longest
-	// disassembled line is about 50 glyphs, 450 pixels, well inside the
-	// 660 the column has.
-	L.banner_line_h = 20;
-	L.trace_x = L.csr_x;
-	L.trace_y = L.list_y + 32 * L.row_h + 2 * L.banner_line_h + 14;
 	L.trace_row_h = 18;
-	L.trace_title_x = L.csr_x;
-	L.trace_title_w = canvas_w - COMPACT_BOX_X - L.csr_x;
+	L.trace_title_h = 24 + 8;
+	L.banner_line_h = 20;
+	const int panels_h = 24 + 14 + 31 * L.row_h + glyph_h;
+	const int trace_h = L.trace_title_h + 14 * L.trace_row_h + glyph_h;   // title + 15 rows
+	const int banner_h = L.banner_line_h + glyph_h;
+	const int gap_y = (bottom - top - panels_h - trace_h - banner_h) / 2;
 
+	L.title_y = top;
+	L.list_y = top + 24 + 14;
+
+	// The trace log runs from the CSR panel's left edge to the register
+	// file's right one, under a title the size of the CSRS and REGISTER
+	// FILE headers. At 13 pixels a character that is 54 characters at
+	// 1920 wide; a line longer than fits is cut at the edge rather than
+	// running into the margin.
+	L.trace_y = top + panels_h + gap_y;
+	L.trace_x = L.csr_x;
+	L.trace_title_x = L.csr_x;
+	L.trace_title_w = column_right - L.csr_x;
+	L.trace_title = L.title;
+	const int trace_pitch = (int)(8 * L.trace.sx + 0.5f) + L.trace.track;
+	L.trace_max_chars = L.trace_title_w / trace_pitch;
+
+	// The paused banner closes the column, bottom-aligned with the console
+	// and centred like the trace log above it.
+	L.banner_y = bottom - banner_h;
+	L.banner_center_x = L.csr_x;
+	L.banner_center_w = L.trace_title_w;
 	return L;
 }
 
@@ -466,7 +520,7 @@ void Gui::render(const Snapshot &snap)
 	// the box, because blending neighbours is exactly what destroys the
 	// one-pixel stems in 8x16 console text.
 	//
-	// That box holds a 1024x768 console at 0.68x, which is legible but not
+	// That box holds the Linux console well under 1:1, legible but not
 	// comfortable. So with room for it -- a 1920x1080 canvas -- a Linux
 	// framebuffer gets the compact layout instead: the console at exactly
 	// 1:1, and the same panels drawn with narrower text around it. See
@@ -479,8 +533,10 @@ void Gui::render(const Snapshot &snap)
 	if (fb_fullscreen) {
 		box_x = 0; box_y = 0; box_w = canvas_w; box_h = canvas_h;
 	}
+	const DashLayout L = compact ? compact_layout(canvas_w, canvas_h)
+	                             : doom_layout(GAME_BOX_X, GAME_BOX_Y, GAME_BOX_W, GAME_BOX_H);
 	if (compact) {
-		box_x = COMPACT_BOX_X; box_y = COMPACT_BOX_Y;
+		box_x = L.box_x; box_y = L.box_y;
 		box_w = snap.fb_w; box_h = snap.fb_h;
 	}
 	if (fb_is_linux && snap.fb_w > 0 && snap.fb_h > 0) {
@@ -593,8 +649,6 @@ void Gui::render(const Snapshot &snap)
 
 	char buf[96];
 
-	const DashLayout L = compact ? compact_layout(canvas_w)
-	                             : doom_layout(GAME_BOX_X, GAME_BOX_Y, GAME_BOX_W, GAME_BOX_H);
 	text_ux = compact ? 1.0f : scale_x;
 	text_uy = compact ? 1.0f : scale_y;
 
@@ -617,10 +671,10 @@ void Gui::render(const Snapshot &snap)
 
 	const int REG_HEX_W = 16 * glyph_adv(L.reg);
 
-	// CSRS -- every CSR address a CSRR* instruction has touched, most
-	// recently used first (Registers::csr_history), each with its *live*
-	// value, since several of the interesting ones (sstatus, mip, time)
-	// are computed rather than stored. Only entries seen so far are drawn.
+	// CSRS -- the CSRs the guest uses most across its last 1024 CSR
+	// instructions, most frequent first (Registers::top_csrs), each with
+	// its *live* value, since several of the interesting ones (sstatus,
+	// mip, time) are computed rather than stored.
 	const int CSR_COL_W = L.csr_value_offset + REG_HEX_W;
 	draw_centered_title(L.csr_x, CSR_COL_W, L.title_y, "--- CSRS ---", pal_pink, L.title);
 	for (int i = 0; i < snap.csr_count; i++) {
@@ -662,14 +716,20 @@ void Gui::render(const Snapshot &snap)
 	// TRACE LOG -- under the display, since the right side is the
 	// register file's.
 	int trace_y = L.trace_y;
-	draw_centered_title(L.trace_title_x, L.trace_title_w, trace_y, "--- TRACE LOG ---", pal_pink, L.trace);
-	trace_y += L.trace_row_h;
+	draw_centered_title(L.trace_title_x, L.trace_title_w, trace_y, "--- TRACE LOG ---", pal_pink, L.trace_title);
+	trace_y += L.trace_title_h;
+	// Cut a line at the layout's width, if it has one.
+	auto fit_trace = [&](char *line) {
+		if (L.trace_max_chars > 0 && (int)strlen(line) > L.trace_max_chars)
+			line[L.trace_max_chars] = '\0';
+	};
 
 	char op_buf[64];
 
 	// Most recently recorded history entry == the instruction that just executed.
 	format_operands(op_buf, sizeof(op_buf), snap.active.pc, snap.active.decoded);
 	sprintf(buf, "ACTIVE: %08X %s %s", snap.active.instr, snap.active.decoded.mnemonic, op_buf);
+	fit_trace(buf);
 	draw_shadow_text(L.trace_x, trace_y, buf, pal_pink, L.trace);
 	trace_y += L.trace_row_h;
 
@@ -681,6 +741,7 @@ void Gui::render(const Snapshot &snap)
 		const HistoryEntry &h = snap.trace[i];
 		format_operands(op_buf, sizeof(op_buf), h.pc, h.decoded);
 		sprintf(buf, "%016llX: %s %s", (unsigned long long)h.pc, h.decoded.mnemonic, op_buf);
+		fit_trace(buf);
 		draw_shadow_text(L.trace_x, trace_y, buf, pal_stats, L.trace);
 		trace_y += L.trace_row_h;
 	}
@@ -692,10 +753,15 @@ void Gui::render(const Snapshot &snap)
 	if (snap.halted) {
 		const char *msg_top = "PAUSED -- F9 TO RESUME";
 		const char *msg_bot = "(DELIVERS THE TRAP)";
-		const int right_edge = L.reg_x + REG_TOTAL_W;
-		int by = L.list_y + 32 * L.row_h;
-		draw_shadow_text(right_edge - text_w(msg_top, L.reg), by, msg_top, pal_red, L.reg);
-		draw_shadow_text(right_edge - text_w(msg_bot, L.reg), by + L.banner_line_h, msg_bot, pal_red, L.reg);
+		const int by = L.banner_y;
+		if (L.banner_center_w > 0) {
+			draw_centered_title(L.banner_center_x, L.banner_center_w, by, msg_top, pal_red, L.reg);
+			draw_centered_title(L.banner_center_x, L.banner_center_w, by + L.banner_line_h, msg_bot, pal_red, L.reg);
+		} else {
+			const int right_edge = L.reg_x + REG_TOTAL_W;
+			draw_shadow_text(right_edge - text_w(msg_top, L.reg), by, msg_top, pal_red, L.reg);
+			draw_shadow_text(right_edge - text_w(msg_bot, L.reg), by + L.banner_line_h, msg_bot, pal_red, L.reg);
+		}
 	}
 
 	SDL_UpdateTexture(texture, nullptr, screen_buf.data(), canvas_w * 4);

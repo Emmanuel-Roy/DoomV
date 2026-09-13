@@ -275,7 +275,7 @@ void DoomSystem::publish_snapshot()
 	Snapshot snap;
 
 	// Two framebuffers, one window. DOOM's is the 320x200 buffer
-	// doomgeneric hands us through MMIO_FB; Linux's is the 1024x768 linear
+	// doomgeneric hands us through MMIO_FB; Linux's is the 1168x1056 linear
 	// aperture at LFB_BASE that simple-framebuffer writes. Which one is
 	// live is decided by how the machine was started, not by which has been
 	// written -- an unwritten framebuffer is black, and a black screen is a
@@ -304,11 +304,10 @@ void DoomSystem::publish_snapshot()
 		snap.trace[i] = regs.history_at(pos);
 	}
 
-	snap.csr_count = regs.csr_history_count();
-	for (int i = 0; i < snap.csr_count; i++) {
-		uint16_t addr = regs.csr_history_at(i);
-		snap.csrs[i] = { addr, core.read_csr_effective(regs, memory, addr) };
-	}
+	uint16_t top[Snapshot::CSR_PANEL_SIZE];
+	snap.csr_count = regs.top_csrs(top, Snapshot::CSR_PANEL_SIZE);
+	for (int i = 0; i < snap.csr_count; i++)
+		snap.csrs[i] = { top[i], core.read_csr_effective(regs, memory, top[i]) };
 
 	std::lock_guard<std::mutex> lock(snapshot_mutex);
 	shared_snapshot = std::move(snap);
@@ -833,6 +832,16 @@ void DoomSystem::run()
 	// under snapshot_mutex, published once per burst) and Memory's key
 	// queue (locked separately) -- everything else in Memory/Registers/
 	// Debugger stays exclusively CPU-thread-owned, so it needs no locking.
+	// Publish once before the CPU thread starts, while this is still the
+	// only thread. Without it the window's first frames draw a
+	// default-constructed Snapshot, which claims DOOM's 320x200 framebuffer
+	// whatever the machine is -- so a Linux boot came up in the DOOM
+	// layout, with zeroed registers and "???" in the trace, and only jumped
+	// to its own layout when the CPU thread finished its first 200000-
+	// instruction burst, a second or more in. Publishing here means the
+	// first frame already has the right geometry and the real reset state.
+	publish_snapshot();
+
 	std::thread cpu_thread(&DoomSystem::cpu_loop, this);
 	cpu_thread.detach();
 

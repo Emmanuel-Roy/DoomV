@@ -144,7 +144,7 @@ a framebuffer dump beside it.
 
 Log in as `root` / `doomv`. That opens a window, and with `FB_SIMPLE` in the
 kernel and the `framebuffer@50000000` node in the device tree the console is
-a real 1024x768 framebuffer rather than a serial log -- Ubuntu being
+a real 1168x1056 framebuffer rather than a serial log -- Ubuntu being
 *displayed* by the emulator, not merely logged by it. Pass `-ng` for the log
 instead.
 
@@ -221,9 +221,10 @@ doomv login: _
 
 which is getty's issue banner, rendered by the kernel into DoomV's
 framebuffer. Its pixel count is small (about a thousand lit pixels of
-786432) because that is all a cleared console with a login prompt on it
-*is* -- worth knowing before concluding from a thumbnail that the screen is
-blank.
+786432, on the 1024x768 framebuffer this was measured with -- it is
+1168x1056 now) because that is all a cleared console with a login prompt on
+it *is* -- worth knowing before concluding from a thumbnail that the screen
+is blank.
 
 And it is a prompt rather than a picture of one. With the `virtio-input`
 keyboard in the device tree, a scripted login reaches a root shell and runs
