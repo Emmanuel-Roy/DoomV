@@ -454,25 +454,27 @@ sleep 500       # host milliseconds, not guest
 There are two framebuffers, and which one the window shows depends on how
 the machine was started.
 
+Both are shown the same way. The guest's display sits on the left, and one
+column beside it holds the CSRs, the register file, the trace log and the
+paused banner, with the same margin all the way round the window. The CSR
+panel lists the ten CSRs the guest has used most across its last 1024 CSR
+instructions, so it shows what the machine is doing now rather than
+everything it ever touched.
+
 DOOM writes its native 320x200 through `MMIO_FB`, and the window scales it
-up inside a dashboard that shows registers, CSRs and a trace log alongside.
+up to fill the display area while keeping its shape.
 
 A Linux guest gets a 1168x1056 linear aperture at `0x50000000`, declared to
 the kernel as a `simple-framebuffer` node in the device tree. The kernel's
 `simplefb` driver binds to it and `fbcon` draws a 146x66 character console
-into it. The window shows it at exactly 1:1, with the CSRs, register file
-and trace log still around it: in this mode the dashboard switches to a
-compact layout whose text is drawn at one screen pixel per font pixel
-across, 8 pixels wide on a 9-pixel pitch, where DOOM's layout spends 13.5.
-That roughly halves every text column, which is the width the console needs
-to be shown unscaled -- and unscaled means every glyph on it is exactly the
-kernel's, with no resampling at all.
+into it, which the window shows at exactly 1:1 -- unscaled, so every glyph
+on it is exactly the kernel's. The display area is that size for every
+guest, which is why DOOM's is too.
 
-The compact layout is laid out in real pixels and needs a 1920x1080 window;
-below that the dashboard falls back to DOOM's layout, with the console
-letterboxed into its display box. **Ctrl+Alt+F** hands the framebuffer the
-whole window in either case. DOOM mode itself is unchanged, down to the
-pixel.
+That layout is drawn in real pixels and needs a 1920x1080 window. Below
+that the dashboard falls back to an older, scaled layout, with the display
+letterboxed into a smaller box. **Ctrl+Alt+F** hands a Linux framebuffer the
+whole window in either case.
 
 The aperture sits deliberately *outside* the device tree's memory node,
 which is what stops Linux allocating over it without needing a

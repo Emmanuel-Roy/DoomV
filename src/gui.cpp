@@ -296,7 +296,7 @@ struct TextStyle {
 
 // Where everything around the display goes. Two of these exist and they
 // draw the same information: the design-unit layout that has always been
-// here, and a compact one for a Linux framebuffer.
+// here, and the compact one every guest uses at 1920x1080 and up.
 struct DashLayout {
 	int box_x, box_y;            // the display's origin, if the layout places it
 	int shadow;                  // drop-shadow offset
@@ -368,17 +368,16 @@ DashLayout doom_layout(int box_x, int box_y, int box_w, int box_h)
 	return L;
 }
 
-// The compact layout, for a Linux framebuffer, in *pixels*.
+// The compact layout, for any guest in a window of 1920x1080 or more, in
+// *pixels*.
 //
 // The design-unit layout spends 13.5 pixels across on each register
-// character -- 1.7 screen pixels per font pixel -- and leaves the display a
-// box that shrinks the console to fit. This one draws the same
-// panels with text at exactly one pixel per font pixel across and a 9 pixel
-// pitch. The font's glyphs sit in columns 1-7 with 2-pixel stems, so that is
-// the narrowest it can go and stay crisp, and it roughly halves every text
-// column. That buys enough width to show the console at 1:1 -- no scaling
-// at all, so every glyph of it is exactly the kernel's -- with the CSRs,
-// register file and trace log all still on screen.
+// character and leaves the display a box that shrinks a Linux console to
+// fit. This one draws the same panels with narrower text -- 10 pixels a
+// character -- and packs them into one column, which buys a display area the
+// size of the Linux console: that guest is shown at exactly 1:1, with no
+// resampling at all, and DOOM's 320x200 is scaled up to fill the same area.
+// The column does not move between guests.
 //
 // Pixels rather than design units because the point is pixel-exact glyphs,
 // and that only means something at a known size: this layout needs a
@@ -508,27 +507,20 @@ void Gui::render(const Snapshot &snap)
 	int box_w = (int)(GAME_BOX_W * scale_x);
 	int box_h = (int)(GAME_BOX_H * scale_y);
 
-	// A Linux framebuffer goes in the same box DOOM's does, so the
-	// registers, CSRs and trace log stay on screen while Linux runs. They
-	// are the reason this window is not just a display.
+	// With room for it -- a 1920x1080 canvas -- every guest gets the
+	// compact layout: its display on the left in the console-sized area, and
+	// the CSRS, register file and trace log in one column beside it. See
+	// compact_layout. Linux's console fills that area at exactly 1:1; DOOM's
+	// 320x200 is scaled up into it, keeping its shape.
 	//
-	// Two adjustments make that work rather than merely fit. The box's 1.6
-	// aspect ratio was chosen for DOOM's 320x200; a 4:3 console stretched
-	// to it is visibly wrong, so a source of a different shape is
-	// letterboxed inside the box instead of filled to it. And the scaling
-	// is nearest rather than bilinear whenever the source is larger than
-	// the box, because blending neighbours is exactly what destroys the
-	// one-pixel stems in 8x16 console text.
-	//
-	// That box holds the Linux console well under 1:1, legible but not
-	// comfortable. So with room for it -- a 1920x1080 canvas -- a Linux
-	// framebuffer gets the compact layout instead: the console at exactly
-	// 1:1, and the same panels drawn with narrower text around it. See
-	// compact_layout. Ctrl+Alt+F still hands it the whole window.
+	// Below 1920x1080 the design-unit layout is the fallback: the display
+	// goes in its game box, which a Linux console only fits well under 1:1.
+	// Either way a source of a different shape from its box is letterboxed
+	// rather than stretched, and Ctrl+Alt+F hands a Linux framebuffer the
+	// whole window.
 	const bool fb_is_linux = (snap.fb_w != Memory::FB_W || snap.fb_h != Memory::FB_H);
 	const bool fb_fullscreen = fb_is_linux && fb_full;
-	const bool compact = fb_is_linux && !fb_fullscreen
-	                     && snap.fb_w == Memory::LFB_W && snap.fb_h == Memory::LFB_H
+	const bool compact = !fb_fullscreen
 	                     && canvas_w >= COMPACT_MIN_W && canvas_h >= COMPACT_MIN_H;
 	if (fb_fullscreen) {
 		box_x = 0; box_y = 0; box_w = canvas_w; box_h = canvas_h;
@@ -536,10 +528,12 @@ void Gui::render(const Snapshot &snap)
 	const DashLayout L = compact ? compact_layout(canvas_w, canvas_h)
 	                             : doom_layout(GAME_BOX_X, GAME_BOX_Y, GAME_BOX_W, GAME_BOX_H);
 	if (compact) {
+		// The display area is the console's size whatever the guest is, so
+		// the column beside it does not move between guests.
 		box_x = L.box_x; box_y = L.box_y;
-		box_w = snap.fb_w; box_h = snap.fb_h;
+		box_w = Memory::LFB_W; box_h = Memory::LFB_H;
 	}
-	if (fb_is_linux && snap.fb_w > 0 && snap.fb_h > 0) {
+	if ((fb_is_linux || compact) && snap.fb_w > 0 && snap.fb_h > 0) {
 		// Fit, preserving aspect: shrink the long axis and re-centre in
 		// whichever dimension gave way.
 		const long long by_w = (long long)box_w * snap.fb_h;
