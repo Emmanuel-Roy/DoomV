@@ -285,6 +285,134 @@ void Gui::resize_canvas_if_needed()
 	                            SDL_TEXTUREACCESS_STREAMING, canvas_w, canvas_h);
 }
 
+namespace {
+
+// One kind of dashboard text: the 8x8 font scaled by sx across and sy down,
+// in layout units, with `track` units of extra letter spacing.
+struct TextStyle {
+	float sx, sy;
+	int track;
+};
+
+// Where everything around the display goes. Two of these exist and they
+// draw the same information: the design-unit layout that has always been
+// here, and a compact one for a Linux framebuffer.
+struct DashLayout {
+	int shadow;                  // drop-shadow offset
+	TextStyle title, reg, trace;
+	int title_y, list_y, row_h;  // CSRS / REGISTER FILE headers and rows
+	int csr_x, csr_value_offset;
+	int reg_x, reg_col_w, reg_value_offset;
+	int trace_x, trace_y, trace_row_h;
+	int trace_title_x, trace_title_w;
+	int banner_line_h;
+};
+
+// The original layout, in design units (see gui.hpp's DESIGN_W/H), built
+// around the display box it is given.
+DashLayout doom_layout(int box_x, int box_y, int box_w, int box_h)
+{
+	DashLayout L{};
+	L.shadow = 1;
+	L.title = {1.0f, 1.0f, 0};
+	// Taller than wide, and sized to track the 960x540 -> 640x360 design
+	// shrink so glyphs land at the same screen size as before it.
+	L.reg = {0.567f, 0.867f, 0};
+	// A disassembled line is ~40 chars; at 1.0 it overhangs the display
+	// box, at 0.75 it stays within a few characters of the box's width.
+	L.trace = {0.75f, 0.75f, 0};
+
+	L.title_y = 7;
+	L.list_y = 7 + 13;
+	// 32 rows at 10 plus the header offset is the tallest this goes
+	// without the last row clipping past DESIGN_H.
+	L.row_h = 10;
+
+	// CSRS anchors off the box's right edge. The corridor between the box
+	// and the register file is only wide enough for a 6/7 split of its
+	// slack, which is why the gap is what it is. The value column sits at
+	// 46 -- nine glyphs, the longest name when it was written -- and is a
+	// floor rather than a fixed position: the hypervisor's ten-character
+	// names push only their own row's value across.
+	L.csr_x = box_x + box_w + 6;
+	L.csr_value_offset = 46;
+
+	// Picked so the V column's last hex digit lands just shy of DESIGN_W.
+	L.reg_x = 429;
+	L.reg_col_w = 106;
+	L.reg_value_offset = 19;
+
+	L.trace_x = box_x;
+	L.trace_y = box_y + box_h + 2;
+	// Derived from the glyph height rather than a separate literal: a bare
+	// number here is what let rows overlap when the render scale changed.
+	L.trace_row_h = (int)(8 * L.trace.sy) + 4;
+	L.trace_title_x = box_x;
+	L.trace_title_w = box_w;
+
+	L.banner_line_h = 9;
+	return L;
+}
+
+// The compact layout, for a Linux framebuffer, in *pixels*.
+//
+// The design-unit layout spends 13.5 pixels across on each register
+// character -- 1.7 screen pixels per font pixel -- and leaves the display a
+// box that shrinks a 1024x768 console to 700x525. This one draws the same
+// panels with text at exactly one pixel per font pixel across and a 9 pixel
+// pitch. The font's glyphs sit in columns 1-7 with 2-pixel stems, so that is
+// the narrowest it can go and stay crisp, and it roughly halves every text
+// column. That buys enough width to show the console at 1:1 -- no scaling
+// at all, so every glyph of it is exactly the kernel's -- with the CSRs,
+// register file and trace log all still on screen.
+//
+// Pixels rather than design units because the point is pixel-exact glyphs,
+// and that only means something at a known size: this layout needs a
+// 1920x1080 canvas, and render() falls back to the design-unit one below it.
+constexpr int COMPACT_MIN_W = 1920;
+constexpr int COMPACT_MIN_H = 1080;
+constexpr int COMPACT_BOX_X = 30;
+constexpr int COMPACT_BOX_Y = 8;
+
+DashLayout compact_layout(int fb_w, int fb_h)
+{
+	const int box_right = COMPACT_BOX_X + fb_w;   // 1054 for a 1024 console
+	const int box_bottom = COMPACT_BOX_Y + fb_h;  // 776
+
+	DashLayout L{};
+	L.shadow = 1;
+	L.title = {2.0f, 3.0f, 2};   // 16x24, 18 pitch
+	L.reg = {1.0f, 2.0f, 1};     // 8x16, 9 pitch
+	L.trace = {1.0f, 2.0f, 1};
+
+	L.title_y = COMPACT_BOX_Y;   // headers level with the top of the console
+	L.list_y = COMPACT_BOX_Y + 24 + 14;
+	L.row_h = 30;                // the same pitch the design-unit rows have
+
+	L.csr_x = box_right + 26;
+	// Eleven glyphs ("hcounteren:") plus one of gap; still a floor.
+	L.csr_value_offset = 12 * 9;
+
+	// CSRS is 108 + 144 wide; a 60-pixel gap keeps the panels distinct.
+	L.reg_x = L.csr_x + L.csr_value_offset + 16 * 9 + 60;
+	L.reg_value_offset = 5 * 9;                     // "X00:" plus a gap
+	L.reg_col_w = L.reg_value_offset + 16 * 9 + 48;
+
+	// Under the console. Sixteen rows of 16-pixel text at an 18-pixel
+	// pitch is what fits below 776 in 1080; the text is all capitals and
+	// the font leaves its bottom row blank, so the visual gap is 4 pixels.
+	L.trace_x = COMPACT_BOX_X;
+	L.trace_y = box_bottom + 6;
+	L.trace_row_h = 18;
+	L.trace_title_x = COMPACT_BOX_X;
+	L.trace_title_w = fb_w;
+
+	L.banner_line_h = 20;
+	return L;
+}
+
+} // namespace
+
 void Gui::render(const Snapshot &snap)
 {
 	resize_canvas_if_needed();
@@ -325,14 +453,22 @@ void Gui::render(const Snapshot &snap)
 	// the box, because blending neighbours is exactly what destroys the
 	// one-pixel stems in 8x16 console text.
 	//
-	// 1024x768 into 840x525 is still 0.68x, which is legible but not
-	// comfortable, so Ctrl+Alt+F hands the framebuffer the whole window
-	// for when reading the console is the job, rather than watching the
-	// machine run it. See Gui::toggle_fb_fullscreen.
+	// That box holds a 1024x768 console at 0.68x, which is legible but not
+	// comfortable. So with room for it -- a 1920x1080 canvas -- a Linux
+	// framebuffer gets the compact layout instead: the console at exactly
+	// 1:1, and the same panels drawn with narrower text around it. See
+	// compact_layout. Ctrl+Alt+F still hands it the whole window.
 	const bool fb_is_linux = (snap.fb_w != Memory::FB_W || snap.fb_h != Memory::FB_H);
 	const bool fb_fullscreen = fb_is_linux && fb_full;
+	const bool compact = fb_is_linux && !fb_fullscreen
+	                     && snap.fb_w == Memory::LFB_W && snap.fb_h == Memory::LFB_H
+	                     && canvas_w >= COMPACT_MIN_W && canvas_h >= COMPACT_MIN_H;
 	if (fb_fullscreen) {
 		box_x = 0; box_y = 0; box_w = canvas_w; box_h = canvas_h;
+	}
+	if (compact) {
+		box_x = COMPACT_BOX_X; box_y = COMPACT_BOX_Y;
+		box_w = snap.fb_w; box_h = snap.fb_h;
 	}
 	if (fb_is_linux && snap.fb_w > 0 && snap.fb_h > 0) {
 		// Fit, preserving aspect: shrink the long axis and re-centre in
@@ -365,10 +501,11 @@ void Gui::render(const Snapshot &snap)
 	struct Sample { int i0, i1; uint32_t frac; };
 	static std::vector<Sample> sx_lut, sy_lut;
 	static int last_box_w = -1, last_box_h = -1, last_src_w = -1, last_src_h = -1;
-	// Nearest whenever the source is bigger than the box it is going into,
-	// which for a 1024x768 console is always. Interpolation is only right
-	// when scaling up.
-	const bool nearest = (snap.fb_w > box_w || snap.fb_h > box_h);
+	// Nearest whenever the source is at least as big as the box it is
+	// going into. Interpolation is only right when scaling up, and at the
+	// compact layout's exact 1:1 this makes the copy exact by construction
+	// rather than by a blend weight happening to come out as zero.
+	const bool nearest = (snap.fb_w >= box_w || snap.fb_h >= box_h);
 	if (box_w != last_box_w || box_h != last_box_h
 	    || snap.fb_w != last_src_w || snap.fb_h != last_src_h) {
 		sx_lut.resize(box_w > 0 ? box_w : 0);
@@ -443,207 +580,109 @@ void Gui::render(const Snapshot &snap)
 
 	char buf[96];
 
-	auto draw_shadow_text = [&](int x, int y, const char *s, uint32_t col, float scale_x_ = 1.0f, float scale_y_ = -1.0f) {
-		draw_string(x + 1, y + 1, s, pal_dark, scale_x_, scale_y_);
-		draw_string(x, y, s, col, scale_x_, scale_y_);
+	const DashLayout L = compact ? compact_layout(snap.fb_w, snap.fb_h)
+	                             : doom_layout(GAME_BOX_X, GAME_BOX_Y, GAME_BOX_W, GAME_BOX_H);
+	text_ux = compact ? 1.0f : scale_x;
+	text_uy = compact ? 1.0f : scale_y;
+
+	auto draw_shadow_text = [&](int x, int y, const char *s, uint32_t col, const TextStyle &st) {
+		draw_string(x + L.shadow, y + L.shadow, s, pal_dark, st.sx, st.sy, st.track);
+		draw_string(x, y, s, col, st.sx, st.sy, st.track);
+	};
+	// Matches draw_string's own advance exactly, so a centred title lines
+	// up with the glyphs pixel for pixel rather than approximately.
+	auto glyph_adv = [&](const TextStyle &st) {
+		int adv = (int)(8 * st.sx + 0.5f); if (adv < 1) adv = 1;
+		return adv + st.track;
+	};
+	auto text_w = [&](const char *s, const TextStyle &st) {
+		return (int)strlen(s) * glyph_adv(st);
+	};
+	auto draw_centered_title = [&](int col_x, int col_w, int y, const char *s, uint32_t col, const TextStyle &st) {
+		draw_shadow_text(col_x + (col_w - text_w(s, st)) / 2, y, s, col, st);
 	};
 
-	// Header centering -- matches draw_string's own advance formula
-	// exactly (8*scale, rounded, min 1) so a centered title lines up
-	// with the actual glyphs pixel-for-pixel, not just approximately.
-	auto glyph_adv = [&](float scale_x_) {
-		int adv = (int)(8 * scale_x_ + 0.5f); return adv < 1 ? 1 : adv;
-	};
-	auto text_w = [&](const char *s, float scale_x_) {
-		return (int)strlen(s) * glyph_adv(scale_x_);
-	};
-	auto draw_centered_title = [&](int col_x, int col_w, int y, const char *s, uint32_t col, float scale_x_ = 1.0f) {
-		draw_shadow_text(col_x + (col_w - text_w(s, scale_x_)) / 2, y, s, col, scale_x_);
-	};
+	const int REG_HEX_W = 16 * glyph_adv(L.reg);
 
-	// Shared register-entry sizing -- "roughly the size of one of the
-	// normal registers" applies to the CSRs panel too, so both use the
-	// same scale/row-height constants. REG_SCALE_X (0.6 -> 0.7 -> 0.85 ->
-	// 0.567) widens the actual hex digits themselves, not just the row
-	// height -- the 0.85 -> 0.567 drop tracks DESIGN_W/H's own 2/3
-	// shrink (960x540 -> 640x360, see gui.hpp), so glyphs land at the
-	// same actual screen size as before despite the smaller design space.
-	const float REG_SCALE_X = 0.567f;
-	const float REG_SCALE_Y = 0.867f;
-	// 32 rows * 10 + the header offset is the tallest this can go without
-	// the last row clipping past DESIGN_H=360 -- picked to stretch the
-	// CSRs/register rows down until there's not much space left at the
-	// bottom, not just an arbitrary round number.
-	const int REG_ROW_H = 10;
-	const int REG_COL_W = 106; // label (4 chars) + 16 hex digits at REG_SCALE_X, plus a small gap
-	const int REG_VALUE_OFFSET = 19; // label -> hex value gap, X/V columns and CSRS' name column both use it
-	const int REG_HEX_W = 16 * glyph_adv(REG_SCALE_X); // 16 hex digits at REG_SCALE_X's own glyph advance
-
-	// REGISTER FILE's left edge is a fixed design-space anchor, not
-	// derived from the CSRs panel's own width -- so pulling the CSRs
-	// panel closer (below) doesn't also drag the register file sideways
-	// with it. Picked so the V column's rightmost hex digit lands just
-	// shy of DESIGN_W=640, not clipped by it -- see gui.hpp's comment on
-	// why that's a hard bound.
-	const int hud_x = 429;
-
-	// CSRS -- a separate, updating list of every CSR address a CSRR*/
-	// CSRR*I instruction has actually touched (Registers::csr_history,
-	// most-recently-used first -- see registers.hpp), each shown with its
-	// *live* current value (RiscvCore::read_csr_effective, not a raw
-	// csr[] read -- several of the most interesting ones, like sstatus/
-	// mip/misa/time, are computed rather than stored, see that function's
-	// comment). Only entries actually seen so far are drawn, not a fixed
-	// 20 blank rows -- an "updating list", not a static table. Longest
-	// name (e.g. "mvendorid"/"siselect") is 9 chars, so the value column
-	// sits at +46 instead of the register file's +19. csr_x anchors off
-	// the game box's own right edge (moved "more to the left", as close
-	// to the box as still leaves a visible gap) instead of working
-	// backward from hud_x -- the corridor between the box and the
-	// register file is only wide enough for one anchor choice at a time,
-	// and pushing CSRs toward the box is what actually moves them left
-	// (working from hud_x just trades box-gap for register-gap, it
-	// can't shift the block itself).
-	// 46 design units is nine glyphs at REG_SCALE_X, which was the longest
-	// name in this table when it was written ("mvendorid", "siselect").
-	// The hypervisor set breaks that assumption -- "hcounteren" and
-	// "mcounteren" are ten -- and the corridor between the game box and
-	// the register file has only about seven units of slack, so widening
-	// the whole column is not available without undoing the deliberate
-	// 6/7 gap balance below.
-	//
-	// So the offset is a floor rather than a fixed position: every name
-	// that fits stays aligned at 46 exactly as before, and a longer one
-	// pushes only its own value across. Misaligning one row is a much
-	// smaller cost than drawing a name over the top of its own value.
-	const int CSR_VALUE_OFFSET = 46;
-	// box->CSRS and CSRS->REGISTER FILE gaps are now equal (6/7, as close
-	// as the corridor's odd total slack allows) -- was 2/11, which read as
-	// CSRS sitting flush against the display but oddly distant from the
-	// register file. "Aligned" spacing means matching, not just small.
-	const int CSR_BOX_GAP = 6;
-	const int CSR_COL_W = CSR_VALUE_OFFSET + REG_HEX_W; // name column + 16 hex digits -- the title centers over this
-	int csr_x = GAME_BOX_X + GAME_BOX_W + CSR_BOX_GAP; // box's own design-unit position, not the scaled box_x/box_w below
-
-	draw_centered_title(csr_x, CSR_COL_W, 7, "--- CSRS ---", pal_pink);
-	int csr_start_y = 7 + 13;
+	// CSRS -- every CSR address a CSRR* instruction has touched, most
+	// recently used first (Registers::csr_history), each with its *live*
+	// value, since several of the interesting ones (sstatus, mip, time)
+	// are computed rather than stored. Only entries seen so far are drawn.
+	const int CSR_COL_W = L.csr_value_offset + REG_HEX_W;
+	draw_centered_title(L.csr_x, CSR_COL_W, L.title_y, "--- CSRS ---", pal_pink, L.title);
 	for (int i = 0; i < snap.csr_count; i++) {
-		int cy = csr_start_y + (i * REG_ROW_H);
+		int cy = L.list_y + (i * L.row_h);
 		const Snapshot::CsrEntry &c = snap.csrs[i];
 		const char *name = csr_name(c.addr);
 		char name_buf[16];
 		if (!name) { sprintf(name_buf, "0x%03x", c.addr); name = name_buf; }
 		sprintf(buf, "%s:", name);
-		int value_x = CSR_VALUE_OFFSET;
-		int label_w = text_w(buf, REG_SCALE_X) + glyph_adv(REG_SCALE_X); // one glyph of gap
+		// A floor, not a position: a name longer than the column pushes
+		// only its own value across rather than drawing over it.
+		int value_x = L.csr_value_offset;
+		int label_w = text_w(buf, L.reg) + glyph_adv(L.reg); // one glyph of gap
 		if (label_w > value_x) value_x = label_w;
-		draw_shadow_text(csr_x, cy, buf, pal_red, REG_SCALE_X, REG_SCALE_Y);
+		draw_shadow_text(L.csr_x, cy, buf, pal_red, L.reg);
 		sprintf(buf, "%016llX", (unsigned long long)c.value);
-		draw_shadow_text(csr_x + value_x, cy, buf, pal_white, REG_SCALE_X, REG_SCALE_Y);
+		draw_shadow_text(L.csr_x + value_x, cy, buf, pal_white, L.reg);
 	}
 
-	// REGISTER FILE
-	int current_y = 7;
-
-	// Two columns (X, V). Each glyph is drawn taller-not-wider
-	// (REG_SCALE_Y > REG_SCALE_X, see draw_char/draw_string's independent
-	// x/y scale) and rows sit further apart (REG_ROW_H grown well past
-	// the taller glyph height, so there's real gap between rows, not
-	// just bigger text touching). DESIGN_H has the extra room this needs
-	// set aside (see gui.hpp). V is currently all zeros -- storage only,
-	// see registers.hpp -- but the layout doesn't assume that.
-	const int REG_TOTAL_W = REG_COL_W + REG_VALUE_OFFSET + REG_HEX_W; // X column + V column -- the title centers over both together
-	draw_centered_title(hud_x, REG_TOTAL_W, current_y, "--- REGISTER FILE ---", pal_pink);
-	int reg_start_y = current_y + 13;
-	int x_col = hud_x;
-	int v_col = hud_x + REG_COL_W;
+	// REGISTER FILE -- two columns, X and V.
+	const int REG_TOTAL_W = L.reg_col_w + L.reg_value_offset + REG_HEX_W;
+	draw_centered_title(L.reg_x, REG_TOTAL_W, L.title_y, "--- REGISTER FILE ---", pal_pink, L.title);
+	int x_col = L.reg_x;
+	int v_col = L.reg_x + L.reg_col_w;
 	for (int i = 0; i < 32; i++) {
-		int cy = reg_start_y + (i * REG_ROW_H);
+		int cy = L.list_y + (i * L.row_h);
 
 		sprintf(buf, "X%02d:", i);
-		draw_shadow_text(x_col, cy, buf, pal_red, REG_SCALE_X, REG_SCALE_Y);
+		draw_shadow_text(x_col, cy, buf, pal_red, L.reg);
 		sprintf(buf, "%016llX", (unsigned long long)snap.x[i]);
-		draw_shadow_text(x_col + REG_VALUE_OFFSET, cy, buf, pal_white, REG_SCALE_X, REG_SCALE_Y);
+		draw_shadow_text(x_col + L.reg_value_offset, cy, buf, pal_white, L.reg);
 
 		sprintf(buf, "V%02d:", i);
-		draw_shadow_text(v_col, cy, buf, pal_red, REG_SCALE_X, REG_SCALE_Y);
+		draw_shadow_text(v_col, cy, buf, pal_red, L.reg);
 		sprintf(buf, "%016llX", (unsigned long long)snap.v_lo[i]);
-		draw_shadow_text(v_col + REG_VALUE_OFFSET, cy, buf, pal_white, REG_SCALE_X, REG_SCALE_Y);
+		draw_shadow_text(v_col + L.reg_value_offset, cy, buf, pal_white, L.reg);
 	}
 
-	// TRACE LOG -- lives below the game view box instead of the right
-	// panel, which the register file now needs in full. trace_y tracks
-	// GAME_BOX_Y/H's own bottom edge instead of a bare literal, so the
-	// two can't silently drift out of sync again.
-	//
-	// TRACE_SCALE shrinks this text below the default 1.0 for two
-	// reasons: (1) a disassembled line ("0000000080021B94: BNE A4, A0,
-	// 0X80021B98", ~40 chars) at full size runs well past GAME_BOX_W --
-	// 0.75 keeps even the longest lines within a few chars of the box's
-	// own width, so the trace log and the display "try to be near the
-	// same width" instead of overhanging it. (2) TRACE_ROW_H is derived
-	// FROM TRACE_SCALE's actual glyph height plus a fixed gap, instead
-	// of being a separate hand-picked number that can silently drift out
-	// of sync with it again (that mismatch is exactly what caused lines
-	// to overlap/garble after DESIGN_W/H's 960x540 -> 640x360 shrink
-	// raised the global render scale from 2.0 to 3.0, enlarging every
-	// glyph, while the row step here stayed a bare unrelated literal) --
-	// this construction makes that class of bug structurally impossible,
-	// not just fixed for the current scale.
-	const float TRACE_SCALE = 0.75f;
-	const int TRACE_LINE_GAP = 4; // extra breathing room between rows, on top of glyph height
-	const int TRACE_ROW_H = (int)(8 * TRACE_SCALE) + TRACE_LINE_GAP;
-	int trace_x = GAME_BOX_X;
-	int trace_y = GAME_BOX_Y + GAME_BOX_H + 2;
-	draw_centered_title(GAME_BOX_X, GAME_BOX_W, trace_y, "--- TRACE LOG ---", pal_pink, TRACE_SCALE);
-	trace_y += TRACE_ROW_H;
+	// TRACE LOG -- under the display, since the right side is the
+	// register file's.
+	int trace_y = L.trace_y;
+	draw_centered_title(L.trace_title_x, L.trace_title_w, trace_y, "--- TRACE LOG ---", pal_pink, L.trace);
+	trace_y += L.trace_row_h;
 
 	char op_buf[64];
 
 	// Most recently recorded history entry == the instruction that just executed.
 	format_operands(op_buf, sizeof(op_buf), snap.active.pc, snap.active.decoded);
 	sprintf(buf, "ACTIVE: %08X %s %s", snap.active.instr, snap.active.decoded.mnemonic, op_buf);
-	draw_shadow_text(trace_x, trace_y, buf, pal_pink, TRACE_SCALE);
-	trace_y += TRACE_ROW_H;
+	draw_shadow_text(L.trace_x, trace_y, buf, pal_pink, L.trace);
+	trace_y += L.trace_row_h;
 
 	sprintf(buf, "CURR PC: %016llX", (unsigned long long)snap.pc);
-	draw_shadow_text(trace_x, trace_y, buf, pal_white, TRACE_SCALE);
-	trace_y += TRACE_ROW_H;
+	draw_shadow_text(L.trace_x, trace_y, buf, pal_white, L.trace);
+	trace_y += L.trace_row_h;
 
 	for (int i = 0; i < 13; i++) {
 		const HistoryEntry &h = snap.trace[i];
 		format_operands(op_buf, sizeof(op_buf), h.pc, h.decoded);
 		sprintf(buf, "%016llX: %s %s", (unsigned long long)h.pc, h.decoded.mnemonic, op_buf);
-		draw_shadow_text(trace_x, trace_y, buf, pal_stats, TRACE_SCALE);
-		trace_y += TRACE_ROW_H;
+		draw_shadow_text(L.trace_x, trace_y, buf, pal_stats, L.trace);
+		trace_y += L.trace_row_h;
 	}
 
-	// Paused indicator, drawn last so nothing overdraws it. Without this the
-	// dashboard looks identical whether the machine is running or frozen --
-	// the trace panel simply stops changing, which is indistinguishable from
-	// a guest stuck in a tight loop.
-	//
-	// It sits in the bottom-right corner, under the last register row,
-	// rather than centered across the top where it used to cover the game
-	// view. Two lines at the register file's own scale rather than one at
-	// full size: the corner has 211 design units of width and 22 of height
-	// below x31/v31, and the message is 336 units on one line at scale 1.0.
-	// Shrinking it to fit on a single line would land on 210 of the 211
-	// available, which is not a margin so much as a coincidence.
+	// Paused indicator, drawn last so nothing overdraws it -- without it a
+	// frozen machine looks exactly like one stuck in a tight loop. Two
+	// lines in the corner under the last register row, right-aligned to
+	// the register block, rather than across the display.
 	if (snap.halted) {
 		const char *msg_top = "PAUSED -- F9 TO RESUME";
 		const char *msg_bot = "(DELIVERS THE TRAP)";
-		const float BANNER_SCALE = REG_SCALE_X; // matches the register text beside it
-		// Right-aligned to the register block's own right edge, which is
-		// what makes it read as being in the corner rather than merely
-		// low down. Anchored off REG_TOTAL_W so it tracks that block if
-		// its columns are ever resized, instead of a bare literal.
-		const int right_edge = hud_x + REG_TOTAL_W;
-		int by = reg_start_y + 32 * REG_ROW_H;
-		draw_shadow_text(right_edge - text_w(msg_top, BANNER_SCALE), by,
-		                 msg_top, pal_red, BANNER_SCALE, REG_SCALE_Y);
-		draw_shadow_text(right_edge - text_w(msg_bot, BANNER_SCALE), by + 9,
-		                 msg_bot, pal_red, BANNER_SCALE, REG_SCALE_Y);
+		const int right_edge = L.reg_x + REG_TOTAL_W;
+		int by = L.list_y + 32 * L.row_h;
+		draw_shadow_text(right_edge - text_w(msg_top, L.reg), by, msg_top, pal_red, L.reg);
+		draw_shadow_text(right_edge - text_w(msg_bot, L.reg), by + L.banner_line_h, msg_bot, pal_red, L.reg);
 	}
 
 	SDL_UpdateTexture(texture, nullptr, screen_buf.data(), canvas_w * 4);
@@ -772,10 +811,10 @@ void Gui::draw_char(int x, int y, char c, uint32_t col, float scale_x_, float sc
 	// The glyph's origin (x,y) stays in the normal design-unit grid --
 	// only the 8x8 bitmap's own pixels shrink -- so a smaller-scale
 	// string still lines up with normal-scale text around it.
-	float px_scale = scale_x * scale_x_;
-	float py_scale = scale_y * scale_y_;
-	int origin_x = (int)(x * scale_x);
-	int origin_y = (int)(y * scale_y);
+	float px_scale = text_ux * scale_x_;
+	float py_scale = text_uy * scale_y_;
+	int origin_x = (int)(x * text_ux);
+	int origin_y = (int)(y * text_uy);
 
 	// Each source pixel covers the span from where it starts to where the
 	// *next* one starts. That sounds like a long way of saying "draw a
@@ -821,12 +860,13 @@ void Gui::draw_char(int x, int y, char c, uint32_t col, float scale_x_, float sc
 	}
 }
 
-void Gui::draw_string(int x, int y, const char *s, uint32_t c, float scale_x_, float scale_y_)
+void Gui::draw_string(int x, int y, const char *s, uint32_t c, float scale_x_, float scale_y_, int track)
 {
 	// Advance (character pitch) tracks only scale_x_ -- a taller-but-not-
 	// wider string (scale_y_ > scale_x_) still lays its characters out at
 	// their normal horizontal spacing, it just draws each one taller.
 	int advance = (int)(8 * scale_x_ + 0.5f); if (advance < 1) advance = 1;
+	advance += track;
 	while (*s) { draw_char(x, y, *s++, c, scale_x_, scale_y_); x += advance; }
 }
 

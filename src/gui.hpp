@@ -89,11 +89,11 @@ public:
 	void set_mouse_captured(bool on);
 	bool mouse_captured() const { return captured; }
 
-	// Give a Linux framebuffer the whole window instead of the dashboard's
-	// game box. Off by default: the dashboard is the point of this window,
-	// and a console is legible enough in the box to work in. It exists
-	// because *reading* a 1024x768 console in a 840x525 box means reading
-	// 8x16 text at 0.68x, and some of the time that is what you need to do.
+	// Give a Linux framebuffer the whole window instead of sharing it with
+	// the dashboard. Off by default: the dashboard is the point of this
+	// window, and at 1920x1080 the compact layout already shows the console
+	// at 1:1 beside it. It matters on a smaller window, where the dashboard
+	// falls back to letterboxing the console into DOOM's display box.
 	void toggle_fb_fullscreen() { fb_full = !fb_full; }
 
 	// Write the composed canvas -- dashboard, panels, guest display and
@@ -119,6 +119,11 @@ private:
 
 	int canvas_w = 0, canvas_h = 0;
 	float scale_x = 1.0f, scale_y = 1.0f;
+	// Screen pixels per layout unit for text, set by render() for the
+	// layout in use. It is scale_x/scale_y for the design-unit dashboard,
+	// and 1 for the compact Linux one, which is laid out in real pixels so
+	// that its text can be drawn at exactly one pixel per font pixel.
+	float text_ux = 1.0f, text_uy = 1.0f;
 	std::vector<uint32_t> screen_buf;
 	void resize_canvas_if_needed();
 
@@ -132,5 +137,8 @@ private:
 	// "match scale_x", the common case (every call site except the
 	// register file's taller-but-not-wider text just passes one value).
 	void draw_char(int x, int y, char c, uint32_t color, float scale_x_ = 1.0f, float scale_y_ = -1.0f);
-	void draw_string(int x, int y, const char *str, uint32_t color, float scale_x_ = 1.0f, float scale_y_ = -1.0f);
+	// `track` is extra letter spacing, in layout units, on top of the
+	// natural 8*scale_x_ pitch -- the compact layout needs a pitch that is
+	// not a multiple of the glyph width.
+	void draw_string(int x, int y, const char *str, uint32_t color, float scale_x_ = 1.0f, float scale_y_ = -1.0f, int track = 0);
 };

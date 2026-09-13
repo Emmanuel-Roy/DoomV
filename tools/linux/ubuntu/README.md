@@ -150,9 +150,9 @@ instead.
 
 You can type at it, too: the device tree carries a `virtio-input` keyboard
 and mouse, and the keyboard binds the VT layer's own handler, so `doomv
-login:` on tty1 is a prompt rather than a picture of one. Ctrl+Alt+F gives
-the framebuffer the whole window if the console in the dashboard's display
-box is too small to read comfortably; Ctrl+Alt+G grabs the mouse. See
+login:` on tty1 is a prompt rather than a picture of one. At 1920x1080 the
+console is shown at 1:1 with the registers and trace log beside it;
+Ctrl+Alt+F gives it the whole window, and Ctrl+Alt+G grabs the mouse. See
 [Input](../../../README.md#input).
 
 Two things not to do:

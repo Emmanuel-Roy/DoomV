@@ -460,16 +460,19 @@ up inside a dashboard that shows registers, CSRs and a trace log alongside.
 A Linux guest gets a 1024x768 linear aperture at `0x50000000`, declared to
 the kernel as a `simple-framebuffer` node in the device tree. The kernel's
 `simplefb` driver binds to it and `fbcon` draws a 128x48 character console
-into it, which the window shows in the same box DOOM's display uses, with
-the registers, CSRs and trace log still alongside. A source of a different
-shape is letterboxed rather than stretched -- the box's 1.6 aspect ratio was
-picked for DOOM's 320x200 -- and scaling down uses the nearest source pixel
-rather than blending, because blending neighbours is exactly what destroys
-the one-pixel stems in 8x16 console text.
+into it. The window shows it at exactly 1:1, with the CSRs, register file
+and trace log still around it: in this mode the dashboard switches to a
+compact layout whose text is drawn at one screen pixel per font pixel
+across, 8 pixels wide on a 9-pixel pitch, where DOOM's layout spends 13.5.
+That roughly halves every text column, which is the width the console needs
+to be shown unscaled -- and unscaled means every glyph on it is exactly the
+kernel's, with no resampling at all.
 
-1024x768 into an 840x525 box is still 0.68x, which is legible but not
-comfortable, so **Ctrl+Alt+F** hands the framebuffer the whole window for
-when reading the console is the job rather than watching the machine.
+The compact layout is laid out in real pixels and needs a 1920x1080 window;
+below that the dashboard falls back to DOOM's layout, with the console
+letterboxed into its display box. **Ctrl+Alt+F** hands the framebuffer the
+whole window in either case. DOOM mode itself is unchanged, down to the
+pixel.
 
 The aperture sits deliberately *outside* the device tree's memory node,
 which is what stops Linux allocating over it without needing a
