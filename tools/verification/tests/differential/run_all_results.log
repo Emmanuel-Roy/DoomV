@@ -1,0 +1,336 @@
+[1] PASS	fadd_b1-01.S	2324 words match
+[2] PASS	fadd_b10-01.S	316 words match
+[3] PASS	fadd_b11-01.S	28068 words match
+[4] PASS	fadd_b12-01.S	220 words match
+[5] PASS	fadd_b13-01.S	820 words match
+[6] PASS	fadd_b2-01.S	1120 words match
+[7] PASS	fadd_b3-01.S	4500 words match
+[8] MISMATCH	fadd_b4-01.S	58/580 words differ: word8: spike=00000021 doomv=00000020; word12: spike=00000041 doomv=00000040; word28: spike=00000025 doomv=00000020; word32: spike=00000045 doomv=00000040; word36: spike=00000065 doomv=00000060
+[9] PASS	fadd_b5-01.S	900 words match
+[10] PASS	fadd_b7-01.S	660 words match
+[11] MISMATCH	fadd_b8-01.S	87/6740 words differ: word5888: spike=00000021 doomv=00000020; word5892: spike=00000041 doomv=00000040; word5896: spike=00000061 doomv=00000060; word5908: spike=00000021 doomv=00000020; word5912: spike=00000041 doomv=00000040
+[12] PASS	fclass_b1-01.S	136 words match
+[13] PASS	fcvt.s.w_b25-01.S	136 words match
+[14] PASS	fcvt.s.w_b26-01.S	136 words match
+[15] PASS	fcvt.s.wu_b25-01.S	136 words match
+[16] PASS	fcvt.s.wu_b26-01.S	136 words match
+[17] PASS	fcvt.w.s_b1-01.S	136 words match
+[18] PASS	fcvt.w.s_b22-01.S	168 words match
+[19] PASS	fcvt.w.s_b23-01.S	188 words match
+[20] MISMATCH	fcvt.w.s_b24-01.S	57/428 words differ: word8: spike=00000021 doomv=00000020; word12: spike=00000041 doomv=00000040; word16: spike=00000061 doomv=00000060; word28: spike=00000021 doomv=00000020; word32: spike=00000041 doomv=00000040
+[21] PASS	fcvt.w.s_b27-01.S	136 words match
+[22] PASS	fcvt.w.s_b28-01.S	136 words match
+[23] MISMATCH	fcvt.w.s_b29-01.S	49/328 words differ: word8: spike=00000021 doomv=00000020; word12: spike=00000041 doomv=00000040; word16: spike=00000061 doomv=00000060; word28: spike=00000021 doomv=00000020; word32: spike=00000041 doomv=00000040
+[24] MISMATCH	fcvt.wu.s_b1-01.S	6/136 words differ: word56: spike=00000001 doomv=00000010; word60: spike=00000001 doomv=00000010; word64: spike=00000001 doomv=00000010; word68: spike=00000001 doomv=00000010; word72: spike=00000001 doomv=00000010
+[25] MISMATCH	fcvt.wu.s_b22-01.S	1/168 words differ: word112: spike=00000001 doomv=00000010
+[26] PASS	fcvt.wu.s_b23-01.S	188 words match
+[27] MISMATCH	fcvt.wu.s_b24-01.S	49/428 words differ: word8: spike=00000021 doomv=00000020; word12: spike=00000041 doomv=00000040; word16: spike=00000061 doomv=00000060; word28: spike=00000021 doomv=00000020; word32: spike=00000041 doomv=00000040
+[28] PASS	fcvt.wu.s_b27-01.S	136 words match
+[29] MISMATCH	fcvt.wu.s_b28-01.S	1/136 words differ: word68: spike=00000001 doomv=00000010
+[30] MISMATCH	fcvt.wu.s_b29-01.S	57/328 words differ: word8: spike=00000021 doomv=00000020; word12: spike=00000041 doomv=00000040; word16: spike=00000061 doomv=00000060; word28: spike=00000021 doomv=00000020; word32: spike=00000041 doomv=00000040
+[31] PASS	fdiv_b1-01.S	2324 words match
+[32] PASS	fdiv_b2-01.S	1124 words match
+[33] PASS	fdiv_b20-01.S	428 words match
+[34] PASS	fdiv_b21-01.S	2724 words match
+[35] MISMATCH	fdiv_b3-01.S	604/4500 words differ: word12: spike=00000041 doomv=00000040; word16: spike=00000061 doomv=00000060; word28: spike=00000021 doomv=00000020; word32: spike=00000041 doomv=00000040; word36: spike=00000061 doomv=00000060
+[36] MISMATCH	fdiv_b4-01.S	73/580 words differ: word12: spike=00000041 doomv=00000040; word16: spike=00000061 doomv=00000060; word28: spike=00000021 doomv=00000020; word32: spike=00000041 doomv=00000040; word36: spike=00000061 doomv=00000060
+[37] MISMATCH	fdiv_b5-01.S	133/900 words differ: word12: spike=00000041 doomv=00000040; word16: spike=00000061 doomv=00000060; word28: spike=00000021 doomv=00000020; word32: spike=00000041 doomv=00000040; word36: spike=00000061 doomv=00000060
+[38] MISMATCH	fdiv_b6-01.S	85/580 words differ: word12: spike=00000043 doomv=00000040; word16: spike=00000063 doomv=00000060; word28: spike=00000023 doomv=00000020; word32: spike=00000043 doomv=00000040; word36: spike=00000063 doomv=00000060
+[39] MISMATCH	fdiv_b7-01.S	145/660 words differ: word4: spike=00000061 doomv=00000060; word12: spike=00000061 doomv=00000060; word16: spike=00000061 doomv=00000060; word24: spike=00000061 doomv=00000060; word28: spike=00000061 doomv=00000060
+[40] MISMATCH	fdiv_b8-01.S	862/6740 words differ: word12: spike=00000043 doomv=00000040; word16: spike=00000063 doomv=00000060; word28: spike=00000023 doomv=00000020; word32: spike=00000043 doomv=00000040; word36: spike=00000063 doomv=00000060
+[41] PASS	fdiv_b9-01.S	5300 words match
+[42] MISMATCH	feq_b1-01.S	161/2316 words differ: word44: spike=00000000 doomv=00000010; word48: spike=00000000 doomv=00000010; word92: spike=00000000 doomv=00000010; word96: spike=00000000 doomv=00000010; word140: spike=00000000 doomv=00000010
+[43] PASS	feq_b19-01.S	4292 words match
+[44] PASS	fle_b1-01.S	2316 words match
+[45] PASS	fle_b19-01.S	4292 words match
+[46] PASS	flt_b1-01.S	2316 words match
+[47] PASS	flt_b19-01.S	3952 words match
+[48] PASS	flw-align-01.S	132 words match
+[49] EXCEPTION	fmadd_b1-01.S	Command '['C:\\Users\\royem\\SWE\\toolchains\\xpack-riscv-none-elf-gcc-15.2.0-1\\bin\\riscv-none-elf-gcc-15.2.0.exe', '-march=rv64gc', '-mabi=lp64d', '-static', '-mcmodel=medany', '-fvisibility=hidden', '-nostdlib', '-nostartfiles', '-I', 'C:\\Users\\royem\\SWE\\GitHub\\DoomV\\tools\\vtest\\arch-tes
+[50] MISMATCH	fmadd_b14-01.S	18/340 words differ: word24: spike=00000001 doomv=00000003; word32: spike=00000001 doomv=00000003; word68: spike=00000001 doomv=00000003; word80: spike=00000001 doomv=00000003; word116: spike=00000001 doomv=00000003
+[51] MISMATCH	fmadd_b16-01.S	206/848 words differ: word4: spike=00000001 doomv=00000003; word16: spike=00000001 doomv=00000003; word20: spike=00000001 doomv=00000003; word24: spike=00000001 doomv=00000003; word28: spike=00000001 doomv=00000003
+[52] MISMATCH	fmadd_b17-01.S	206/848 words differ: word4: spike=00000001 doomv=00000003; word16: spike=00000001 doomv=00000003; word20: spike=00000001 doomv=00000003; word24: spike=00000001 doomv=00000003; word28: spike=00000001 doomv=00000003
+[53] MISMATCH	fmadd_b18-01.S	156/1128 words differ: word20: spike=00000001 doomv=00000003; word24: spike=00000001 doomv=00000003; word32: spike=00000001 doomv=00000003; word44: spike=00000001 doomv=00000003; word56: spike=00000001 doomv=00000003
+[54] MISMATCH	fmadd_b2-01.S	95/1152 words differ: word28: spike=00000001 doomv=00000003; word36: spike=00000001 doomv=00000003; word44: spike=00000001 doomv=00000003; word48: spike=00000001 doomv=00000003; word52: spike=00000001 doomv=00000003
+[55] MISMATCH	fmadd_b3-01.S	800/4528 words differ: word8: spike=00000021 doomv=00000020; word12: spike=00000041 doomv=00000040; word16: spike=00000061 doomv=00000060; word28: spike=00000021 doomv=00000020; word32: spike=00000041 doomv=00000040
+[56] MISMATCH	fmadd_b4-01.S	108/608 words differ: word8: spike=00000021 doomv=00000020; word12: spike=00000041 doomv=00000040; word16: spike=00000061 doomv=00000060; word28: spike=00000021 doomv=00000020; word32: spike=00000045 doomv=00000040
+[57] MISMATCH	fmadd_b5-01.S	163/928 words differ: word8: spike=00000021 doomv=00000020; word12: spike=00000041 doomv=00000040; word16: spike=00000061 doomv=00000060; word28: spike=00000025 doomv=00000020; word32: spike=00000045 doomv=00000040
+[58] MISMATCH	fmadd_b6-01.S	123/608 words differ: word4: spike=00000001 doomv=00000003; word8: spike=00000021 doomv=00000020; word12: spike=00000041 doomv=00000040; word16: spike=00000061 doomv=00000060; word20: spike=00000081 doomv=00000083
+[59] MISMATCH	fmadd_b7-01.S	171/688 words differ: word4: spike=00000061 doomv=00000060; word8: spike=00000061 doomv=00000060; word12: spike=00000065 doomv=00000060; word16: spike=00000061 doomv=00000060; word20: spike=00000061 doomv=00000060
+[60] MISMATCH	fmadd_b8-01.S	1158/6768 words differ: word8: spike=00000025 doomv=00000020; word12: spike=00000045 doomv=00000040; word16: spike=00000065 doomv=00000060; word28: spike=00000021 doomv=00000020; word32: spike=00000041 doomv=00000040
+[61] MISMATCH	fmax_b1-01.S	160/2324 words differ: word44: spike=00000000 doomv=00000010; word48: spike=00000000 doomv=00000010; word92: spike=00000000 doomv=00000010; word96: spike=00000000 doomv=00000010; word140: spike=00000000 doomv=00000010
+[62] PASS	fmax_b19-01.S	3844 words match
+[63] MISMATCH	fmin_b1-01.S	160/2324 words differ: word44: spike=00000000 doomv=00000010; word48: spike=00000000 doomv=00000010; word92: spike=00000000 doomv=00000010; word96: spike=00000000 doomv=00000010; word140: spike=00000000 doomv=00000010
+[64] PASS	fmin_b19-01.S	3992 words match
+[65] EXCEPTION	fmsub_b1-01.S	Command '['C:\\Users\\royem\\SWE\\toolchains\\xpack-riscv-none-elf-gcc-15.2.0-1\\bin\\riscv-none-elf-gcc-15.2.0.exe', '-march=rv64gc', '-mabi=lp64d', '-static', '-mcmodel=medany', '-fvisibility=hidden', '-nostdlib', '-nostartfiles', '-I', 'C:\\Users\\royem\\SWE\\GitHub\\DoomV\\tools\\vtest\\arch-tes
+[66] MISMATCH	fmsub_b14-01.S	44/340 words differ: word4: spike=00000001 doomv=00000003; word8: spike=00000001 doomv=00000003; word12: spike=00000001 doomv=00000003; word16: spike=00000001 doomv=00000003; word20: spike=00000001 doomv=00000003
+[67] MISMATCH	fmsub_b16-01.S	11/848 words differ: word8: spike=00000001 doomv=00000005; word12: spike=00000001 doomv=00000003; word24: spike=00000001 doomv=00000003; word32: spike=00000001 doomv=00000003; word36: spike=00000001 doomv=00000003
+[68] MISMATCH	fmsub_b17-01.S	11/848 words differ: word8: spike=00000001 doomv=00000005; word12: spike=00000001 doomv=00000003; word24: spike=00000001 doomv=00000003; word32: spike=00000001 doomv=00000003; word36: spike=00000001 doomv=00000003
+[69] MISMATCH	fmsub_b18-01.S	7/1128 words differ: word8: spike=00000001 doomv=00000003; word12: spike=00000001 doomv=00000003; word36: spike=00000001 doomv=00000003; word100: spike=00000001 doomv=00000003; word152: spike=00000001 doomv=00000003
+[70] MISMATCH	fmsub_b2-01.S	92/1152 words differ: word8: spike=00000001 doomv=00000003; word24: spike=00000001 doomv=00000003; word28: spike=00000001 doomv=00000003; word32: spike=00000001 doomv=00000003; word40: spike=00000001 doomv=00000003
+[71] MISMATCH	fmsub_b3-01.S	850/4528 words differ: word8: spike=00000021 doomv=00000020; word12: spike=00000041 doomv=00000040; word16: spike=00000061 doomv=00000060; word28: spike=00000021 doomv=00000020; word32: spike=00000041 doomv=00000040
+[72] MISMATCH	fmsub_b4-01.S	121/608 words differ: word4: spike=00000001 doomv=00000003; word8: spike=00000021 doomv=00000020; word12: spike=00000041 doomv=00000040; word16: spike=00000061 doomv=00000060; word20: spike=00000081 doomv=00000083
+[73] MISMATCH	fmsub_b5-01.S	178/928 words differ: word4: spike=00000001 doomv=00000003; word8: spike=00000021 doomv=00000020; word12: spike=00000041 doomv=00000040; word16: spike=00000061 doomv=00000060; word20: spike=00000081 doomv=00000083
+[74] MISMATCH	fmsub_b6-01.S	135/608 words differ: word4: spike=00000001 doomv=00000003; word8: spike=00000021 doomv=00000020; word12: spike=00000041 doomv=00000040; word16: spike=00000061 doomv=00000060; word20: spike=00000081 doomv=00000083
+[75] MISMATCH	fmsub_b7-01.S	171/688 words differ: word4: spike=00000061 doomv=00000060; word8: spike=00000061 doomv=00000060; word12: spike=00000061 doomv=00000060; word16: spike=00000061 doomv=00000060; word20: spike=00000061 doomv=00000060
+[76] MISMATCH	fmsub_b8-01.S	1081/6768 words differ: word4: spike=00000001 doomv=00000003; word8: spike=00000021 doomv=00000020; word12: spike=00000041 doomv=00000040; word16: spike=00000061 doomv=00000060; word24: spike=00000001 doomv=00000003
+[77] PASS	fmul_b1-01.S	2324 words match
+[78] PASS	fmul_b2-01.S	1124 words match
+[79] MISMATCH	fmul_b3-01.S	86/4500 words differ: word8: spike=00000025 doomv=00000020; word12: spike=00000045 doomv=00000040; word28: spike=00000021 doomv=00000020; word32: spike=00000041 doomv=00000040; word36: spike=00000061 doomv=00000060
+[80] MISMATCH	fmul_b4-01.S	86/580 words differ: word8: spike=00000025 doomv=00000020; word12: spike=00000045 doomv=00000040; word16: spike=00000061 doomv=00000060; word28: spike=00000021 doomv=00000020; word32: spike=00000041 doomv=00000040
+[81] MISMATCH	fmul_b5-01.S	2/900 words differ: word8: spike=00000025 doomv=00000020; word12: spike=00000045 doomv=00000040
+[82] MISMATCH	fmul_b6-01.S	86/580 words differ: word8: spike=00000023 doomv=00000020; word12: spike=00000043 doomv=00000040; word16: spike=00000063 doomv=00000060; word28: spike=00000023 doomv=00000020; word32: spike=00000043 doomv=00000040
+[83] MISMATCH	fmul_b7-01.S	22/660 words differ: word8: spike=00000065 doomv=00000060; word12: spike=00000065 doomv=00000060; word56: spike=00000061 doomv=00000060; word100: spike=00000061 doomv=00000060; word116: spike=00000061 doomv=00000060
+[84] MISMATCH	fmul_b8-01.S	1010/6740 words differ: word8: spike=00000021 doomv=00000020; word12: spike=00000041 doomv=00000040; word16: spike=00000061 doomv=00000060; word28: spike=00000021 doomv=00000020; word32: spike=00000041 doomv=00000040
+[85] PASS	fmul_b9-01.S	5300 words match
+[86] PASS	fmv.w.x_b25-01.S	136 words match
+[87] PASS	fmv.w.x_b26-01.S	136 words match
+[88] PASS	fmv.x.w_b1-01.S	136 words match
+[89] PASS	fmv.x.w_b22-01.S	136 words match
+[90] PASS	fmv.x.w_b23-01.S	136 words match
+[91] PASS	fmv.x.w_b24-01.S	136 words match
+[92] PASS	fmv.x.w_b27-01.S	136 words match
+[93] PASS	fmv.x.w_b28-01.S	136 words match
+[94] PASS	fmv.x.w_b29-01.S	136 words match
+[95] EXCEPTION	fnmadd_b1-01.S	Command '['C:\\Users\\royem\\SWE\\toolchains\\xpack-riscv-none-elf-gcc-15.2.0-1\\bin\\riscv-none-elf-gcc-15.2.0.exe', '-march=rv64gc', '-mabi=lp64d', '-static', '-mcmodel=medany', '-fvisibility=hidden', '-nostdlib', '-nostartfiles', '-I', 'C:\\Users\\royem\\SWE\\GitHub\\DoomV\\tools\\vtest\\arch-tes
+[96] MISMATCH	fnmadd_b14-01.S	17/340 words differ: word20: spike=00000001 doomv=00000003; word28: spike=00000001 doomv=00000003; word32: spike=00000001 doomv=00000003; word68: spike=00000001 doomv=00000003; word76: spike=00000001 doomv=00000003
+[97] MISMATCH	fnmadd_b16-01.S	208/848 words differ: word8: spike=00000001 doomv=00000003; word12: spike=00000001 doomv=00000003; word16: spike=00000001 doomv=00000003; word20: spike=00000001 doomv=00000003; word24: spike=00000001 doomv=00000003
+[98] MISMATCH	fnmadd_b17-01.S	208/848 words differ: word8: spike=00000001 doomv=00000003; word12: spike=00000001 doomv=00000003; word16: spike=00000001 doomv=00000003; word20: spike=00000001 doomv=00000003; word24: spike=00000001 doomv=00000003
+[99] MISMATCH	fnmadd_b18-01.S	5/1128 words differ: word12: spike=00000001 doomv=00000005; word44: spike=00000001 doomv=00000003; word48: spike=00000001 doomv=00000003; word128: spike=00000001 doomv=00000003; word1092: spike=00000001 doomv=00000005
+[100] MISMATCH	fnmadd_b2-01.S	83/1152 words differ: word4: spike=00000001 doomv=00000003; word12: spike=00000001 doomv=00000003; word20: spike=00000001 doomv=00000003; word40: spike=00000001 doomv=00000003; word52: spike=00000001 doomv=00000003
+[101] MISMATCH	fnmadd_b3-01.S	842/4528 words differ: word8: spike=00000021 doomv=00000020; word12: spike=00000041 doomv=00000040; word16: spike=00000061 doomv=00000060; word28: spike=00000021 doomv=00000020; word32: spike=00000041 doomv=00000040
+[102] MISMATCH	fnmadd_b4-01.S	109/608 words differ: word8: spike=00000021 doomv=00000020; word12: spike=00000041 doomv=00000040; word16: spike=00000061 doomv=00000060; word24: spike=00000001 doomv=00000003; word28: spike=00000021 doomv=00000020
+[103] MISMATCH	fnmadd_b5-01.S	167/928 words differ: word8: spike=00000021 doomv=00000020; word12: spike=00000041 doomv=00000040; word16: spike=00000061 doomv=00000060; word24: spike=00000001 doomv=00000003; word28: spike=00000021 doomv=00000020
+[104] MISMATCH	fnmadd_b6-01.S	117/608 words differ: word8: spike=00000025 doomv=00000020; word12: spike=00000041 doomv=00000040; word16: spike=00000061 doomv=00000060; word24: spike=00000001 doomv=00000003; word28: spike=00000021 doomv=00000020
+[105] MISMATCH	fnmadd_b7-01.S	171/688 words differ: word4: spike=00000061 doomv=00000060; word8: spike=00000061 doomv=00000060; word12: spike=00000061 doomv=00000060; word16: spike=00000061 doomv=00000060; word20: spike=00000061 doomv=00000060
+[106] MISMATCH	fnmadd_b8-01.S	1094/6768 words differ: word8: spike=00000021 doomv=00000020; word12: spike=00000041 doomv=00000040; word16: spike=00000061 doomv=00000060; word28: spike=00000021 doomv=00000020; word32: spike=00000041 doomv=00000040
+[107] EXCEPTION	fnmsub_b1-01.S	Command '['C:\\Users\\royem\\SWE\\toolchains\\xpack-riscv-none-elf-gcc-15.2.0-1\\bin\\riscv-none-elf-gcc-15.2.0.exe', '-march=rv64gc', '-mabi=lp64d', '-static', '-mcmodel=medany', '-fvisibility=hidden', '-nostdlib', '-nostartfiles', '-I', 'C:\\Users\\royem\\SWE\\GitHub\\DoomV\\tools\\vtest\\arch-tes
+[108] MISMATCH	fnmsub_b14-01.S	44/340 words differ: word4: spike=00000001 doomv=00000003; word8: spike=00000001 doomv=00000003; word12: spike=00000001 doomv=00000003; word16: spike=00000001 doomv=00000003; word20: spike=00000001 doomv=00000003
+[109] MISMATCH	fnmsub_b16-01.S	16/848 words differ: word8: spike=00000001 doomv=00000003; word12: spike=00000001 doomv=00000003; word24: spike=00000001 doomv=00000003; word28: spike=00000001 doomv=00000003; word36: spike=00000001 doomv=00000003
+[110] MISMATCH	fnmsub_b17-01.S	16/848 words differ: word8: spike=00000001 doomv=00000003; word12: spike=00000001 doomv=00000003; word24: spike=00000001 doomv=00000003; word28: spike=00000001 doomv=00000003; word36: spike=00000001 doomv=00000003
+[111] MISMATCH	fnmsub_b18-01.S	159/1128 words differ: word8: spike=00000001 doomv=00000005; word16: spike=00000001 doomv=00000003; word28: spike=00000001 doomv=00000003; word32: spike=00000001 doomv=00000003; word36: spike=00000001 doomv=00000003
+[112] MISMATCH	fnmsub_b2-01.S	98/1152 words differ: word4: spike=00000001 doomv=00000003; word16: spike=00000001 doomv=00000003; word24: spike=00000001 doomv=00000003; word144: spike=00000001 doomv=00000003; word160: spike=00000001 doomv=00000003
+[113] MISMATCH	fnmsub_b3-01.S	815/4528 words differ: word8: spike=00000021 doomv=00000020; word12: spike=00000041 doomv=00000040; word16: spike=00000061 doomv=00000060; word28: spike=00000025 doomv=00000020; word32: spike=00000045 doomv=00000040
+[114] MISMATCH	fnmsub_b4-01.S	111/608 words differ: word8: spike=00000021 doomv=00000020; word12: spike=00000041 doomv=00000040; word16: spike=00000061 doomv=00000060; word20: spike=00000081 doomv=00000083; word28: spike=00000021 doomv=00000020
+[115] MISMATCH	fnmsub_b5-01.S	175/928 words differ: word8: spike=00000021 doomv=00000020; word12: spike=00000041 doomv=00000040; word16: spike=00000061 doomv=00000060; word20: spike=00000081 doomv=00000083; word28: spike=00000021 doomv=00000020
+[116] MISMATCH	fnmsub_b6-01.S	127/608 words differ: word8: spike=00000021 doomv=00000020; word12: spike=00000041 doomv=00000040; word16: spike=00000061 doomv=00000060; word28: spike=00000025 doomv=00000020; word32: spike=00000045 doomv=00000040
+[117] MISMATCH	fnmsub_b7-01.S	171/688 words differ: word4: spike=00000065 doomv=00000060; word8: spike=00000061 doomv=00000060; word12: spike=00000061 doomv=00000060; word16: spike=00000061 doomv=00000060; word20: spike=00000061 doomv=00000060
+[118] MISMATCH	fnmsub_b8-01.S	1143/6768 words differ: word8: spike=00000021 doomv=00000020; word12: spike=00000041 doomv=00000040; word16: spike=00000061 doomv=00000060; word20: spike=00000081 doomv=00000085; word24: spike=00000001 doomv=00000003
+[119] PASS	fsgnj_b1-01.S	2324 words match
+[120] PASS	fsgnjn_b1-01.S	2324 words match
+[121] PASS	fsgnjx_b1-01.S	2324 words match
+[122] PASS	fsqrt_b1-01.S	136 words match
+[123] PASS	fsqrt_b2-01.S	136 words match
+[124] PASS	fsqrt_b20-01.S	268 words match
+[125] PASS	fsqrt_b3-01.S	136 words match
+[126] MISMATCH	fsqrt_b4-01.S	4/136 words differ: word8: spike=00000021 doomv=00000020; word12: spike=00000041 doomv=00000040; word16: spike=00000061 doomv=00000060; word132: spike=00000021 doomv=00000020
+[127] PASS	fsqrt_b5-01.S	136 words match
+[128] PASS	fsqrt_b7-01.S	136 words match
+[129] PASS	fsqrt_b8-01.S	136 words match
+[130] PASS	fsqrt_b9-01.S	784 words match
+[131] PASS	fsub_b1-01.S	2324 words match
+[132] PASS	fsub_b10-01.S	304 words match
+[133] PASS	fsub_b11-01.S	28068 words match
+[134] PASS	fsub_b12-01.S	220 words match
+[135] PASS	fsub_b13-01.S	820 words match
+[136] PASS	fsub_b2-01.S	1116 words match
+[137] PASS	fsub_b3-01.S	4500 words match
+[138] MISMATCH	fsub_b4-01.S	50/580 words differ: word28: spike=00000021 doomv=00000020; word32: spike=00000041 doomv=00000040; word36: spike=00000061 doomv=00000060; word48: spike=00000021 doomv=00000020; word52: spike=00000041 doomv=00000040
+[139] PASS	fsub_b5-01.S	900 words match
+[140] PASS	fsub_b7-01.S	660 words match
+[141] MISMATCH	fsub_b8-01.S	81/6740 words differ: word5888: spike=00000021 doomv=00000020; word5892: spike=00000041 doomv=00000040; word5896: spike=00000061 doomv=00000060; word5908: spike=00000021 doomv=00000020; word5912: spike=00000041 doomv=00000040
+[142] PASS	fsw-align-01.S	132 words match
+[143] PASS	fadd.d_b1-01.S	2324 words match
+[144] PASS	fadd.d_b10-01.S	2476 words match
+[145] PASS	fadd.d_b11-01.S	42864 words match
+[146] PASS	fadd.d_b12-01.S	220 words match
+[147] PASS	fadd.d_b13-01.S	820 words match
+[148] PASS	fadd.d_b2-01.S	1120 words match
+[149] PASS	fadd.d_b3-01.S	4500 words match
+[150] MISMATCH	fadd.d_b4-01.S	38/580 words differ: word8: spike=00000021 doomv=00000020; word16: spike=00000061 doomv=00000060; word28: spike=00000021 doomv=00000020; word32: spike=00000041 doomv=00000040; word36: spike=00000061 doomv=00000060
+[151] PASS	fadd.d_b5-01.S	860 words match
+[152] PASS	fadd.d_b7-01.S	1364 words match
+[153] PASS	fadd.d_b8-01.S	5900 words match
+[154] PASS	fclass.d_b1-01.S	136 words match
+[155] MISMATCH	fcvt.d.s_b1-01.S	2/136 words differ: word16: spike=00000010 doomv=00000000; word64: spike=00000010 doomv=00000000
+[156] PASS	fcvt.d.s_b22-01.S	136 words match
+[157] PASS	fcvt.d.s_b23-01.S	136 words match
+[158] PASS	fcvt.d.s_b24-01.S	136 words match
+[159] MISMATCH	fcvt.d.s_b27-01.S	5/136 words differ: word4: spike=00000010 doomv=00000000; word8: spike=00000010 doomv=00000000; word20: spike=00000010 doomv=00000000; word24: spike=00000010 doomv=00000000; word132: spike=00000010 doomv=00000000
+[160] MISMATCH	fcvt.d.s_b28-01.S	1/136 words differ: word52: spike=00000010 doomv=00000000
+[161] PASS	fcvt.d.s_b29-01.S	136 words match
+[162] PASS	fcvt.d.w_b25-01.S	136 words match
+[163] PASS	fcvt.d.w_b26-01.S	136 words match
+[164] PASS	fcvt.d.wu_b25-01.S	136 words match
+[165] PASS	fcvt.d.wu_b26-01.S	136 words match
+[166] PASS	fcvt.s.d_b1-01.S	136 words match
+[167] PASS	fcvt.s.d_b22-01.S	136 words match
+[168] MISMATCH	fcvt.s.d_b23-01.S	25/188 words differ: word8: spike=00000021 doomv=00000020; word12: spike=00000041 doomv=00000040; word16: spike=00000061 doomv=00000060; word28: spike=00000021 doomv=00000020; word32: spike=00000041 doomv=00000040
+[169] MISMATCH	fcvt.s.d_b24-01.S	54/428 words differ: word28: spike=00000021 doomv=00000020; word32: spike=00000041 doomv=00000040; word36: spike=00000061 doomv=00000060; word48: spike=00000021 doomv=00000020; word52: spike=00000041 doomv=00000040
+[170] PASS	fcvt.s.d_b27-01.S	136 words match
+[171] PASS	fcvt.s.d_b28-01.S	136 words match
+[172] MISMATCH	fcvt.s.d_b29-01.S	49/328 words differ: word8: spike=00000021 doomv=00000020; word12: spike=00000041 doomv=00000040; word16: spike=00000061 doomv=00000060; word28: spike=00000021 doomv=00000020; word32: spike=00000041 doomv=00000040
+[173] PASS	fcvt.w.d_b1-01.S	136 words match
+[174] PASS	fcvt.w.d_b22-01.S	168 words match
+[175] PASS	fcvt.w.d_b23-01.S	188 words match
+[176] MISMATCH	fcvt.w.d_b24-01.S	55/428 words differ: word28: spike=00000021 doomv=00000020; word32: spike=00000041 doomv=00000040; word36: spike=00000061 doomv=00000060; word48: spike=00000021 doomv=00000020; word52: spike=00000041 doomv=00000040
+[177] PASS	fcvt.w.d_b27-01.S	136 words match
+[178] PASS	fcvt.w.d_b28-01.S	136 words match
+[179] MISMATCH	fcvt.w.d_b29-01.S	48/328 words differ: word8: spike=00000021 doomv=00000020; word12: spike=00000041 doomv=00000040; word16: spike=00000061 doomv=00000060; word28: spike=00000021 doomv=00000020; word32: spike=00000041 doomv=00000040
+[180] MISMATCH	fcvt.wu.d_b1-01.S	6/136 words differ: word56: spike=00000001 doomv=00000010; word60: spike=00000001 doomv=00000010; word64: spike=00000001 doomv=00000010; word68: spike=00000001 doomv=00000010; word72: spike=00000001 doomv=00000010
+[181] PASS	fcvt.wu.d_b22-01.S	168 words match
+[182] PASS	fcvt.wu.d_b23-01.S	188 words match
+[183] MISMATCH	fcvt.wu.d_b24-01.S	46/428 words differ: word28: spike=00000021 doomv=00000020; word32: spike=00000041 doomv=00000040; word36: spike=00000061 doomv=00000060; word48: spike=00000021 doomv=00000020; word52: spike=00000041 doomv=00000040
+[184] PASS	fcvt.wu.d_b27-01.S	136 words match
+[185] MISMATCH	fcvt.wu.d_b28-01.S	2/136 words differ: word68: spike=00000001 doomv=00000010; word72: spike=00000001 doomv=00000010
+[186] MISMATCH	fcvt.wu.d_b29-01.S	56/328 words differ: word8: spike=00000021 doomv=00000020; word12: spike=00000041 doomv=00000040; word16: spike=00000061 doomv=00000060; word28: spike=00000021 doomv=00000020; word32: spike=00000041 doomv=00000040
+[187] PASS	fdiv.d_b1-01.S	2324 words match
+[188] PASS	fdiv.d_b2-01.S	1124 words match
+[189] PASS	fdiv.d_b20-01.S	1008 words match
+[190] PASS	fdiv.d_b21-01.S	2724 words match
+[191] PASS	fdiv.d_b3-01.S	4500 words match
+[192] MISMATCH	fdiv.d_b4-01.S	85/580 words differ: word8: spike=00000025 doomv=00000020; word16: spike=00000065 doomv=00000060; word28: spike=00000021 doomv=00000020; word32: spike=00000041 doomv=00000040; word36: spike=00000061 doomv=00000060
+[193] PASS	fdiv.d_b5-01.S	860 words match
+[194] MISMATCH	fdiv.d_b6-01.S	57/580 words differ: word28: spike=00000021 doomv=00000020; word32: spike=00000041 doomv=00000040; word36: spike=00000061 doomv=00000060; word48: spike=00000021 doomv=00000020; word52: spike=00000041 doomv=00000040
+[195] PASS	fdiv.d_b7-01.S	1364 words match
+[196] MISMATCH	fdiv.d_b8-01.S	465/5900 words differ: word48: spike=00000023 doomv=00000020; word52: spike=00000043 doomv=00000040; word56: spike=00000063 doomv=00000060; word68: spike=00000021 doomv=00000020; word72: spike=00000041 doomv=00000040
+[197] PASS	fdiv.d_b9-01.S	9284 words match
+[198] MISMATCH	feq.d_b1-01.S	160/2316 words differ: word44: spike=00000000 doomv=00000010; word48: spike=00000000 doomv=00000010; word92: spike=00000000 doomv=00000010; word96: spike=00000000 doomv=00000010; word140: spike=00000000 doomv=00000010
+[199] PASS	feq.d_b19-01.S	4400 words match
+[200] PASS	fld-align-01.S	132 words match
+[201] PASS	fle.d_b1-01.S	2316 words match
+[202] PASS	fle.d_b19-01.S	4400 words match
+[203] PASS	flt.d_b1-01.S	2316 words match
+[204] PASS	flt.d_b19-01.S	4608 words match
+[205] EXCEPTION	fmadd.d_b1-01.S	Command '['C:\\Users\\royem\\SWE\\toolchains\\xpack-riscv-none-elf-gcc-15.2.0-1\\bin\\riscv-none-elf-gcc-15.2.0.exe', '-march=rv64gc', '-mabi=lp64d', '-static', '-mcmodel=medany', '-fvisibility=hidden', '-nostdlib', '-nostartfiles', '-I', 'C:\\Users\\royem\\SWE\\GitHub\\DoomV\\tools\\vtest\\arch-tes
+[206] PASS	fmadd.d_b14-01.S	688 words match
+[207] PASS	fmadd.d_b16-01.S	848 words match
+[208] PASS	fmadd.d_b17-01.S	848 words match
+[209] PASS	fmadd.d_b18-01.S	1128 words match
+[210] PASS	fmadd.d_b2-01.S	1152 words match
+[211] MISMATCH	fmadd.d_b3-01.S	678/4528 words differ: word8: spike=00000021 doomv=00000020; word12: spike=00000041 doomv=00000040; word16: spike=00000061 doomv=00000060; word28: spike=00000021 doomv=00000020; word32: spike=00000041 doomv=00000040
+[212] MISMATCH	fmadd.d_b4-01.S	90/608 words differ: word8: spike=00000021 doomv=00000020; word12: spike=00000045 doomv=00000040; word16: spike=00000065 doomv=00000060; word28: spike=00000021 doomv=00000020; word32: spike=00000041 doomv=00000040
+[213] MISMATCH	fmadd.d_b5-01.S	132/888 words differ: word8: spike=00000021 doomv=00000020; word12: spike=00000045 doomv=00000040; word16: spike=00000065 doomv=00000060; word28: spike=00000021 doomv=00000020; word32: spike=00000041 doomv=00000040
+[214] MISMATCH	fmadd.d_b6-01.S	90/608 words differ: word8: spike=00000021 doomv=00000020; word12: spike=00000045 doomv=00000040; word16: spike=00000065 doomv=00000060; word28: spike=00000021 doomv=00000020; word32: spike=00000041 doomv=00000040
+[215] MISMATCH	fmadd.d_b7-01.S	347/1392 words differ: word4: spike=00000061 doomv=00000060; word8: spike=00000061 doomv=00000060; word12: spike=00000061 doomv=00000060; word16: spike=00000061 doomv=00000060; word20: spike=00000061 doomv=00000060
+[216] MISMATCH	fmadd.d_b8-01.S	888/5928 words differ: word8: spike=00000021 doomv=00000020; word12: spike=00000041 doomv=00000040; word16: spike=00000061 doomv=00000060; word28: spike=00000025 doomv=00000020; word32: spike=00000045 doomv=00000040
+[217] MISMATCH	fmax.d_b1-01.S	160/2324 words differ: word44: spike=00000000 doomv=00000010; word48: spike=00000000 doomv=00000010; word92: spike=00000000 doomv=00000010; word96: spike=00000000 doomv=00000010; word140: spike=00000000 doomv=00000010
+[218] PASS	fmax.d_b19-01.S	4472 words match
+[219] MISMATCH	fmin.d_b1-01.S	160/2324 words differ: word44: spike=00000000 doomv=00000010; word48: spike=00000000 doomv=00000010; word92: spike=00000000 doomv=00000010; word96: spike=00000000 doomv=00000010; word140: spike=00000000 doomv=00000010
+[220] PASS	fmin.d_b19-01.S	4404 words match
+[221] EXCEPTION	fmsub.d_b1-01.S	Command '['C:\\Users\\royem\\SWE\\toolchains\\xpack-riscv-none-elf-gcc-15.2.0-1\\bin\\riscv-none-elf-gcc-15.2.0.exe', '-march=rv64gc', '-mabi=lp64d', '-static', '-mcmodel=medany', '-fvisibility=hidden', '-nostdlib', '-nostartfiles', '-I', 'C:\\Users\\royem\\SWE\\GitHub\\DoomV\\tools\\vtest\\arch-tes
+[222] PASS	fmsub.d_b14-01.S	688 words match
+[223] PASS	fmsub.d_b16-01.S	848 words match
+[224] PASS	fmsub.d_b17-01.S	848 words match
+[225] PASS	fmsub.d_b18-01.S	1128 words match
+[226] PASS	fmsub.d_b2-01.S	1152 words match
+[227] MISMATCH	fmsub.d_b3-01.S	678/4528 words differ: word8: spike=00000021 doomv=00000020; word12: spike=00000041 doomv=00000040; word16: spike=00000061 doomv=00000060; word28: spike=00000021 doomv=00000020; word32: spike=00000041 doomv=00000040
+[228] MISMATCH	fmsub.d_b4-01.S	90/608 words differ: word8: spike=00000025 doomv=00000020; word12: spike=00000045 doomv=00000040; word16: spike=00000065 doomv=00000060; word28: spike=00000021 doomv=00000020; word32: spike=00000041 doomv=00000040
+[229] MISMATCH	fmsub.d_b5-01.S	132/888 words differ: word8: spike=00000021 doomv=00000020; word12: spike=00000041 doomv=00000040; word16: spike=00000061 doomv=00000060; word28: spike=00000021 doomv=00000020; word32: spike=00000041 doomv=00000040
+[230] MISMATCH	fmsub.d_b6-01.S	90/608 words differ: word8: spike=00000021 doomv=00000020; word12: spike=00000041 doomv=00000040; word16: spike=00000061 doomv=00000060; word28: spike=00000021 doomv=00000020; word32: spike=00000041 doomv=00000040
+[231] MISMATCH	fmsub.d_b7-01.S	347/1392 words differ: word4: spike=00000061 doomv=00000060; word8: spike=00000061 doomv=00000060; word12: spike=00000065 doomv=00000060; word16: spike=00000061 doomv=00000060; word20: spike=00000061 doomv=00000060
+[232] MISMATCH	fmsub.d_b8-01.S	888/5928 words differ: word8: spike=00000021 doomv=00000020; word12: spike=00000041 doomv=00000040; word16: spike=00000061 doomv=00000060; word28: spike=00000021 doomv=00000020; word32: spike=00000041 doomv=00000040
+[233] PASS	fmul.d_b1-01.S	2324 words match
+[234] PASS	fmul.d_b2-01.S	1124 words match
+[235] MISMATCH	fmul.d_b3-01.S	1/4500 words differ: word12: spike=00000045 doomv=00000040
+[236] MISMATCH	fmul.d_b4-01.S	87/580 words differ: word8: spike=00000021 doomv=00000020; word12: spike=00000045 doomv=00000040; word16: spike=00000061 doomv=00000060; word28: spike=00000021 doomv=00000020; word32: spike=00000041 doomv=00000040
+[237] MISMATCH	fmul.d_b5-01.S	1/860 words differ: word12: spike=00000045 doomv=00000040
+[238] MISMATCH	fmul.d_b6-01.S	87/580 words differ: word8: spike=00000021 doomv=00000020; word12: spike=00000041 doomv=00000040; word16: spike=00000061 doomv=00000060; word28: spike=00000021 doomv=00000020; word32: spike=00000041 doomv=00000040
+[239] MISMATCH	fmul.d_b7-01.S	2/1364 words differ: word4: spike=00000065 doomv=00000060; word12: spike=00000065 doomv=00000060
+[240] MISMATCH	fmul.d_b8-01.S	885/5900 words differ: word8: spike=00000021 doomv=00000020; word12: spike=00000041 doomv=00000040; word16: spike=00000061 doomv=00000060; word28: spike=00000023 doomv=00000020; word32: spike=00000043 doomv=00000040
+[241] PASS	fmul.d_b9-01.S	9284 words match
+[242] EXCEPTION	fnmadd.d_b1-01.S	Command '['C:\\Users\\royem\\SWE\\toolchains\\xpack-riscv-none-elf-gcc-15.2.0-1\\bin\\riscv-none-elf-gcc-15.2.0.exe', '-march=rv64gc', '-mabi=lp64d', '-static', '-mcmodel=medany', '-fvisibility=hidden', '-nostdlib', '-nostartfiles', '-I', 'C:\\Users\\royem\\SWE\\GitHub\\DoomV\\tools\\vtest\\arch-tes
+[243] PASS	fnmadd.d_b14-01.S	688 words match
+[244] PASS	fnmadd.d_b16-01.S	848 words match
+[245] PASS	fnmadd.d_b17-01.S	848 words match
+[246] PASS	fnmadd.d_b18-01.S	1128 words match
+[247] PASS	fnmadd.d_b2-01.S	1152 words match
+[248] MISMATCH	fnmadd.d_b3-01.S	679/4528 words differ: word8: spike=00000021 doomv=00000020; word12: spike=00000041 doomv=00000040; word16: spike=00000061 doomv=00000060; word28: spike=00000025 doomv=00000020; word32: spike=00000041 doomv=00000040
+[249] MISMATCH	fnmadd.d_b4-01.S	91/608 words differ: word8: spike=00000021 doomv=00000020; word12: spike=00000041 doomv=00000040; word16: spike=00000061 doomv=00000060; word28: spike=00000021 doomv=00000020; word32: spike=00000041 doomv=00000040
+[250] MISMATCH	fnmadd.d_b5-01.S	133/888 words differ: word8: spike=00000021 doomv=00000020; word12: spike=00000041 doomv=00000040; word16: spike=00000061 doomv=00000060; word28: spike=00000021 doomv=00000020; word32: spike=00000041 doomv=00000040
+[251] MISMATCH	fnmadd.d_b6-01.S	91/608 words differ: word8: spike=00000021 doomv=00000020; word12: spike=00000041 doomv=00000040; word16: spike=00000061 doomv=00000060; word28: spike=00000021 doomv=00000020; word32: spike=00000041 doomv=00000040
+[252] MISMATCH	fnmadd.d_b7-01.S	347/1392 words differ: word4: spike=00000061 doomv=00000060; word8: spike=00000061 doomv=00000060; word12: spike=00000061 doomv=00000060; word16: spike=00000061 doomv=00000060; word20: spike=00000061 doomv=00000060
+[253] MISMATCH	fnmadd.d_b8-01.S	889/5928 words differ: word8: spike=00000021 doomv=00000020; word12: spike=00000041 doomv=00000040; word16: spike=00000061 doomv=00000060; word28: spike=00000021 doomv=00000020; word32: spike=00000041 doomv=00000040
+[254] EXCEPTION	fnmsub.d_b1-01.S	Command '['C:\\Users\\royem\\SWE\\toolchains\\xpack-riscv-none-elf-gcc-15.2.0-1\\bin\\riscv-none-elf-gcc-15.2.0.exe', '-march=rv64gc', '-mabi=lp64d', '-static', '-mcmodel=medany', '-fvisibility=hidden', '-nostdlib', '-nostartfiles', '-I', 'C:\\Users\\royem\\SWE\\GitHub\\DoomV\\tools\\vtest\\arch-tes
+[255] PASS	fnmsub.d_b14-01.S	688 words match
+[256] PASS	fnmsub.d_b16-01.S	848 words match
+[257] PASS	fnmsub.d_b17-01.S	848 words match
+[258] PASS	fnmsub.d_b18-01.S	1128 words match
+[259] PASS	fnmsub.d_b2-01.S	1148 words match
+[260] MISMATCH	fnmsub.d_b3-01.S	679/4528 words differ: word8: spike=00000021 doomv=00000020; word12: spike=00000041 doomv=00000040; word16: spike=00000061 doomv=00000060; word28: spike=00000021 doomv=00000020; word32: spike=00000041 doomv=00000040
+[261] MISMATCH	fnmsub.d_b4-01.S	91/608 words differ: word8: spike=00000021 doomv=00000020; word12: spike=00000041 doomv=00000040; word16: spike=00000061 doomv=00000060; word28: spike=00000021 doomv=00000020; word32: spike=00000041 doomv=00000040
+[262] MISMATCH	fnmsub.d_b5-01.S	133/888 words differ: word8: spike=00000021 doomv=00000020; word12: spike=00000041 doomv=00000040; word16: spike=00000061 doomv=00000060; word28: spike=00000021 doomv=00000020; word32: spike=00000041 doomv=00000040
+[263] MISMATCH	fnmsub.d_b6-01.S	91/608 words differ: word8: spike=00000025 doomv=00000020; word12: spike=00000045 doomv=00000040; word16: spike=00000061 doomv=00000060; word28: spike=00000021 doomv=00000020; word32: spike=00000041 doomv=00000040
+[264] MISMATCH	fnmsub.d_b7-01.S	347/1392 words differ: word4: spike=00000061 doomv=00000060; word8: spike=00000065 doomv=00000060; word12: spike=00000061 doomv=00000060; word16: spike=00000061 doomv=00000060; word20: spike=00000061 doomv=00000060
+[265] MISMATCH	fnmsub.d_b8-01.S	889/5928 words differ: word8: spike=00000021 doomv=00000020; word12: spike=00000041 doomv=00000040; word16: spike=00000061 doomv=00000060; word28: spike=00000021 doomv=00000020; word32: spike=00000041 doomv=00000040
+[266] PASS	fsd-align-01.S	132 words match
+[267] PASS	fsgnj.d_b1-01.S	2324 words match
+[268] PASS	fsgnjn.d_b1-01.S	2324 words match
+[269] PASS	fsgnjx.d_b1-01.S	2324 words match
+[270] PASS	fsqrt.d_b1-01.S	136 words match
+[271] PASS	fsqrt.d_b2-01.S	200 words match
+[272] PASS	fsqrt.d_b20-01.S	556 words match
+[273] PASS	fsqrt.d_b3-01.S	136 words match
+[274] PASS	fsqrt.d_b4-01.S	136 words match
+[275] PASS	fsqrt.d_b5-01.S	136 words match
+[276] PASS	fsqrt.d_b7-01.S	136 words match
+[277] PASS	fsqrt.d_b8-01.S	136 words match
+[278] PASS	fsqrt.d_b9-01.S	1540 words match
+[279] PASS	fssub.d_b1-01.S	2324 words match
+[280] PASS	fssub.d_b10-01.S	2464 words match
+[281] PASS	fssub.d_b11-01.S	42864 words match
+[282] PASS	fssub.d_b12-01.S	220 words match
+[283] PASS	fssub.d_b13-01.S	820 words match
+[284] PASS	fssub.d_b2-01.S	1116 words match
+[285] PASS	fssub.d_b3-01.S	4500 words match
+[286] MISMATCH	fssub.d_b4-01.S	50/580 words differ: word8: spike=00000021 doomv=00000020; word16: spike=00000061 doomv=00000060; word28: spike=00000021 doomv=00000020; word32: spike=00000041 doomv=00000040; word36: spike=00000061 doomv=00000060
+[287] PASS	fssub.d_b5-01.S	860 words match
+[288] PASS	fssub.d_b7-01.S	1364 words match
+[289] PASS	fssub.d_b8-01.S	5900 words match
+[290] PASS	fcvt.l.s_b1-01.S	136 words match
+[291] PASS	fcvt.l.s_b22-01.S	296 words match
+[292] PASS	fcvt.l.s_b23-01.S	188 words match
+[293] MISMATCH	fcvt.l.s_b24-01.S	58/428 words differ: word8: spike=00000021 doomv=00000020; word12: spike=00000041 doomv=00000040; word16: spike=00000061 doomv=00000060; word28: spike=00000021 doomv=00000020; word32: spike=00000041 doomv=00000040
+[294] PASS	fcvt.l.s_b27-01.S	136 words match
+[295] PASS	fcvt.l.s_b28-01.S	136 words match
+[296] MISMATCH	fcvt.l.s_b29-01.S	49/328 words differ: word8: spike=00000021 doomv=00000020; word12: spike=00000041 doomv=00000040; word16: spike=00000061 doomv=00000060; word28: spike=00000021 doomv=00000020; word32: spike=00000041 doomv=00000040
+[297] MISMATCH	fcvt.lu.s_b1-01.S	5/136 words differ: word56: spike=00000001 doomv=00000010; word60: spike=00000001 doomv=00000010; word64: spike=00000001 doomv=00000010; word68: spike=00000001 doomv=00000010; word72: spike=00000001 doomv=00000010
+[298] MISMATCH	fcvt.lu.s_b22-01.S	2/296 words differ: word171: spike=ba558500 doomv=00000000; word172: spike=00000000 doomv=00000010
+[299] PASS	fcvt.lu.s_b23-01.S	188 words match
+[300] MISMATCH	fcvt.lu.s_b24-01.S	48/428 words differ: word8: spike=00000021 doomv=00000020; word12: spike=00000041 doomv=00000040; word16: spike=00000061 doomv=00000060; word28: spike=00000021 doomv=00000020; word32: spike=00000041 doomv=00000040
+[301] PASS	fcvt.lu.s_b27-01.S	136 words match
+[302] MISMATCH	fcvt.lu.s_b28-01.S	1/136 words differ: word68: spike=00000001 doomv=00000010
+[303] MISMATCH	fcvt.lu.s_b29-01.S	57/328 words differ: word8: spike=00000021 doomv=00000020; word12: spike=00000041 doomv=00000040; word16: spike=00000061 doomv=00000060; word28: spike=00000021 doomv=00000020; word32: spike=00000041 doomv=00000040
+[304] PASS	fcvt.s.l_b25-01.S	136 words match
+[305] PASS	fcvt.s.l_b26-01.S	264 words match
+[306] PASS	fcvt.s.lu_b25-01.S	136 words match
+[307] PASS	fcvt.s.lu_b26-01.S	264 words match
+[308] PASS	fcvt.d.l_b25-01.S	136 words match
+[309] PASS	fcvt.d.l_b26-01.S	264 words match
+[310] PASS	fcvt.d.lu_b25-01.S	136 words match
+[311] PASS	fcvt.d.lu_b26-01.S	264 words match
+[312] PASS	fcvt.l.d_b1-01.S	136 words match
+[313] PASS	fcvt.l.d_b22-01.S	296 words match
+[314] PASS	fcvt.l.d_b23-01.S	188 words match
+[315] MISMATCH	fcvt.l.d_b24-01.S	54/428 words differ: word28: spike=00000021 doomv=00000020; word32: spike=00000041 doomv=00000040; word36: spike=00000061 doomv=00000060; word48: spike=00000021 doomv=00000020; word52: spike=00000041 doomv=00000040
+[316] PASS	fcvt.l.d_b27-01.S	136 words match
+[317] PASS	fcvt.l.d_b28-01.S	136 words match
+[318] MISMATCH	fcvt.l.d_b29-01.S	49/328 words differ: word8: spike=00000021 doomv=00000020; word12: spike=00000041 doomv=00000040; word16: spike=00000061 doomv=00000060; word28: spike=00000021 doomv=00000020; word32: spike=00000041 doomv=00000040
+[319] MISMATCH	fcvt.lu.d_b1-01.S	7/136 words differ: word56: spike=00000001 doomv=00000010; word60: spike=00000001 doomv=00000010; word64: spike=00000001 doomv=00000010; word68: spike=00000001 doomv=00000010; word72: spike=00000001 doomv=00000010
+[320] MISMATCH	fcvt.lu.d_b22-01.S	4/296 words differ: word170: spike=da5a4800 doomv=00000000; word171: spike=fcab77bf doomv=00000000; word172: spike=00000000 doomv=00000010; word184: spike=00000001 doomv=00000010
+[321] MISMATCH	fcvt.lu.d_b23-01.S	60/188 words differ: word82: spike=00000000 doomv=ffffffff; word83: spike=80000000 doomv=7fffffff; word84: spike=00000000 doomv=00000010; word86: spike=00000000 doomv=ffffffff; word87: spike=80000000 doomv=7fffffff
+[322] MISMATCH	fcvt.lu.d_b24-01.S	45/428 words differ: word28: spike=00000021 doomv=00000020; word32: spike=00000041 doomv=00000040; word36: spike=00000061 doomv=00000060; word48: spike=00000021 doomv=00000020; word52: spike=00000041 doomv=00000040
+[323] PASS	fcvt.lu.d_b27-01.S	136 words match
+[324] MISMATCH	fcvt.lu.d_b28-01.S	5/136 words differ: word46: spike=00000000 doomv=ffffffff; word47: spike=80000000 doomv=7fffffff; word48: spike=00000000 doomv=00000010; word68: spike=00000001 doomv=00000010; word72: spike=00000001 doomv=00000010
+[325] MISMATCH	fcvt.lu.d_b29-01.S	57/328 words differ: word8: spike=00000021 doomv=00000020; word12: spike=00000041 doomv=00000040; word16: spike=00000061 doomv=00000060; word28: spike=00000021 doomv=00000020; word32: spike=00000041 doomv=00000040
+[326] PASS	fmv.d.x_b25-01.S	136 words match
+[327] PASS	fmv.d.x_b26-01.S	264 words match
+[328] PASS	fmv.x.d_b1-01.S	136 words match
+[329] PASS	fmv.x.d_b22-01.S	136 words match
+[330] PASS	fmv.x.d_b23-01.S	136 words match
+[331] PASS	fmv.x.d_b24-01.S	136 words match
+[332] PASS	fmv.x.d_b27-01.S	136 words match
+[333] PASS	fmv.x.d_b28-01.S	136 words match
+[334] PASS	fmv.x.d_b29-01.S	136 words match
+
+==== REMAINING BATCH DONE ====
