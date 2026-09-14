@@ -45,7 +45,9 @@ LOGIN_PROMPT = "doomv login:"
 #
 # Waits are generous because they have to be: authenticating means crypt(),
 # which is not quick at ~6.6 MIPS, and anything typed during it is echoed by
-# the tty before login has finished.
+# the tty before login has finished. A script's `sleep` counts instructions
+# (10,000 per "millisecond"), not host time, so these waits are the same
+# amount of guest work on every run however fast the host is.
 LOGIN_SCRIPT = """\
 sleep 20000
 type root

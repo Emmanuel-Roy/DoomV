@@ -13,6 +13,7 @@
 #include <chrono>
 #include <thread>
 #include <vector>
+#include <sys/stat.h>
 
 DoomSystem::DoomSystem() : decoder(core, regs, memory)
 {
@@ -509,14 +510,28 @@ void DoomSystem::move_pointer(int x, int y)
 	if (y < 0) y = 0;
 	if (x >= Memory::LFB_W) x = Memory::LFB_W - 1;
 	if (y >= Memory::LFB_H) y = Memory::LFB_H - 1;
-	pointer_x = x;
-	pointer_y = y;
-	VirtioInput &ms = memory.get_mouse();
-	ms.push(VirtioInput::EV_ABS, VirtioInput::ABS_X, (uint32_t)x);
-	ms.push(VirtioInput::EV_ABS, VirtioInput::ABS_Y, (uint32_t)y);
+	GuestInput in;
+	in.kind = GuestInput::Mouse;
+	in.a = VirtioInput::EV_ABS;
+	in.b = VirtioInput::ABS_X; in.c = x; submit_input(in);
+	in.b = VirtioInput::ABS_Y; in.c = y; submit_input(in);
 	// One SYN for the pair: a report is a complete state change, and
 	// splitting X from Y makes a diagonal movement arrive as two steps.
-	ms.sync();
+	in.a = VirtioInput::EV_SYN; in.b = VirtioInput::SYN_REPORT; in.c = 0; submit_input(in);
+}
+
+void DoomSystem::commit_pointer(uint64_t now, int x, int y)
+{
+	if (x < 0) x = 0;
+	if (y < 0) y = 0;
+	if (x >= Memory::LFB_W) x = Memory::LFB_W - 1;
+	if (y >= Memory::LFB_H) y = Memory::LFB_H - 1;
+	GuestInput in;
+	in.kind = GuestInput::Mouse;
+	in.a = VirtioInput::EV_ABS;
+	in.b = VirtioInput::ABS_X; in.c = x; commit_input(now, in);
+	in.b = VirtioInput::ABS_Y; in.c = y; commit_input(now, in);
+	in.a = VirtioInput::EV_SYN; in.b = VirtioInput::SYN_REPORT; in.c = 0; commit_input(now, in);
 }
 
 void DoomSystem::stop_at_limit()
@@ -568,19 +583,19 @@ void DoomSystem::cpu_loop()
 		for (int i = 0; i < 200000; i++) {
 			if (debugger.halted) break;
 			step();
-			if (stop_at && memory.get_timer().get_mtime() >= stop_at) {
+			// Input is committed at instruction counts, never at a point
+			// in a burst: the burst boundaries depend on halts and resumes,
+			// and an input delivered at "whenever the host got to it" is
+			// the one thing that made two runs of the same guest differ.
+			// Every 4096 instructions is about 2.5kHz at the interpreter's
+			// speed, so a mouse still feels attached.
+			const uint64_t now = memory.get_timer().get_mtime();
+			if ((now & (INPUT_PERIOD - 1)) == 0) service_input(now);
+			if (stop_at && now >= stop_at) {
 				stop_at_limit();
 				break;
 			}
-			// Deliver queued input part-way through the burst, not just
-			// between bursts. A burst is about 30ms of wall time, and a
-			// mouse sampled at 30Hz is a mouse that feels broken; this
-			// lands around 1.6kHz instead. pump_input is two relaxed
-			// atomic loads when there is nothing queued, which is almost
-			// always, so the hot path pays for a branch and no more.
-			if ((i & 0xFFF) == 0xFFF) memory.pump_input();
 		}
-		memory.pump_input();
 		publish_snapshot();
 
 		// The guest asking to be turned off. Memory has recorded writes to
@@ -634,23 +649,24 @@ void DoomSystem::cpu_loop()
 // paces the feed to whatever rate the guest is actually consuming at.
 void DoomSystem::console_stdin_loop()
 {
-	// Nothing is sent until the guest has printed whatever -expect asked
-	// for. Without a needle this is already true and the loop starts
-	// immediately, which is right for a guest that is waiting at a prompt
-	// before the emulator even starts reading stdin.
-	while (!run_finished && !memory.get_uart().expect_seen())
-		std::this_thread::sleep_for(std::chrono::milliseconds(1));
-
-	int c;
-	while (!run_finished && (c = std::fgetc(stdin)) != EOF) {
-		const uint8_t byte = (c == '\n') ? (uint8_t)'\r' : (uint8_t)c;
-		while (!run_finished && !memory.get_uart().try_push_rx(byte))
-			std::this_thread::sleep_for(std::chrono::milliseconds(1));
-	}
+	// A live source -- a pipe or a terminal -- whose bytes arrive when the
+	// host sends them. They are queued, and the CPU thread moves them into
+	// the UART when it has room (see service_input), so what the guest sees
+	// depends on when each one arrived: record the run with -record to
+	// reproduce it. Stdin redirected from a file is read up front instead,
+	// by prepare_input, and needs no recording.
+	//
 	// Deliberately does not end the run on EOF. A script that pipes in a few
 	// commands and closes stdin still wants the guest to keep going and keep
 	// printing; the run ends when the guest ends it, or when whoever started
 	// it does.
+	int c;
+	while (!run_finished && (c = std::fgetc(stdin)) != EOF) {
+		GuestInput in;
+		in.kind = GuestInput::Uart;
+		in.a = (uint8_t)(c == '\n' ? '\r' : c);
+		submit_input(in);
+	}
 }
 
 
@@ -862,15 +878,9 @@ static int console_key_bytes(const RawInputEvent &ev, uint8_t out[4])
 }
 
 
-// Replay a script of input events into the keyboard and mouse.
-//
-// This exists because the devices are otherwise untestable. Their events
-// come from SDL, so exercising them needs a window, and a window needs a
-// person -- which means "the keyboard works" would be a claim resting on
-// someone having typed at it once and not on anything reproducible. With
-// this, the whole chain is checkable from a script: event to virtio queue
-// to evdev to the VT layer to a shell to fbcon to the framebuffer, ending
-// in a -fbdump you can read.
+// Drive the guest's input from a script, so the input devices are testable
+// without a window and a person -- the whole chain, from event to virtio
+// queue to evdev to a shell to fbcon, ending in a -fbdump you can read.
 //
 // The format is one command per line, `#` comments and blank lines
 // ignored:
@@ -878,179 +888,416 @@ static int console_key_bytes(const RawInputEvent &ev, uint8_t out[4])
 //   key <code> <0|1>         a key up or down
 //   type <text>              that text as press/release pairs, US layout
 //   rel <dx> <dy>            relative mouse movement
+//   abs <x> <y>              Linux: the pointer to a framebuffer pixel
 //   btn <left|middle|right> <0|1>
 //   wheel <v>                vertical wheel clicks, positive is up
-//   sleep <ms>               host milliseconds, not guest
+//   sleep <ms>               wait ms x 10000 instructions
+//   wait <n>                 wait n instructions; k, M and G suffixes
 //
-// `key` is in whichever numbering the guest's keyboard uses, because there
-// are two and neither is a superset of the other: evdev codes for a Linux
-// boot (see evdev_keycode), and DOOM's own codes from doomkeys.h for a
-// bare-metal one, where 27 is escape and 13 is return. `rel`, `btn` and
-// `wheel` likewise go to whichever mouse the mode has -- virtio-input for
-// Linux, the MMIO accumulators for DOOM.
+// `key` is in whichever numbering the guest's keyboard uses: evdev codes
+// for a Linux boot (see evdev_keycode), and DOOM's own codes from doomkeys.h
+// for a bare-metal one, where 27 is escape and 13 is return. `rel`, `btn`
+// and `wheel` likewise go to whichever mouse the mode has.
 //
-// Every command syncs, and there is a small delay after each one. Both are
-// deliberate: an input report is only delivered at a SYN, and the guest
-// drains its queue at emulated speed, so a script that fires a hundred
-// events with no pacing tests the ring's overflow behaviour rather than
-// the thing it meant to test.
-void DoomSystem::replay_input_script()
-{
-	// Wait for the guest to be somewhere that can receive input, the same
-	// gate the stdin feed uses and for the same reason: keys delivered
-	// before a tty exists go nowhere.
-	while (!run_finished && !memory.get_uart().expect_seen())
-		std::this_thread::sleep_for(std::chrono::milliseconds(1));
+// The script runs on the CPU thread and its clock is the instruction count,
+// so the same script delivers the same input at the same instructions on
+// every run. `sleep` used to be host milliseconds, which made a script's
+// timing depend on how fast the host happened to be; it is now a fixed
+// number of instructions per millisecond, close to one host millisecond at
+// the interpreter's speed, so existing scripts keep roughly their pacing.
+// The script starts at the instruction where -expect matched, if given.
+//
+// Every command is followed by 30 "ms" and every typed character by 20: the
+// guest drains its queues at emulated speed, and a script that fires a
+// hundred events at once tests queue overflow rather than what it meant to.
 
-	std::ifstream f(input_script_path);
-	if (!f) {
-		std::cout << "cannot open input script: " << input_script_path << std::endl;
+namespace {
+
+// US layout, for `type` only. This is a keyboard emulator's one unavoidable
+// layout assumption: the script says "type a", and the only way to turn
+// that into a physical key is to pick a layout. The real input path never
+// does this -- it forwards scancodes and lets the guest's own keymap decide
+// (see evdev_keycode) -- so this table is test scaffolding.
+struct Chord { char ch; uint16_t code; bool shift; };
+const Chord chords[] = {
+	{'a',30,0},{'b',48,0},{'c',46,0},{'d',32,0},{'e',18,0},{'f',33,0},
+	{'g',34,0},{'h',35,0},{'i',23,0},{'j',36,0},{'k',37,0},{'l',38,0},
+	{'m',50,0},{'n',49,0},{'o',24,0},{'p',25,0},{'q',16,0},{'r',19,0},
+	{'s',31,0},{'t',20,0},{'u',22,0},{'v',47,0},{'w',17,0},{'x',45,0},
+	{'y',21,0},{'z',44,0},
+	{'1',2,0},{'2',3,0},{'3',4,0},{'4',5,0},{'5',6,0},
+	{'6',7,0},{'7',8,0},{'8',9,0},{'9',10,0},{'0',11,0},
+	{' ',57,0},{'-',12,0},{'=',13,0},{'[',26,0},{']',27,0},
+	{';',39,0},{'\'',40,0},{'`',41,0},{'\\',43,0},{',',51,0},
+	{'.',52,0},{'/',53,0},{'\n',28,0},
+	{'A',30,1},{'B',48,1},{'C',46,1},{'D',32,1},{'E',18,1},{'F',33,1},
+	{'G',34,1},{'H',35,1},{'I',23,1},{'J',36,1},{'K',37,1},{'L',38,1},
+	{'M',50,1},{'N',49,1},{'O',24,1},{'P',25,1},{'Q',16,1},{'R',19,1},
+	{'S',31,1},{'T',20,1},{'U',22,1},{'V',47,1},{'W',17,1},{'X',45,1},
+	{'Y',21,1},{'Z',44,1},
+	{'!',2,1},{'@',3,1},{'#',4,1},{'$',5,1},{'%',6,1},{'^',7,1},
+	{'&',8,1},{'*',9,1},{'(',10,1},{')',11,1},{'_',12,1},{'+',13,1},
+	{'{',26,1},{'}',27,1},{':',39,1},{'"',40,1},{'~',41,1},{'|',43,1},
+	{'<',51,1},{'>',52,1},{'?',53,1},
+};
+
+const char *const input_kind_names[] = { "kbd", "mouse", "uart", "dkey", "dmove", "dbtn" };
+
+// "1500", "250k", "3M", "2G".
+uint64_t parse_count(const std::string &s)
+{
+	char *end = nullptr;
+	double v = std::strtod(s.c_str(), &end);
+	if (end && *end) {
+		if (*end == 'k' || *end == 'K') v *= 1e3;
+		else if (*end == 'M') v *= 1e6;
+		else if (*end == 'G') v *= 1e9;
+	}
+	return v > 0 ? (uint64_t)v : 0;
+}
+
+} // namespace
+
+bool DoomSystem::set_input_record(const char *path)
+{
+	record_file = std::fopen(path, "w");
+	if (!record_file) return false;
+	std::fprintf(record_file, "doomv-input 1\n# instruction kind a b c d\n");
+	std::fflush(record_file);
+	return true;
+}
+
+bool DoomSystem::set_input_replay(const char *path)
+{
+	std::ifstream f(path);
+	if (!f) return false;
+	std::string line;
+	while (std::getline(f, line)) {
+		while (!line.empty() && (line.back() == '\r' || line.back() == '\n')) line.pop_back();
+		if (line.empty() || line[0] == '#' || line.rfind("doomv-input", 0) == 0) continue;
+		std::istringstream in(line);
+		unsigned long long stamp = 0;
+		std::string kind;
+		unsigned a = 0, b = 0;
+		int c = 0, dd = 0;
+		if (!(in >> stamp >> kind >> a >> b >> c >> dd)) {
+			std::cout << "input log: cannot parse '" << line << "'" << std::endl;
+			return false;
+		}
+		GuestInput ev;
+		bool known = false;
+		for (uint8_t k = 0; k < sizeof(input_kind_names) / sizeof(input_kind_names[0]); k++) {
+			if (kind == input_kind_names[k]) { ev.kind = (GuestInput::Kind)k; known = true; }
+		}
+		if (!known) {
+			std::cout << "input log: unknown input '" << kind << "'" << std::endl;
+			return false;
+		}
+		ev.a = (uint16_t)a; ev.b = (uint16_t)b; ev.c = c; ev.d = dd;
+		replay_events.push_back({ (uint64_t)stamp, ev });
+	}
+	replaying = true;
+	return true;
+}
+
+void DoomSystem::prepare_input()
+{
+	if (replaying) {
+		if (!input_script_path.empty())
+			std::cout << "-replay given: ignoring -input=" << input_script_path << std::endl;
 		return;
 	}
 
-	// US layout, for `type` only. This is a keyboard emulator's one
-	// unavoidable layout assumption: the script says "type a", and the
-	// only way to turn that into a physical key is to pick a layout. The
-	// real input path never does this -- it forwards scancodes and lets
-	// the guest's own keymap decide (see evdev_keycode) -- so this table
-	// is test scaffolding and not part of how the device works.
-	struct Chord { char ch; uint16_t code; bool shift; };
-	static const Chord chords[] = {
-		{'a',30,0},{'b',48,0},{'c',46,0},{'d',32,0},{'e',18,0},{'f',33,0},
-		{'g',34,0},{'h',35,0},{'i',23,0},{'j',36,0},{'k',37,0},{'l',38,0},
-		{'m',50,0},{'n',49,0},{'o',24,0},{'p',25,0},{'q',16,0},{'r',19,0},
-		{'s',31,0},{'t',20,0},{'u',22,0},{'v',47,0},{'w',17,0},{'x',45,0},
-		{'y',21,0},{'z',44,0},
-		{'1',2,0},{'2',3,0},{'3',4,0},{'4',5,0},{'5',6,0},
-		{'6',7,0},{'7',8,0},{'8',9,0},{'9',10,0},{'0',11,0},
-		{' ',57,0},{'-',12,0},{'=',13,0},{'[',26,0},{']',27,0},
-		{';',39,0},{'\'',40,0},{'`',41,0},{'\\',43,0},{',',51,0},
-		{'.',52,0},{'/',53,0},{'\n',28,0},
-		{'A',30,1},{'B',48,1},{'C',46,1},{'D',32,1},{'E',18,1},{'F',33,1},
-		{'G',34,1},{'H',35,1},{'I',23,1},{'J',36,1},{'K',37,1},{'L',38,1},
-		{'M',50,1},{'N',49,1},{'O',24,1},{'P',25,1},{'Q',16,1},{'R',19,1},
-		{'S',31,1},{'T',20,1},{'U',22,1},{'V',47,1},{'W',17,1},{'X',45,1},
-		{'Y',21,1},{'Z',44,1},
-		{'!',2,1},{'@',3,1},{'#',4,1},{'$',5,1},{'%',6,1},{'^',7,1},
-		{'&',8,1},{'*',9,1},{'(',10,1},{')',11,1},{'_',12,1},{'+',13,1},
-		{'{',26,1},{'}',27,1},{':',39,1},{'"',40,1},{'~',41,1},{'|',43,1},
-		{'<',51,1},{'>',52,1},{'?',53,1},
-	};
-
-	const auto tap = [&](uint16_t code, bool shift) {
-		VirtioInput &kbd = memory.get_keyboard();
-		if (shift) { kbd.push(VirtioInput::EV_KEY, 42, 1); kbd.sync(); }
-		kbd.push(VirtioInput::EV_KEY, code, 1);
-		kbd.sync();
-		kbd.push(VirtioInput::EV_KEY, code, 0);
-		kbd.sync();
-		if (shift) { kbd.push(VirtioInput::EV_KEY, 42, 0); kbd.sync(); }
-	};
-
-	std::string line;
-	while (!run_finished && std::getline(f, line)) {
-		// Tolerate CRLF: this file is as likely to have been written on
-		// Windows as not, and a trailing CR turns every argument into a
-		// parse error a long way from its cause.
-		while (!line.empty() && (line.back() == '\r' || line.back() == '\n'))
-			line.pop_back();
-		if (line.empty() || line[0] == '#') continue;
-
-		std::istringstream in(line);
-		std::string cmd;
-		in >> cmd;
-
-		if (cmd == "sleep") {
-			int ms = 0;
-			in >> ms;
-			std::this_thread::sleep_for(std::chrono::milliseconds(ms));
-			continue;
-		}
-		if (cmd == "key") {
-			int code = 0, val = 0;
-			in >> code >> val;
-			if (linux_mode) {
-				VirtioInput &kbd = memory.get_keyboard();
-				kbd.push(VirtioInput::EV_KEY, (uint16_t)code, (uint32_t)val);
-				kbd.sync();
-			} else {
-				memory.push_key_event(val != 0, (uint8_t)code);
-			}
-		} else if (cmd == "type") {
-			// The rest of the line verbatim, spaces included, so `type
-			// echo hello` does what it looks like.
-			std::string text;
-			std::getline(in, text);
-			if (!text.empty() && text[0] == ' ') text.erase(0, 1);
-			for (char ch : text) {
-				if (!linux_mode) {
-					// DOOM's key codes are ASCII for everything
-					// printable, so there is no table to consult.
-					memory.push_key_event(true, (uint8_t)ch);
-					memory.push_key_event(false, (uint8_t)ch);
-					std::this_thread::sleep_for(std::chrono::milliseconds(20));
-					continue;
-				}
-				bool found = false;
-				for (const Chord &c : chords) {
-					if (c.ch != ch) continue;
-					tap(c.code, c.shift);
-					found = true;
-					break;
-				}
-				if (!found)
-					std::cout << "input script: no key for '" << ch << "'" << std::endl;
-				std::this_thread::sleep_for(std::chrono::milliseconds(20));
-			}
-		} else if (cmd == "rel") {
-			int dx = 0, dy = 0;
-			in >> dx >> dy;
-			if (!linux_mode) {
-				memory.push_mouse_motion(dx, dy);
-			} else {
-				// The pointer is absolute, so a relative step is taken from
-				// where it is.
-				move_pointer(pointer_x + dx, pointer_y + dy);
-			}
-		} else if (cmd == "abs") {
-			// Linux only: put the pointer at a framebuffer pixel.
-			int x = 0, y = 0;
-			in >> x >> y;
-			if (linux_mode) move_pointer(x, y);
-		} else if (cmd == "btn") {
-			std::string which;
-			int val = 0;
-			in >> which >> val;
-			if (!linux_mode) {
-				int bit = 0;
-				if (which == "right")  bit = 1;
-				if (which == "middle") bit = 2;
-				memory.push_mouse_button(bit, val != 0);
-			} else {
-				uint16_t code = VirtioInput::BTN_LEFT;
-				if (which == "right")  code = VirtioInput::BTN_RIGHT;
-				if (which == "middle") code = VirtioInput::BTN_MIDDLE;
-				VirtioInput &ms = memory.get_mouse();
-				ms.push(VirtioInput::EV_KEY, code, (uint32_t)val);
-				ms.sync();
-			}
-		} else if (cmd == "wheel") {
-			int v = 0;
-			in >> v;
-			// DOOM has no wheel: doomgeneric's key hook carries no axis
-			// for it and DOOM itself predates the hardware.
-			if (linux_mode) {
-				VirtioInput &ms = memory.get_mouse();
-				ms.push(VirtioInput::EV_REL, VirtioInput::REL_WHEEL, (uint32_t)v);
-				ms.sync();
-			}
+	if (!input_script_path.empty()) {
+		std::ifstream f(input_script_path);
+		if (!f) {
+			std::cout << "cannot open input script: " << input_script_path << std::endl;
 		} else {
-			std::cout << "input script: unknown command '" << cmd << "'" << std::endl;
+			std::string line;
+			while (std::getline(f, line)) {
+				// Tolerate CRLF: a trailing CR turns every argument into a
+				// parse error a long way from its cause.
+				while (!line.empty() && (line.back() == '\r' || line.back() == '\n')) line.pop_back();
+				if (line.empty() || line[0] == '#') continue;
+				script_lines.push_back(line);
+			}
+			script_active = true;
+		}
+	}
+
+	// Stdin redirected from a file is known in full before the guest runs,
+	// so it is read now and fed from the CPU thread as the UART has room --
+	// deterministic, with nothing to record. A pipe or a terminal is read
+	// live by console_stdin_loop.
+	if (headless && linux_mode) {
+		struct stat st;
+		if (fstat(fileno(stdin), &st) == 0 && S_ISREG(st.st_mode)) {
+			int c;
+			// A pipe carries LF; the kernel's line discipline expects the CR
+			// a terminal sends for return.
+			while ((c = std::fgetc(stdin)) != EOF) uart_backlog.push_back((uint8_t)(c == '\n' ? '\r' : c));
+			stdin_preloaded = true;
+		}
+	}
+}
+
+void DoomSystem::submit_input(const GuestInput &in)
+{
+	std::lock_guard<std::mutex> lock(input_mutex);
+	// A paused machine drains nothing, so this has to stop somewhere.
+	if (input_incoming.size() >= (1u << 20)) return;
+	input_incoming.push_back(in);
+	input_waiting.store(true, std::memory_order_relaxed);
+}
+
+void DoomSystem::apply_input(const GuestInput &in)
+{
+	switch (in.kind) {
+	case GuestInput::Kbd:
+		memory.get_keyboard().push(in.a, in.b, (uint32_t)in.c);
+		break;
+	case GuestInput::Mouse:
+		memory.get_mouse().push(in.a, in.b, (uint32_t)in.c);
+		if (in.a == VirtioInput::EV_ABS) {
+			if (in.b == VirtioInput::ABS_X) guest_pointer_x = in.c;
+			if (in.b == VirtioInput::ABS_Y) guest_pointer_y = in.c;
+		}
+		break;
+	case GuestInput::Uart:
+		memory.get_uart().push_rx((uint8_t)in.a);
+		break;
+	case GuestInput::DoomKey:
+		memory.push_key_event(in.c != 0, (uint8_t)in.a);
+		break;
+	case GuestInput::DoomMove:
+		memory.push_mouse_motion(in.c, in.d);
+		break;
+	case GuestInput::DoomButton:
+		memory.push_mouse_button(in.a, in.c != 0);
+		break;
+	}
+}
+
+void DoomSystem::record_input(uint64_t now, const GuestInput &in)
+{
+	if (!record_file) return;
+	std::fprintf(record_file, "%llu %s %u %u %d %d\n", (unsigned long long)now,
+	             input_kind_names[in.kind], (unsigned)in.a, (unsigned)in.b, (int)in.c, (int)in.d);
+	record_dirty = true;
+}
+
+// Every input the guest can observe -- a virtio key or pointer event, a byte
+// for the serial console, a DOOM key or mouse movement -- reaches a device
+// here and nowhere else: on the CPU thread, at an instruction count that is
+// a multiple of INPUT_PERIOD. The window, stdin and the script only ask.
+//
+// That is what makes a run reproducible. Where input comes from -- a
+// script, a file, a person -- decides *which* inputs there are; this
+// decides *when* the guest sees them, and it decides it from the
+// instruction count alone. A script or a stdin file therefore produces the
+// same run every time. A person or a pipe cannot, because what they send
+// and when is outside the machine; -record captures exactly what was
+// committed and at which instruction, and -replay commits it again at the
+// same instructions, which reproduces the run.
+void DoomSystem::service_input(uint64_t now)
+{
+	if (replaying) {
+		while (replay_pos < replay_events.size() && replay_events[replay_pos].first <= now)
+			apply_input(replay_events[replay_pos++].second);
+		if (input_waiting.load(std::memory_order_relaxed)) {
+			std::lock_guard<std::mutex> lock(input_mutex);
+			input_incoming.clear();
+			input_waiting.store(false, std::memory_order_relaxed);
+		}
+		memory.pump_input();
+		return;
+	}
+
+	run_script(now);
+
+	if (input_waiting.load(std::memory_order_relaxed)) {
+		std::vector<GuestInput> batch;
+		{
+			std::lock_guard<std::mutex> lock(input_mutex);
+			batch.swap(input_incoming);
+			input_waiting.store(false, std::memory_order_relaxed);
+		}
+		for (const GuestInput &in : batch) {
+			if (in.kind == GuestInput::Uart) uart_backlog.push_back((uint8_t)in.a);
+			else commit_input(now, in);
+		}
+	}
+
+	// Serial bytes wait their turn for room in the 16-byte ring rather than
+	// being dropped, and none are sent before -expect has matched. A byte is
+	// recorded when it enters the ring, which is the moment the guest can
+	// see it.
+	if (!uart_backlog.empty() && memory.get_uart().expect_seen()) {
+		Uart &uart = memory.get_uart();
+		while (!uart_backlog.empty() && uart.try_push_rx(uart_backlog.front())) {
+			GuestInput in;
+			in.kind = GuestInput::Uart;
+			in.a = uart_backlog.front();
+			record_input(now, in);
+			uart_backlog.pop_front();
+		}
+	}
+
+	if (record_dirty) {
+		std::fflush(record_file);
+		record_dirty = false;
+	}
+	memory.pump_input();
+}
+
+void DoomSystem::run_script(uint64_t now)
+{
+	if (!script_active || !memory.get_uart().expect_seen()) return;
+	while (script_active && now >= script_due) {
+		if (script_type_pos < script_typing.size()) {
+			type_script_char(now, script_typing[script_type_pos++]);
+			script_due = now + 20 * SCRIPT_INSTR_PER_MS;
+			if (script_type_pos == script_typing.size()) {
+				script_typing.clear();
+				script_type_pos = 0;
+				script_due += 30 * SCRIPT_INSTR_PER_MS;
+			}
 			continue;
 		}
-		std::this_thread::sleep_for(std::chrono::milliseconds(30));
+		if (script_line >= script_lines.size()) {
+			script_active = false;
+			console_drain();
+			std::cout << "input script finished" << std::endl;
+			return;
+		}
+		exec_script_line(now, script_lines[script_line++]);
 	}
-	std::cout << "input script finished" << std::endl;
+}
+
+void DoomSystem::type_script_char(uint64_t now, char ch)
+{
+	GuestInput in;
+	if (!linux_mode) {
+		// DOOM's key codes are ASCII for everything printable.
+		in.kind = GuestInput::DoomKey;
+		in.a = (uint8_t)ch;
+		in.c = 1;
+		commit_input(now, in);
+		in.c = 0;
+		commit_input(now, in);
+		return;
+	}
+	for (const Chord &chord : chords) {
+		if (chord.ch != ch) continue;
+		in.kind = GuestInput::Kbd;
+		const auto key = [&](uint16_t code, int value) {
+			in.a = VirtioInput::EV_KEY; in.b = code; in.c = value;
+			commit_input(now, in);
+			in.a = VirtioInput::EV_SYN; in.b = VirtioInput::SYN_REPORT; in.c = 0;
+			commit_input(now, in);
+		};
+		if (chord.shift) key(42, 1);
+		key(chord.code, 1);
+		key(chord.code, 0);
+		if (chord.shift) key(42, 0);
+		return;
+	}
+	std::cout << "input script: no key for '" << ch << "'" << std::endl;
+}
+
+void DoomSystem::exec_script_line(uint64_t now, const std::string &line)
+{
+	std::istringstream in(line);
+	std::string cmd;
+	in >> cmd;
+	uint64_t delay = 30 * SCRIPT_INSTR_PER_MS;
+
+	const auto mouse = [&](uint16_t type, uint16_t code, int value) {
+		GuestInput ev;
+		ev.kind = GuestInput::Mouse; ev.a = type; ev.b = code; ev.c = value;
+		commit_input(now, ev);
+		ev.a = VirtioInput::EV_SYN; ev.b = VirtioInput::SYN_REPORT; ev.c = 0;
+		commit_input(now, ev);
+	};
+
+	if (cmd == "sleep") {
+		std::string ms;
+		in >> ms;
+		script_due = now + parse_count(ms) * SCRIPT_INSTR_PER_MS;
+		return;
+	}
+	if (cmd == "wait") {
+		std::string n;
+		in >> n;
+		script_due = now + parse_count(n);
+		return;
+	}
+	if (cmd == "key") {
+		int code = 0, val = 0;
+		in >> code >> val;
+		GuestInput ev;
+		if (linux_mode) {
+			ev.kind = GuestInput::Kbd; ev.a = VirtioInput::EV_KEY; ev.b = (uint16_t)code; ev.c = val;
+			commit_input(now, ev);
+			ev.a = VirtioInput::EV_SYN; ev.b = VirtioInput::SYN_REPORT; ev.c = 0;
+			commit_input(now, ev);
+		} else {
+			ev.kind = GuestInput::DoomKey; ev.a = (uint8_t)code; ev.c = val;
+			commit_input(now, ev);
+		}
+	} else if (cmd == "type") {
+		// The rest of the line verbatim, spaces included, so `type echo
+		// hello` does what it looks like. Typed one character per step of
+		// run_script.
+		std::string text;
+		std::getline(in, text);
+		if (!text.empty() && text[0] == ' ') text.erase(0, 1);
+		script_typing = text;
+		script_type_pos = 0;
+		script_due = now;
+		return;
+	} else if (cmd == "rel") {
+		int dx = 0, dy = 0;
+		in >> dx >> dy;
+		if (linux_mode) {
+			// The pointer is absolute, so a relative step is taken from
+			// where the committed events left it.
+			commit_pointer(now, guest_pointer_x + dx, guest_pointer_y + dy);
+		} else {
+			GuestInput ev;
+			ev.kind = GuestInput::DoomMove; ev.c = dx; ev.d = dy;
+			commit_input(now, ev);
+		}
+	} else if (cmd == "abs") {
+		int x = 0, y = 0;
+		in >> x >> y;
+		if (linux_mode) commit_pointer(now, x, y);
+	} else if (cmd == "btn") {
+		std::string which;
+		int val = 0;
+		in >> which >> val;
+		if (linux_mode) {
+			uint16_t code = VirtioInput::BTN_LEFT;
+			if (which == "right")  code = VirtioInput::BTN_RIGHT;
+			if (which == "middle") code = VirtioInput::BTN_MIDDLE;
+			mouse(VirtioInput::EV_KEY, code, val);
+		} else {
+			GuestInput ev;
+			ev.kind = GuestInput::DoomButton;
+			ev.a = (which == "right") ? 1 : (which == "middle") ? 2 : 0;
+			ev.c = val;
+			commit_input(now, ev);
+		}
+	} else if (cmd == "wheel") {
+		int v = 0;
+		in >> v;
+		// DOOM has no wheel: doomgeneric's key hook carries no axis for it.
+		if (linux_mode) mouse(VirtioInput::EV_REL, VirtioInput::REL_WHEEL, v);
+	} else {
+		std::cout << "input script: unknown command '" << cmd << "'" << std::endl;
+		delay = 0;
+	}
+	script_due = now + delay;
 }
 
 void DoomSystem::run()
@@ -1075,6 +1322,7 @@ void DoomSystem::run()
 		                      linux_mode ? Memory::LFB_H : Memory::FB_H);
 		gui.set_absolute_pointer(linux_mode);
 	}
+	prepare_input();
 	publish_snapshot();
 
 	std::thread cpu_thread(&DoomSystem::cpu_loop, this);
@@ -1085,13 +1333,6 @@ void DoomSystem::run()
 	if (!fb_dump_path.empty())
 		fbdump_thread = std::thread(&DoomSystem::fbdump_loop, this);
 
-	// A scripted input replay runs in either mode and whether or not there
-	// is a window: the point of it is to exercise the input path without a
-	// person, and DOOM needs that as much as Linux does -- more, since
-	// checking DOOM's mouse means watching the rendered view change.
-	if (!input_script_path.empty())
-		std::thread(&DoomSystem::replay_input_script, this).detach();
-
 	// Headless: nothing to draw and nothing to poll, so this thread just
 	// waits for the guest to finish and then ends the process. Without
 	// this the run would sit in the loop below forever with no window,
@@ -1101,7 +1342,8 @@ void DoomSystem::run()
 		// so a headless Linux boot could be watched but never answered --
 		// which leaves anything past a login prompt untestable except by
 		// hand, in a window, by a person. stdin covers that gap.
-		if (linux_mode) std::thread(&DoomSystem::console_stdin_loop, this).detach();
+		if (linux_mode && !stdin_preloaded && !replaying)
+			std::thread(&DoomSystem::console_stdin_loop, this).detach();
 		while (!run_finished) std::this_thread::sleep_for(std::chrono::milliseconds(1));
 		stopping = true;
 		if (fbdump_thread.joinable()) fbdump_thread.join();
@@ -1147,12 +1389,22 @@ void DoomSystem::run()
 				// a queue -- see the MMIO_MOUSE_MOVE comment in memory.hpp
 				// for why those are different shapes.
 				switch (ev.kind) {
-				case RawInputEvent::Kind::Key:
-					memory.push_key_event(ev.pressed, translate_key(ev.sdl_keysym));
+				case RawInputEvent::Kind::Key: {
+					GuestInput in;
+					in.kind = GuestInput::DoomKey;
+					in.a = translate_key(ev.sdl_keysym);
+					in.c = ev.pressed ? 1 : 0;
+					submit_input(in);
 					break;
-				case RawInputEvent::Kind::MouseMotion:
-					memory.push_mouse_motion(ev.dx, ev.dy);
+				}
+				case RawInputEvent::Kind::MouseMotion: {
+					GuestInput in;
+					in.kind = GuestInput::DoomMove;
+					in.c = ev.dx;
+					in.d = ev.dy;
+					submit_input(in);
 					break;
+				}
 				case RawInputEvent::Kind::MouseButton: {
 					// DOOM's own bit order, from d_event.h: 0 left,
 					// 1 right, 2 middle. Not evdev's, and not SDL's.
@@ -1160,7 +1412,13 @@ void DoomSystem::run()
 					if (ev.button == SDL_BUTTON_LEFT)   bit = 0;
 					if (ev.button == SDL_BUTTON_RIGHT)  bit = 1;
 					if (ev.button == SDL_BUTTON_MIDDLE) bit = 2;
-					memory.push_mouse_button(bit, ev.pressed);
+					if (bit >= 0) {
+						GuestInput in;
+						in.kind = GuestInput::DoomButton;
+						in.a = (uint16_t)bit;
+						in.c = ev.pressed ? 1 : 0;
+						submit_input(in);
+					}
 					break;
 				}
 				default:
@@ -1189,23 +1447,35 @@ void DoomSystem::run()
 				if (!ev.repeat) {
 					const uint16_t code = evdev_keycode(ev.sdl_scancode);
 					if (code) {
-						VirtioInput &kbd = memory.get_keyboard();
-						kbd.push(VirtioInput::EV_KEY, code, ev.pressed ? 1 : 0);
-						kbd.sync();
+						GuestInput in;
+						in.kind = GuestInput::Kbd;
+						in.a = VirtioInput::EV_KEY; in.b = code; in.c = ev.pressed ? 1 : 0;
+						submit_input(in);
+						in.a = VirtioInput::EV_SYN; in.b = VirtioInput::SYN_REPORT; in.c = 0;
+						submit_input(in);
 					}
 				}
 				if (ev.pressed) {
 					uint8_t bytes[4];
 					const int n = console_key_bytes(ev, bytes);
-					for (int i = 0; i < n; i++) memory.get_uart().push_rx(bytes[i]);
+					for (int i = 0; i < n; i++) {
+						GuestInput in;
+						in.kind = GuestInput::Uart;
+						in.a = bytes[i];
+						submit_input(in);
+					}
 				}
 				break;
 			}
 			case RawInputEvent::Kind::Text:
 				// Printable characters, for the serial console only. The
 				// keyboard above already sent the key that produced them.
-				for (const char *p = ev.text; *p; p++)
-					memory.get_uart().push_rx((uint8_t)*p);
+				for (const char *p = ev.text; *p; p++) {
+					GuestInput in;
+					in.kind = GuestInput::Uart;
+					in.a = (uint8_t)*p;
+					submit_input(in);
+				}
 				break;
 			case RawInputEvent::Kind::MouseMotion:
 				// Only ever over the display (poll_input drops the rest),
@@ -1218,17 +1488,23 @@ void DoomSystem::run()
 				if (ev.button == SDL_BUTTON_RIGHT)  code = VirtioInput::BTN_RIGHT;
 				if (ev.button == SDL_BUTTON_MIDDLE) code = VirtioInput::BTN_MIDDLE;
 				if (code) {
-					VirtioInput &ms = memory.get_mouse();
-					ms.push(VirtioInput::EV_KEY, code, ev.pressed ? 1 : 0);
-					ms.sync();
+					GuestInput in;
+					in.kind = GuestInput::Mouse;
+					in.a = VirtioInput::EV_KEY; in.b = code; in.c = ev.pressed ? 1 : 0;
+					submit_input(in);
+					in.a = VirtioInput::EV_SYN; in.b = VirtioInput::SYN_REPORT; in.c = 0;
+					submit_input(in);
 				}
 				break;
 			}
 			case RawInputEvent::Kind::MouseWheel: {
-				VirtioInput &ms = memory.get_mouse();
-				if (ev.dy) ms.push(VirtioInput::EV_REL, VirtioInput::REL_WHEEL, (uint32_t)ev.dy);
-				if (ev.dx) ms.push(VirtioInput::EV_REL, VirtioInput::REL_HWHEEL, (uint32_t)ev.dx);
-				ms.sync();
+				GuestInput in;
+				in.kind = GuestInput::Mouse;
+				in.a = VirtioInput::EV_REL;
+				if (ev.dy) { in.b = VirtioInput::REL_WHEEL;  in.c = ev.dy; submit_input(in); }
+				if (ev.dx) { in.b = VirtioInput::REL_HWHEEL; in.c = ev.dx; submit_input(in); }
+				in.a = VirtioInput::EV_SYN; in.b = VirtioInput::SYN_REPORT; in.c = 0;
+				submit_input(in);
 				break;
 			}
 			}

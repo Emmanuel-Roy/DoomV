@@ -353,6 +353,8 @@ riscv_doom.exe -opensbi=<f> -kernel=<f> -dtb=<f> -initrd=<f> [options]   # Linux
 | `-input=<path>` | Replay a script of keyboard and mouse events into the guest. The only way to exercise the input devices without a window and a person -- see [Input](#input). |
 | `-guidump=<path>` | Write the composed window -- dashboard included -- to this file as a binary PPM, every 60th frame. |
 | `-stopat=<n>` | Stop after exactly `n` instructions and write the machine state to `crash.log`. Two runs of the same guest with the same inputs leave identical files -- see [Determinism](#determinism). |
+| `-record=<path>` | Log every input the guest receives -- keys, pointer, serial bytes -- with the instruction it arrived at. |
+| `-replay=<path>` | Deliver a `-record` log's input at exactly those instructions, and ignore the window, stdin and `-input`. Reproduces a recorded run instruction for instruction. |
 
 `-ng` is what makes the conformance suites practical. With a window open a
 finished test never exits on its own and has to be killed from outside, so
@@ -382,6 +384,14 @@ re-guessed every time the guest changes speed.
 Newlines are translated to CR on the way in, because that is what pressing
 return sends and `ICRNL` is what the guest's line discipline is expecting.
 Feed a raw LF and the command is typed but never runs.
+
+Bytes enter the UART on the CPU thread, when its 16-byte ring has room and
+at an instruction count, never when the host happens to deliver them. So
+stdin **redirected from a file** (`riscv_doom.exe ... < commands.txt`) is
+read in full before the guest starts and produces the same run every time.
+A pipe or a terminal is live -- what arrives, and when, is up to whatever is
+on the other end -- so add `-record` to be able to reproduce it with
+`-replay`.
 
 Pick the needle carefully: it is matched against the raw byte stream, and a
 guest's output is not plain text. systemd colourises unit names, so its
@@ -482,7 +492,8 @@ rel 40 -20      # relative movement (Linux: moves the absolute pointer by that m
 abs 600 500     # Linux: put the pointer on a framebuffer pixel
 btn left 1
 wheel 1
-sleep 500       # host milliseconds, not guest
+sleep 500       # 500 x 10,000 instructions: about half a host second
+wait 2M         # two million instructions (k, M, G)
 ```
 
 <a id="drives"></a>
@@ -659,6 +670,16 @@ the periodic `-fbdump` refresh. `-stopat=<n>` is how that is checked: run the
 same boot twice, or with two builds, and the `crash.log` files -- registers,
 CSRs, the instruction count and the last 4096 instructions -- must be
 identical byte for byte.
+
+Input follows the same rule. Every key, pointer event and serial byte is
+committed on the CPU thread at an instruction count that is a multiple of
+4096, however it was produced. An `-input` script runs on that clock --
+`sleep` is a fixed number of instructions, not host time -- and stdin from a
+file is fed as the guest makes room for it, so both give the same run every
+time. A person at the window, or a live pipe, decides what arrives outside
+the machine; `-record` logs exactly what was committed and at which
+instruction, and `-replay` commits it again at the same instructions, which
+reproduces that session.
 
 The core dispatches on a plain switch statement rather than a table of
 function pointers. I went in assuming function pointers would be the

@@ -30,6 +30,7 @@ int main(int argc, char *argv[])
 	std::string shared_dir = "shared";
 	bool headless = false;
 	uint64_t stop_at = 0;
+	std::string record_path, replay_path;
 	for (int i = 1; i < argc; i++) {
 		std::string arg = argv[i];
 		if (arg.rfind("-march=", 0) == 0) {
@@ -88,6 +89,14 @@ int main(int argc, char *argv[])
 			// A folder of raw *.img files to attach as extra virtio disks,
 			// after the root disk. -drives= with nothing turns it off.
 			drives_dir = arg.substr(8);
+		} else if (arg.rfind("-record=", 0) == 0) {
+			// Log every input the guest receives, with the instruction it
+			// arrived at, so the run can be reproduced with -replay.
+			record_path = arg.substr(8);
+		} else if (arg.rfind("-replay=", 0) == 0) {
+			// Deliver a -record log's input at exactly its instructions, and
+			// nothing else.
+			replay_path = arg.substr(8);
 		} else if (arg.rfind("-stopat=", 0) == 0) {
 			// Stop after exactly this many instructions and write the
 			// machine state to crash.log. Decimal, or hex with 0x.
@@ -167,6 +176,14 @@ int main(int argc, char *argv[])
 	if (!gui_dump_path.empty()) system.set_canvas_dump(gui_dump_path.c_str());
 	if (tohost_addr) system.watch_tohost(tohost_addr);
 	if (stop_at) system.set_stop_at(stop_at);
+	if (!replay_path.empty() && !system.set_input_replay(replay_path.c_str())) {
+		std::cout << "cannot read input log: " << replay_path << "\n";
+		return -1;
+	}
+	if (!record_path.empty() && !system.set_input_record(record_path.c_str())) {
+		std::cout << "cannot write input log: " << record_path << "\n";
+		return -1;
+	}
 
 	system.run();
 	return 0;

@@ -8,9 +8,13 @@
 #include "gui.hpp"
 #include "controls.hpp"
 #include "snapshot.hpp"
+#include <cstdio>
+#include <deque>
 #include <mutex>
 #include <string>
 #include <thread>
+#include <utility>
+#include <vector>
 
 class DoomSystem {
 public:
@@ -57,6 +61,11 @@ public:
 	// this string. See console_stdin_loop.
 	void set_console_expect(const char *needle) { memory.get_uart().expect(needle); }
 	void set_input_script(const char *path) { input_script_path = path; }
+	// Input logs. -record writes every input the guest receives with the
+	// instruction count it was delivered at; -replay delivers a log's input
+	// at exactly those counts and ignores the window, stdin and -input.
+	bool set_input_record(const char *path);
+	bool set_input_replay(const char *path);
 	void set_canvas_dump(const char *path) { gui.set_canvas_dump(path); }
 
 	// Attach a raw image as the virtio-blk backing store. Returns false if
@@ -151,10 +160,56 @@ private:
 	// the definition for why a guest console needs to be reachable from a
 	// pipe at all.
 	void console_stdin_loop();
-	// Drive the virtio keyboard and mouse from a script, so they are
-	// testable without a window and a person. See the definition.
-	void replay_input_script();
+	// Guest input, delivered deterministically. See service_input.
+	struct GuestInput {
+		enum Kind : uint8_t {
+			Kbd,         // virtio keyboard: a = type, b = code, c = value
+			Mouse,       // virtio mouse:    a = type, b = code, c = value
+			Uart,        // a = byte for the serial console
+			DoomKey,     // a = doomkeys.h code, c = pressed
+			DoomMove,    // c = dx, d = dy
+			DoomButton,  // a = DOOM button bit, c = pressed
+		};
+		Kind kind = Kbd;
+		uint16_t a = 0, b = 0;
+		int32_t c = 0, d = 0;
+	};
+	// Input is committed at instruction counts that are multiples of this.
+	static constexpr uint64_t INPUT_PERIOD = 4096;
+	// An input script's `sleep` unit: instructions per millisecond, about
+	// one host millisecond at the interpreter's speed.
+	static constexpr uint64_t SCRIPT_INSTR_PER_MS = 10000;
+
+	void submit_input(const GuestInput &in);           // any thread
+	void service_input(uint64_t now);                  // CPU thread
+	void apply_input(const GuestInput &in);
+	void record_input(uint64_t now, const GuestInput &in);
+	void commit_input(uint64_t now, const GuestInput &in) { apply_input(in); record_input(now, in); }
+	void prepare_input();
+
+	std::mutex input_mutex;
+	std::vector<GuestInput> input_incoming;            // submitted, not yet committed
+	std::atomic<bool> input_waiting{false};
+	std::deque<uint8_t> uart_backlog;                  // CPU thread
+	bool stdin_preloaded = false;
+
+	std::FILE *record_file = nullptr;
+	bool record_dirty = false;
+	std::vector<std::pair<uint64_t, GuestInput>> replay_events;
+	size_t replay_pos = 0;
+	bool replaying = false;
+
+	// The -input script, run by the CPU thread. See run_script.
 	std::string input_script_path;
+	std::vector<std::string> script_lines;
+	size_t script_line = 0;
+	uint64_t script_due = 0;
+	bool script_active = false;
+	std::string script_typing;
+	size_t script_type_pos = 0;
+	void run_script(uint64_t now);
+	void exec_script_line(uint64_t now, const std::string &line);
+	void type_script_char(uint64_t now, char ch);
 
 	// CPU execution runs on its own thread so the window isn't blocked on
 	// (or blocking) instruction bursts. Only this thread ever touches
@@ -184,10 +239,10 @@ private:
 	std::thread display_thread, dashboard_thread;
 	std::atomic<bool> stopping{false};
 
-	// Where the guest's absolute pointer is, in framebuffer pixels. Set by
-	// the window thread from real motion and read by an input script's
-	// `rel`, so a relative step in a script starts from where the pointer
-	// actually is.
-	std::atomic<int> pointer_x{Memory::LFB_W / 2}, pointer_y{Memory::LFB_H / 2};
+	// Where the committed ABS events have left the guest's pointer, in
+	// framebuffer pixels -- what a script's `rel` steps from. CPU thread.
+	int guest_pointer_x = Memory::LFB_W / 2, guest_pointer_y = Memory::LFB_H / 2;
+	// The window's pointer: submits an absolute move.
 	void move_pointer(int x, int y);
+	void commit_pointer(uint64_t now, int x, int y);
 };
