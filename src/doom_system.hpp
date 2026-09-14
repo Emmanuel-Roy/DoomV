@@ -10,6 +10,7 @@
 #include "snapshot.hpp"
 #include <mutex>
 #include <string>
+#include <thread>
 
 class DoomSystem {
 public:
@@ -40,6 +41,12 @@ public:
 	// the snapshot and the key queue.
 	std::atomic<bool> resume_requested{false};
 	void watch_tohost(uint64_t addr);
+	// Stop after exactly `n` instructions and write the machine state to
+	// crash.log. The machine is deterministic: the same guest with the same
+	// inputs must produce the same file on every run -- registers, CSRs,
+	// instruction count and the last 4096 instructions -- whatever the
+	// host's threads were doing meanwhile. This is how that is checked.
+	void set_stop_at(uint64_t n) { stop_at = n; }
 
 	// Headless: no SDL window, and the process exits as soon as the guest
 	// stops rather than sitting in a render loop nobody is watching. A
@@ -149,12 +156,38 @@ private:
 	void replay_input_script();
 	std::string input_script_path;
 
-	// CPU execution runs on its own thread so rendering isn't blocked on
+	// CPU execution runs on its own thread so the window isn't blocked on
 	// (or blocking) instruction bursts. Only this thread ever touches
-	// memory/regs/core/decoder/debugger directly; it hands the render
-	// thread a Snapshot copy after every burst instead.
+	// memory/regs/core/decoder/debugger directly; it hands the dashboard
+	// thread a register Snapshot after every burst instead. Pixels go the
+	// other way round: the display thread reads the framebuffer itself.
 	void cpu_loop();
 	void publish_snapshot();
 	std::mutex snapshot_mutex;
 	Snapshot shared_snapshot;
+	uint64_t snapshot_seq = 0;   // CPU thread only
+	uint64_t stop_at = 0;
+	void stop_at_limit();
+
+	// The periodic -fbdump refresh, on a thread of its own. The dumps taken
+	// when a run stops stay on the CPU thread, which has nothing left to do.
+	void fbdump_loop();
+	void write_framebuffer_dump(const uint32_t *px);
+	std::thread fbdump_thread;
+	std::mutex fb_dump_mutex;
+
+	// The window's two producers, each on a thread of its own. The display
+	// thread takes whole frames out of the guest framebuffer; the dashboard
+	// thread draws the panels from shared_snapshot. See their definitions.
+	void display_loop();
+	void dashboard_loop();
+	std::thread display_thread, dashboard_thread;
+	std::atomic<bool> stopping{false};
+
+	// Where the guest's absolute pointer is, in framebuffer pixels. Set by
+	// the window thread from real motion and read by an input script's
+	// `rel`, so a relative step in a script starts from where the pointer
+	// actually is.
+	std::atomic<int> pointer_x{Memory::LFB_W / 2}, pointer_y{Memory::LFB_H / 2};
+	void move_pointer(int x, int y);
 };

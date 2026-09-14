@@ -479,34 +479,26 @@ DashLayout compact_layout(int canvas_w, int canvas_h)
 
 } // namespace
 
-void Gui::render(const Snapshot &snap)
+namespace {
+// The fallback layout's display box, in design units: 280x175 at (10,7), the
+// same 1.6 aspect ratio the box has always had. Its y matches the CSRS and
+// REGISTER FILE headers so the display's top edge lines up with them. The
+// CSRS panel anchors off the box's right edge and the trace log off its
+// bottom, so neither needs a second edit if this box ever moves.
+constexpr int GAME_BOX_X = 10, GAME_BOX_Y = 7, GAME_BOX_W = 280, GAME_BOX_H = 175;
+constexpr uint32_t DASH_BG = 0x876A96;
+}
+
+void Gui::set_guest_display(int w, int h)
 {
-	resize_canvas_if_needed();
+	guest_w = w;
+	guest_h = h;
+	frame.assign((size_t)w * (size_t)h, 0);
+	frame_shown.assign((size_t)w * (size_t)h, 0);
+}
 
-	std::fill(screen_buf.begin(), screen_buf.end(), 0x876A96);
-
-	uint32_t pal_pink  = 0xD580B8;
-	uint32_t pal_white = 0xD7D0D0;
-	uint32_t pal_red   = 0xB95167;
-	uint32_t pal_dark  = 0x25080C;
-	uint32_t pal_stats = 0xC3A9C4;
-
-	// GAME SCREEN: design box is 280x175 at (10,7) -- same box, same 1.6
-	// aspect ratio, just rescaled 2/3 alongside DESIGN_W/H's own 960x540
-	// -> 640x360 shrink (see gui.hpp) so it renders at the same actual
-	// screen size as before. GAME_BOX_Y=7 matches the CSRS/REGISTER FILE
-	// headers' own y (see their draw_shadow_text calls below) so the
-	// display's top edge lines up with them instead of starting lower.
-	// GAME_BOX_* are the design-unit source of truth -- the CSRS panel
-	// below anchors off the box's own right edge, and TRACE LOG's own y
-	// tracks its bottom edge, so neither needs a second edit if this box
-	// ever moves again.
-	const int GAME_BOX_X = 10, GAME_BOX_Y = 7, GAME_BOX_W = 280, GAME_BOX_H = 175;
-	int box_x = (int)(GAME_BOX_X * scale_x);
-	int box_y = (int)(GAME_BOX_Y * scale_y);
-	int box_w = (int)(GAME_BOX_W * scale_x);
-	int box_h = (int)(GAME_BOX_H * scale_y);
-
+Gui::Rect Gui::display_rect(bool full, bool *compact_out) const
+{
 	// With room for it -- a 1920x1080 canvas -- every guest gets the
 	// compact layout: its display on the left in the console-sized area, and
 	// the CSRS, register file and trace log in one column beside it. See
@@ -518,36 +510,48 @@ void Gui::render(const Snapshot &snap)
 	// Either way a source of a different shape from its box is letterboxed
 	// rather than stretched, and Ctrl+Alt+F hands a Linux framebuffer the
 	// whole window.
-	const bool fb_is_linux = (snap.fb_w != Memory::FB_W || snap.fb_h != Memory::FB_H);
-	const bool fb_fullscreen = fb_is_linux && fb_full;
-	const bool compact = !fb_fullscreen
-	                     && canvas_w >= COMPACT_MIN_W && canvas_h >= COMPACT_MIN_H;
-	if (fb_fullscreen) {
-		box_x = 0; box_y = 0; box_w = canvas_w; box_h = canvas_h;
-	}
-	const DashLayout L = compact ? compact_layout(canvas_w, canvas_h)
-	                             : doom_layout(GAME_BOX_X, GAME_BOX_Y, GAME_BOX_W, GAME_BOX_H);
+	const bool fullscreen = guest_is_linux() && full;
+	const bool compact = !fullscreen && canvas_w >= COMPACT_MIN_W && canvas_h >= COMPACT_MIN_H;
+	if (compact_out) *compact_out = compact;
+
+	Rect r{ (int)(GAME_BOX_X * scale_x), (int)(GAME_BOX_Y * scale_y),
+	        (int)(GAME_BOX_W * scale_x), (int)(GAME_BOX_H * scale_y) };
+	if (fullscreen) r = { 0, 0, canvas_w, canvas_h };
 	if (compact) {
 		// The display area is the console's size whatever the guest is, so
 		// the column beside it does not move between guests.
-		box_x = L.box_x; box_y = L.box_y;
-		box_w = Memory::LFB_W; box_h = Memory::LFB_H;
+		const DashLayout L = compact_layout(canvas_w, canvas_h);
+		r = { L.box_x, L.box_y, Memory::LFB_W, Memory::LFB_H };
 	}
-	if ((fb_is_linux || compact) && snap.fb_w > 0 && snap.fb_h > 0) {
+	if ((guest_is_linux() || compact) && guest_w > 0 && guest_h > 0) {
 		// Fit, preserving aspect: shrink the long axis and re-centre in
 		// whichever dimension gave way.
-		const long long by_w = (long long)box_w * snap.fb_h;
-		const long long by_h = (long long)box_h * snap.fb_w;
+		const long long by_w = (long long)r.w * guest_h;
+		const long long by_h = (long long)r.h * guest_w;
 		if (by_w > by_h) {
-			const int fit_w = (int)(by_h / snap.fb_h);
-			box_x += (box_w - fit_w) / 2;
-			box_w = fit_w;
+			const int fit_w = (int)(by_h / guest_h);
+			r.x += (r.w - fit_w) / 2;
+			r.w = fit_w;
 		} else if (by_h > by_w) {
-			const int fit_h = (int)(by_w / snap.fb_w);
-			box_y += (box_h - fit_h) / 2;
-			box_h = fit_h;
+			const int fit_h = (int)(by_w / guest_w);
+			r.y += (r.h - fit_h) / 2;
+			r.h = fit_h;
 		}
 	}
+	return r;
+}
+
+void Gui::submit_frame(std::vector<uint32_t> &pixels)
+{
+	std::lock_guard<std::mutex> lock(frame_mutex);
+	if (pixels.size() != frame.size()) return;
+	frame.swap(pixels);
+	frame_seq++;
+}
+
+void Gui::blit_display(const Rect &r)
+{
+	const int box_x = r.x, box_y = r.y, box_w = r.w, box_h = r.h;
 
 	// Bilinear, not nearest-neighbor: at native 320x200 scaled ~3-4x, hard
 	// pixel blocks looked wrong for the game view (dashboard text stays
@@ -568,45 +572,45 @@ void Gui::render(const Snapshot &snap)
 	// going into. Interpolation is only right when scaling up, and at the
 	// compact layout's exact 1:1 this makes the copy exact by construction
 	// rather than by a blend weight happening to come out as zero.
-	const bool nearest = (snap.fb_w >= box_w || snap.fb_h >= box_h);
+	const bool nearest = (guest_w >= box_w || guest_h >= box_h);
 	if (box_w != last_box_w || box_h != last_box_h
-	    || snap.fb_w != last_src_w || snap.fb_h != last_src_h) {
+	    || guest_w != last_src_w || guest_h != last_src_h) {
 		sx_lut.resize(box_w > 0 ? box_w : 0);
 		sy_lut.resize(box_h > 0 ? box_h : 0);
 		for (int x = 0; x < box_w; x++) {
-			float src = ((float)x + 0.5f) * snap.fb_w / box_w - 0.5f;
+			float src = ((float)x + 0.5f) * guest_w / box_w - 0.5f;
 			int i0 = (int)std::floor(src);
 			float frac = src - (float)i0;
 			if (i0 < 0) { i0 = 0; frac = 0.0f; }
-			if (i0 >= snap.fb_w) i0 = snap.fb_w - 1;
-			int i1 = (i0 + 1 < snap.fb_w) ? i0 + 1 : i0;
+			if (i0 >= guest_w) i0 = guest_w - 1;
+			int i1 = (i0 + 1 < guest_w) ? i0 + 1 : i0;
 			if (nearest) { if (frac >= 0.5f) i0 = i1; i1 = i0; frac = 0.0f; }
 			sx_lut[x] = { i0, i1, (uint32_t)(frac * 256.0f) };
 		}
 		for (int y = 0; y < box_h; y++) {
-			float src = ((float)y + 0.5f) * snap.fb_h / box_h - 0.5f;
+			float src = ((float)y + 0.5f) * guest_h / box_h - 0.5f;
 			int i0 = (int)std::floor(src);
 			float frac = src - (float)i0;
 			if (i0 < 0) { i0 = 0; frac = 0.0f; }
-			if (i0 >= snap.fb_h) i0 = snap.fb_h - 1;
-			int i1 = (i0 + 1 < snap.fb_h) ? i0 + 1 : i0;
+			if (i0 >= guest_h) i0 = guest_h - 1;
+			int i1 = (i0 + 1 < guest_h) ? i0 + 1 : i0;
 			if (nearest) { if (frac >= 0.5f) i0 = i1; i1 = i0; frac = 0.0f; }
 			sy_lut[y] = { i0, i1, (uint32_t)(frac * 256.0f) };
 		}
 		last_box_w = box_w;
 		last_box_h = box_h;
-		last_src_w = snap.fb_w;
-		last_src_h = snap.fb_h;
+		last_src_w = guest_w;
+		last_src_h = guest_h;
 	}
 
-	const uint32_t *fb32 = snap.framebuffer.data();
+	const uint32_t *fb32 = frame_shown.data();
 	for (int y = 0; y < box_h; y++) {
 		int ty = box_y + y;
 		if (ty < 0 || ty >= canvas_h) continue;
 
 		const Sample &ys = sy_lut[y];
-		const uint32_t *row0 = fb32 + (size_t)ys.i0 * snap.fb_w;
-		const uint32_t *row1 = fb32 + (size_t)ys.i1 * snap.fb_w;
+		const uint32_t *row0 = fb32 + (size_t)ys.i0 * guest_w;
+		const uint32_t *row1 = fb32 + (size_t)ys.i1 * guest_w;
 		uint32_t *dst_row = &screen_buf[(size_t)ty * canvas_w];
 
 		for (int x = 0; x < box_w; x++) {
@@ -629,17 +633,25 @@ void Gui::render(const Snapshot &snap)
 			dst_row[tx] = out;
 		}
 	}
+}
 
-	// Only in the full-window mode is there nowhere to put the
-	// dashboard. Half-drawing it over the guest's console would be worse
-	// than not drawing it, so present and return.
-	if (fb_fullscreen) {
-		SDL_UpdateTexture(texture, nullptr, screen_buf.data(), canvas_w * (int)sizeof(uint32_t));
-		SDL_RenderCopy(renderer, texture, nullptr, nullptr);
-		dump_canvas();
-		SDL_RenderPresent(renderer);
-		return;
-	}
+void Gui::render_dashboard(const Snapshot &snap)
+{
+	uint32_t pal_pink  = 0xD580B8;
+	uint32_t pal_white = 0xD7D0D0;
+	uint32_t pal_red   = 0xB95167;
+	uint32_t pal_dark  = 0x25080C;
+	uint32_t pal_stats = 0xC3A9C4;
+
+	// Always the layout that shares the window. In the full-window mode the
+	// compositor does not show this layer, but it is kept current so that
+	// leaving that mode shows the machine's state now, not from before.
+	bool compact = false;
+	display_rect(false, &compact);
+	const DashLayout L = compact ? compact_layout(canvas_w, canvas_h)
+	                             : doom_layout(GAME_BOX_X, GAME_BOX_Y, GAME_BOX_W, GAME_BOX_H);
+
+	dash_work.assign((size_t)canvas_w * (size_t)canvas_h, DASH_BG);
 
 	char buf[96];
 
@@ -758,7 +770,51 @@ void Gui::render(const Snapshot &snap)
 		}
 	}
 
-	SDL_UpdateTexture(texture, nullptr, screen_buf.data(), canvas_w * 4);
+	std::lock_guard<std::mutex> lock(dash_mutex);
+	dash_ready.swap(dash_work);
+	dash_seq++;
+}
+
+void Gui::present()
+{
+	// Composite only when something changed: a new guest frame, a new
+	// dashboard, or the full-window mode toggling. Otherwise the texture
+	// already holds the right picture and presenting it again is free.
+	bool changed = false;
+	{
+		std::lock_guard<std::mutex> lock(frame_mutex);
+		if (frame_seq != frame_seen) {
+			frame_shown.swap(frame);
+			frame_seen = frame_seq;
+			changed = true;
+		}
+	}
+	{
+		std::lock_guard<std::mutex> lock(dash_mutex);
+		if (dash_seq != dash_seen) {
+			dash_shown.swap(dash_ready);
+			dash_seen = dash_seq;
+			changed = true;
+		}
+	}
+	if (fb_full != composed_full) {
+		composed_full = fb_full;
+		changed = true;
+	}
+
+	if (changed) {
+		// In the full-window mode there is nowhere to put the dashboard, and
+		// half-drawing it over the guest's console would be worse than not
+		// drawing it.
+		const bool fullscreen = guest_is_linux() && fb_full;
+		if (!fullscreen && dash_shown.size() == screen_buf.size())
+			std::copy(dash_shown.begin(), dash_shown.end(), screen_buf.begin());
+		else
+			std::fill(screen_buf.begin(), screen_buf.end(), DASH_BG);
+		blit_display(display_rect(fb_full));
+		SDL_UpdateTexture(texture, nullptr, screen_buf.data(), canvas_w * (int)sizeof(uint32_t));
+	}
+
 	SDL_RenderCopy(renderer, texture, nullptr, nullptr);
 	dump_canvas();
 	SDL_RenderPresent(renderer);
@@ -794,11 +850,65 @@ void Gui::dump_canvas()
 
 void Gui::set_mouse_captured(bool on)
 {
-	// SDL_SetRelativeMouseMode hides the cursor, warps it back to the
-	// centre after every motion event, and reports deltas -- which is the
-	// only way to give a guest a pointer that can keep moving in one
-	// direction. SDL_TRUE/FALSE rather than a bool: this is the C API.
-	if (SDL_SetRelativeMouseMode(on ? SDL_TRUE : SDL_FALSE) == 0) captured = on;
+	captured = on;
+	apply_mouse_rect();
+	if (absolute_pointer) {
+		// The guest's cursor follows the host pointer exactly, so there is
+		// nothing to warp and no deltas to ask for: confine the pointer to
+		// the display and hide the host's copy of it. Start it inside, or
+		// the first motion would be clamped from wherever it was.
+		SDL_ShowCursor(on ? SDL_DISABLE : SDL_ENABLE);
+		if (on) {
+			const Rect r = display_rect(fb_full);
+			SDL_WarpMouseInWindow(window, r.x + r.w / 2, r.y + r.h / 2);
+		}
+	} else {
+		// SDL_SetRelativeMouseMode hides the cursor, warps it back after
+		// every motion event, and reports deltas -- the only way to give
+		// DOOM a pointer that can keep turning in one direction.
+		if (SDL_SetRelativeMouseMode(on ? SDL_TRUE : SDL_FALSE) != 0 && on) {
+			captured = false;
+			apply_mouse_rect();
+		}
+	}
+}
+
+void Gui::apply_mouse_rect()
+{
+	// The display area, not the window. The rest of the window is the
+	// dashboard, and a pointer that can wander over it while captured is a
+	// pointer that stops following the guest.
+	if (!window) return;
+	if (captured) {
+		const Rect r = display_rect(fb_full);
+		const SDL_Rect sr{ r.x, r.y, r.w, r.h };
+		SDL_SetWindowMouseRect(window, &sr);
+	} else {
+		SDL_SetWindowMouseRect(window, nullptr);
+	}
+}
+
+void Gui::toggle_fb_fullscreen()
+{
+	fb_full = !fb_full;
+	// The display just changed size, so a captured pointer's fence has to
+	// move with it.
+	apply_mouse_rect();
+}
+
+bool Gui::map_pointer(int wx, int wy, int &gx, int &gy) const
+{
+	// SDL reports the pointer in window coordinates, which are canvas
+	// pixels: the process is per-monitor DPI aware (see init), so there is
+	// no logical-to-physical scale between them.
+	const Rect r = display_rect(fb_full);
+	if (r.w <= 0 || r.h <= 0 || guest_w <= 0 || guest_h <= 0) return false;
+	const bool inside = wx >= r.x && wx < r.x + r.w && wy >= r.y && wy < r.y + r.h;
+	long long x = (long long)(wx - r.x) * guest_w / r.w;
+	long long y = (long long)(wy - r.y) * guest_h / r.h;
+	gx = (int)(x < 0 ? 0 : x >= guest_w ? guest_w - 1 : x);
+	gy = (int)(y < 0 ? 0 : y >= guest_h ? guest_h - 1 : y);
+	return inside;
 }
 
 std::vector<RawInputEvent> Gui::poll_input()
@@ -840,14 +950,23 @@ std::vector<RawInputEvent> Gui::poll_input()
 			events.push_back(ev);
 			break;
 		}
+		// The mouse belongs to the guest only over its display. Everywhere
+		// else in the window is the dashboard, so motion there is not
+		// reported at all, and neither is a click. The one exception is a
+		// release whose press was reported: dropping that would leave the
+		// guest holding a button down after the pointer wandered off.
 		case SDL_MOUSEMOTION: {
-			// xrel/yrel are deltas in both modes, so this works captured
-			// or not; uncaptured it just stops at the window edge.
-			if (e.motion.xrel == 0 && e.motion.yrel == 0) break;
 			RawInputEvent ev;
 			ev.kind = RawInputEvent::Kind::MouseMotion;
 			ev.dx = e.motion.xrel;
 			ev.dy = e.motion.yrel;
+			if (captured && !absolute_pointer) {
+				// Relative mode: the pointer is hidden and pinned, so its
+				// position means nothing and only the deltas count.
+				if (ev.dx == 0 && ev.dy == 0) break;
+			} else if (!map_pointer(e.motion.x, e.motion.y, ev.x, ev.y)) {
+				break;
+			}
 			events.push_back(ev);
 			break;
 		}
@@ -857,6 +976,16 @@ std::vector<RawInputEvent> Gui::poll_input()
 			ev.kind = RawInputEvent::Kind::MouseButton;
 			ev.button = e.button.button;
 			ev.pressed = (e.type == SDL_MOUSEBUTTONDOWN);
+			const uint32_t bit = 1u << (ev.button & 31);
+			const bool inside = map_pointer(e.button.x, e.button.y, ev.x, ev.y)
+			                    || (captured && !absolute_pointer);
+			if (ev.pressed) {
+				if (!inside) break;
+				buttons_down |= bit;
+			} else {
+				if (!(buttons_down & bit)) break;
+				buttons_down &= ~bit;
+			}
 			events.push_back(ev);
 			break;
 		}
@@ -865,6 +994,9 @@ std::vector<RawInputEvent> Gui::poll_input()
 			ev.kind = RawInputEvent::Kind::MouseWheel;
 			ev.dx = e.wheel.x;
 			ev.dy = e.wheel.y;
+			const bool inside = map_pointer(e.wheel.mouseX, e.wheel.mouseY, ev.x, ev.y)
+			                    || (captured && !absolute_pointer);
+			if (!inside) break;
 			events.push_back(ev);
 			break;
 		}
@@ -923,7 +1055,7 @@ void Gui::draw_char(int x, int y, char c, uint32_t col, float scale_x_, float sc
 
 			for (int ty = py0; ty < py1; ty++) {
 				if (ty < 0 || ty >= canvas_h) continue;
-				uint32_t *row = &screen_buf[(size_t)ty * canvas_w];
+				uint32_t *row = &dash_work[(size_t)ty * canvas_w];
 				for (int tx = px0; tx < px1; tx++) {
 					if (tx < 0 || tx >= canvas_w) continue;
 					row[tx] = col;

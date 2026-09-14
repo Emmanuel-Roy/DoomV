@@ -1,4 +1,5 @@
 #pragma once
+#include <vector>
 // virtio-blk over the MMIO transport.
 //
 // This is what a real root filesystem needs. Until now DoomV could boot
@@ -101,6 +102,7 @@ private:
 	FILE *file = nullptr;
 	uint64_t capacity = 0;   // bytes
 	bool ro = false;
+	std::vector<uint8_t> io_buf;   // one request's data, between the file and guest RAM
 
 	uint32_t status = 0;
 	uint32_t device_feat_sel = 0;

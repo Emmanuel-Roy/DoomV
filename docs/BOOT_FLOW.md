@@ -101,7 +101,7 @@ For the Linux path, also obtain the pinned firmware, kernel and BusyBox source. 
 2. `parse_march` runs only if explicitly requested. Omitting it preserves the broad `ExtensionConfig` defaults; passing a string can disable features the default enables. The parser is not a profile validator.
 3. Constructing `DoomSystem` constructs registers, memory, core and decoder. Registers start in M mode with virtualization false. Integer/FP/vector storage and generic CSRs are zeroed; `vtype.vill` starts set and `vl=0`.
 4. The selected initialization routine creates the SDL GUI and loads guest data. The host supplies a starting PC; it does not run a hardware ROM reset vector first.
-5. `run()` starts a detached CPU thread. The original thread polls SDL input and renders snapshots. The CPU performs bursts of up to 200,000 `step()` calls before publishing a snapshot, delivering queued keyboard and mouse input every 4,096 steps within a burst. `run()` also publishes one snapshot before the CPU thread starts, so the first frame already has the guest's display geometry.
+5. `run()` starts a detached CPU thread. The original thread polls SDL input and composites what a display thread (whole guest frames) and a dashboard thread (the register panels) hand it. The CPU performs bursts of up to 200,000 `step()` calls before publishing a snapshot, delivering queued keyboard and mouse input every 4,096 steps within a burst. `run()` also publishes one snapshot before the CPU thread starts, so the first frame already has the guest's display geometry.
 6. Each step first tests pending enabled interrupts. If one is taken, trap entry redirects PC and the step advances the modeled timer without executing the instruction formerly at PC.
 7. Otherwise, the host checks PC breakpoints, translates the instruction address and fetches the first 16 bits. If those bits describe a 32-bit instruction, it translates and fetches the next halfword separately. This matters at page/PMP boundaries.
 8. The decoder identifies the extension and fields, checks configuration/state, then calls its execution handler. A cache keyed by PC **and current raw bytes** avoids repeated decode work without using stale self-modified instructions.
@@ -150,7 +150,7 @@ The project [platform main](../tools/doom/doombuild/doomgeneric_doomv.c) supplie
 
 In the [pinned doomgeneric entry source](https://github.com/ozkl/doomgeneric/blob/dcb7a8dbc7a16ce3dda29382ac9aae9d77d21284/doomgeneric/doomgeneric.c), creation saves arguments, handles response-file processing, allocates `DG_ScreenBuffer`, calls `DG_Init` and enters `D_DoomMain` initialization. DoomV's `DG_Init` is empty because the host GUI already exists. Thereafter engine ticking performs game work and uses the DG platform callbacks when it needs time, input or display.
 
-`DG_DrawFrame` writes every 32-bit pixel in `DG_ScreenBuffer` to the memory-mapped framebuffer. Those guest stores are interpreted like other stores until physical bus dispatch reaches the framebuffer region. The host copies framebuffer bytes into a snapshot; SDL renders that snapshot. There is no simulated GPU running the DOOM renderer: the guest CPU computes pixels and the host displays them.
+`DG_DrawFrame` writes every 32-bit pixel in `DG_ScreenBuffer` to the memory-mapped framebuffer. Those guest stores are interpreted like other stores until physical bus dispatch reaches the framebuffer region. A host display thread copies the framebuffer once DOOM has stopped writing a frame, and SDL shows that copy. There is no simulated GPU running the DOOM renderer: the guest CPU computes pixels and the host displays them.
 
 Input travels the opposite way. SDL key events are translated to DOOM codes and queued by the host. `DG_GetKey` reads the MMIO input word, which pops one event. Bits 15:8 carry pressed/released state and bits 7:0 the key code. A zero result means no event.
 
@@ -390,7 +390,7 @@ the documented SBI console path:
 2. The kernel's SBI console driver requests a firmware service. Its S-mode
    ECALL enters OpenSBI's M-mode handler.
 3. Firmware polls or writes the UART register interface.
-4. DoomV's `Uart::write` prints and flushes the byte to host stdout.
+4. DoomV's `Uart::write` queues the byte, and a console output thread writes it to host stdout.
 
 ECALL is the transfer mechanism, not the service identifier by itself.
 For modern SBI calls, `a7` selects an extension and `a6` a function; arguments

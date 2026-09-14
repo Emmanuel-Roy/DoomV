@@ -250,12 +250,13 @@ void Memory::write8(uint64_t addr, uint8_t val)
 		ram[addr - RAM_BASE] = val;
 	} else if (addr >= LFB_BASE && addr < LFB_BASE + LFB_SIZE) {
 		lfb[addr - LFB_BASE] = val;
+		lfb_gen.store(lfb_gen.load(std::memory_order_relaxed) + 1, std::memory_order_relaxed);
 	} else if (addr >= MMIO_FB && addr < MMIO_FB + FB_SIZE) {
 		fb[addr - MMIO_FB] = val;
 		fb_write_count++;
+		fb_gen.store(fb_gen.load(std::memory_order_relaxed) + 1, std::memory_order_relaxed);
 	} else if (addr == MMIO_DEBUG) {
-		std::putchar(val);
-		std::fflush(stdout);
+		console_put(val);
 	} else if (addr >= UART_BASE && addr < UART_BASE + UART_SIZE) {
 		uart.write(addr - UART_BASE, val);
 	} else if (addr >= VIRTIO_KBD_BASE && addr < VIRTIO_KBD_BASE + VIRTIO_SIZE) {
@@ -263,6 +264,26 @@ void Memory::write8(uint64_t addr, uint8_t val)
 	} else if (addr >= VIRTIO_MOUSE_BASE && addr < VIRTIO_MOUSE_BASE + VIRTIO_SIZE) {
 		mouse_dev.write8(addr - VIRTIO_MOUSE_BASE, val);
 	}
+}
+
+void Memory::read_bytes(uint64_t addr, uint8_t *out, size_t len)
+{
+	const uint64_t span = RAM_SIZE + WAD_SIZE;
+	if (addr >= RAM_BASE && addr - RAM_BASE <= span && len <= span - (addr - RAM_BASE)) {
+		std::memcpy(out, &ram[addr - RAM_BASE], len);
+		return;
+	}
+	for (size_t i = 0; i < len; i++) out[i] = read8(addr + i);
+}
+
+void Memory::write_bytes(uint64_t addr, const uint8_t *data, size_t len)
+{
+	const uint64_t span = RAM_SIZE + WAD_SIZE;
+	if (addr >= RAM_BASE && addr - RAM_BASE <= span && len <= span - (addr - RAM_BASE)) {
+		std::memcpy(&ram[addr - RAM_BASE], data, len);
+		return;
+	}
+	for (size_t i = 0; i < len; i++) write8(addr + i, data[i]);
 }
 
 uint32_t Memory::take_fb_write_count()
@@ -310,8 +331,7 @@ void Memory::check_tohost()
 	const uint8_t command = (uint8_t)(v >> 48);
 
 	if (device == 1 && command == 1) {
-		std::putchar((int)(v & 0xFF));
-		std::fflush(stdout);
+		console_put((uint8_t)(v & 0xFF));
 		// Acknowledging is the whole protocol.
 		write32(tohost_addr + 0, 0);
 		write32(tohost_addr + 4, 0);
@@ -367,6 +387,7 @@ void Memory::write32(uint64_t addr, uint32_t val)
 
 	if (addr >= LFB_BASE && addr <= LFB_BASE + LFB_SIZE - 4) {
 		std::memcpy(&lfb[addr - LFB_BASE], &val, sizeof(val));
+		lfb_gen.store(lfb_gen.load(std::memory_order_relaxed) + 1, std::memory_order_relaxed);
 		return;
 	}
 

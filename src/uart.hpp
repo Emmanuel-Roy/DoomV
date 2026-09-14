@@ -67,3 +67,20 @@ private:
 	uint8_t mcr;
 	uint8_t scr;
 };
+
+// The guest's console output, written to the host by a thread of its own.
+//
+// Every byte a guest prints used to be a putchar and an fflush on the CPU
+// thread -- a system call per character, and a Windows console or pipe
+// write can take a good fraction of a millisecond. A kernel log is
+// megabytes. None of that is visible to the guest: the transmitter always
+// reads as empty and nothing waits on the host having written anything, so
+// moving the write elsewhere cannot change a single instruction. Bytes
+// queue in order and a writer thread sends them in batches.
+//
+// console_put is the producer, from the CPU thread. console_drain blocks
+// until everything put before the call has been written; call it before
+// printing anything of the host's own that should come after the guest's
+// output. It also runs at exit.
+void console_put(uint8_t byte);
+void console_drain();

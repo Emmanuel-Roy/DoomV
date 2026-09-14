@@ -1,4 +1,11 @@
 #include "uart.hpp"
+#include <chrono>
+#include <condition_variable>
+#include <cstdio>
+#include <cstdlib>
+#include <mutex>
+#include <string>
+#include <thread>
 #include <cstdio>
 
 namespace {
@@ -49,8 +56,7 @@ void Uart::write(uint64_t offset, uint8_t val)
 {
 	switch (offset) {
 	case UART_RBR_THR:
-		std::putchar(val);
-		std::fflush(stdout);
+		console_put(val);
 		if (!expect_hit) {
 			// Plain incremental match. Restarting at 0 rather than doing
 			// the KMP fallback costs nothing here and cannot miss a
@@ -92,3 +98,74 @@ bool Uart::try_push_rx(uint8_t byte)
 	rx_tail = next;
 	return true;
 }
+
+namespace {
+
+class ConsoleOut {
+public:
+	ConsoleOut() : worker(&ConsoleOut::run, this) { worker.detach(); }
+
+	void put(uint8_t byte)
+	{
+		std::lock_guard<std::mutex> lock(m);
+		pending.push_back((char)byte);
+		queued++;
+	}
+
+	void drain()
+	{
+		// Up to what was queued when asked, not until the queue is empty:
+		// a guest that never stops printing would otherwise never let this
+		// return.
+		std::unique_lock<std::mutex> lock(m);
+		const uint64_t target = queued;
+		wake.notify_one();
+		idle.wait(lock, [&] { return written >= target; });
+	}
+
+private:
+	void run()
+	{
+		std::string batch;
+		std::unique_lock<std::mutex> lock(m);
+		for (;;) {
+			// A short poll rather than a notify per byte, which would put
+			// back a system call per character on the CPU thread.
+			wake.wait_for(lock, std::chrono::milliseconds(2), [&] { return !pending.empty(); });
+			if (pending.empty()) continue;
+			batch.swap(pending);
+			lock.unlock();
+			std::fwrite(batch.data(), 1, batch.size(), stdout);
+			std::fflush(stdout);
+			lock.lock();
+			written += batch.size();
+			batch.clear();
+			idle.notify_all();
+		}
+	}
+
+	std::mutex m;
+	std::condition_variable wake, idle;
+	std::string pending;
+	uint64_t queued = 0, written = 0;
+	std::thread worker;   // last: it starts running in the constructor
+};
+
+// Created once and never destroyed. The CPU thread is detached and may still
+// be printing while the process exits, so a console that destructs would be
+// a use-after-free waiting for the wrong moment; this one is drained at exit
+// instead.
+ConsoleOut &console()
+{
+	static ConsoleOut *out = [] {
+		ConsoleOut *c = new ConsoleOut();
+		std::atexit([] { console_drain(); });
+		return c;
+	}();
+	return *out;
+}
+
+} // namespace
+
+void console_put(uint8_t byte) { console().put(byte); }
+void console_drain() { console().drain(); }

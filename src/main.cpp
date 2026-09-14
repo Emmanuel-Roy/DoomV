@@ -29,6 +29,7 @@ int main(int argc, char *argv[])
 	// The host folder the guest can mount directly. Same conventions.
 	std::string shared_dir = "shared";
 	bool headless = false;
+	uint64_t stop_at = 0;
 	for (int i = 1; i < argc; i++) {
 		std::string arg = argv[i];
 		if (arg.rfind("-march=", 0) == 0) {
@@ -87,6 +88,10 @@ int main(int argc, char *argv[])
 			// A folder of raw *.img files to attach as extra virtio disks,
 			// after the root disk. -drives= with nothing turns it off.
 			drives_dir = arg.substr(8);
+		} else if (arg.rfind("-stopat=", 0) == 0) {
+			// Stop after exactly this many instructions and write the
+			// machine state to crash.log. Decimal, or hex with 0x.
+			stop_at = std::stoull(arg.substr(8), nullptr, 0);
 		} else if (arg.rfind("-disk=", 0) == 0) {
 			// A raw disk image, attached as virtio-blk. This is what lets a
 			// real distribution root filesystem be mounted rather than
@@ -161,6 +166,7 @@ int main(int argc, char *argv[])
 	if (!input_script.empty()) system.set_input_script(input_script.c_str());
 	if (!gui_dump_path.empty()) system.set_canvas_dump(gui_dump_path.c_str());
 	if (tohost_addr) system.watch_tohost(tohost_addr);
+	if (stop_at) system.set_stop_at(stop_at);
 
 	system.run();
 	return 0;

@@ -352,6 +352,7 @@ riscv_doom.exe -opensbi=<f> -kernel=<f> -dtb=<f> -initrd=<f> [options]   # Linux
 | `-expect=<text>` | Hold the headless stdin feed until the guest's console prints this string. |
 | `-input=<path>` | Replay a script of keyboard and mouse events into the guest. The only way to exercise the input devices without a window and a person -- see [Input](#input). |
 | `-guidump=<path>` | Write the composed window -- dashboard included -- to this file as a binary PPM, every 60th frame. |
+| `-stopat=<n>` | Stop after exactly `n` instructions and write the machine state to `crash.log`. Two runs of the same guest with the same inputs leave identical files -- see [Determinism](#determinism). |
 
 `-ng` is what makes the conformance suites practical. With a window open a
 finished test never exits on its own and has to be killed from outside, so
@@ -417,8 +418,10 @@ B: KEY=ffffffffffffffff fffffffffffffffe
 
 N: Name="DoomV Mouse"
 H: Handlers=mouse0 event1
-B: EV=7
-B: REL=143
+B: EV=f
+B: KEY=70000 0 0 0 0
+B: REL=140
+B: ABS=3
 ```
 
 Two devices rather than one, because the driver registers one input device
@@ -435,6 +438,19 @@ arrows and navigation block and control characters for Ctrl+letter. Both
 devices are fed every event, because which one a guest is listening to
 depends on its `console=` setting and this side cannot know.
 
+The mouse is an **absolute** pointer, the way QEMU's tablet is: `ABS_X` and
+`ABS_Y` in framebuffer pixels, 0-1167 by 0-1055, with only the wheels left
+relative. So the guest's cursor sits exactly under the host pointer, and X
+maps a coordinate to a pixel with no acceleration or scaling in between. A
+relative mouse cannot promise that -- the guest integrates deltas under its
+own acceleration, and the two cursors drift apart as soon as the host pointer
+leaves the display.
+
+The mouse belongs to the guest **only over its display**. Everywhere else in
+the window is the dashboard, so motion there is not forwarded and neither is
+a click; a button pressed over the display and released outside it still
+sends its release, so the guest is never left holding it.
+
 **DOOM** has no drivers, so it gets two MMIO registers instead:
 `MMIO_MOUSE_MOVE` at `0x1000000C` (dx in bits 31-16, dy in 15-0, signed,
 destructive read) and `MMIO_MOUSE_BTN` at `0x10000010` (held buttons). That
@@ -449,7 +465,7 @@ Three keys belong to the window rather than the guest:
 | Key | |
 | --- | --- |
 | F9 | Resume from a debugger halt |
-| Ctrl+Alt+G | Grab the mouse (hide the pointer, deliver deltas with no window edge to hit) |
+| Ctrl+Alt+G | Capture the mouse: fence the pointer inside the display area and hide it. DOOM also switches to deltas, so the view can keep turning. |
 | Ctrl+Alt+F | Give a Linux framebuffer the whole window instead of the dashboard's display box |
 
 Ctrl+Alt rather than more function keys because a bare function key is not
@@ -462,7 +478,8 @@ and the gamma control.
 key 30 1        # a key down, evdev code for Linux, doomkeys.h code for DOOM
 key 30 0
 type echo hello # as press/release pairs, US layout
-rel 40 -20      # relative mouse movement
+rel 40 -20      # relative movement (Linux: moves the absolute pointer by that much)
+abs 600 500     # Linux: put the pointer on a framebuffer pixel
 btn left 1
 wheel 1
 sleep 500       # host milliseconds, not guest
@@ -529,6 +546,24 @@ everything it ever touched.
 </p>
 <p align="center"><sub>Left: DOOM. Right: Linux 6.12's boot log on the framebuffer console, stopped at a breakpoint, which is what the banner under the trace log is for.</sub></p>
 
+Three threads besides the CPU's draw the window, and none of them waits for
+another:
+
+* **The display thread** takes whole frames out of the guest's framebuffer.
+  Neither framebuffer can say "this frame is done" -- `simple-framebuffer`
+  has no page flip and DOOM's is written in place -- but a frame is drawn in
+  one burst of writes and then the guest goes and does something else. So
+  the thread waits until the writes have stopped for 12 ms, copies, and
+  throws the copy away if a write landed while it was copying. The window
+  shows finished frames, not the next one being drawn a band at a time. A
+  guest that draws for half a second without pausing gets that frame shown
+  as it stands, so the picture never freezes.
+* **The dashboard thread** draws the CSRs, register file and trace log into
+  a layer of their own, from a small register snapshot the CPU thread
+  publishes after every burst. The snapshot no longer carries any pixels.
+* **The window thread** owns SDL. It polls input and composites the two
+  layers when one of them has changed, paced by VSYNC.
+
 DOOM writes its native 320x200 through `MMIO_FB`, and the window scales it
 up to fill the display area while keeping its shape.
 
@@ -562,8 +597,8 @@ Key bindings live in `controls.json` if you want to remap them. The mouse is
 not in there: DOOM's own `mousebfire`/`mousebforward` defaults apply, and
 mouse look works because the port posts an `ev_mouse` and DOOM already had
 everything downstream of that. Press Ctrl+Alt+G to grab the pointer first --
-without that it stops at the window edge, which is a short distance to turn
-in.
+without that it stops at the edge of the display, which is a short distance
+to turn in.
 
 The guest side — the actual Doom binary that runs *on* this CPU — is built
 separately in `tools/doom/doombuild/`: a cross-compiled `doomgeneric` with a
@@ -609,6 +644,21 @@ Install Ubuntu first when needed with `wsl --install -d Ubuntu`;
 options and dependency separation are in [`scripts/README.md`](scripts/README.md).
 
 ## Design notes
+
+<a id="determinism"></a>
+**Determinism.** The same guest with the same inputs executes the same
+instructions in the same order on every run, whatever the host is doing.
+Guest time is the instruction count, not the wall clock, and every device
+request -- a disk read, a 9P call, delivering a key -- completes, writes
+guest memory and raises its interrupt on the CPU thread at the instruction
+that asked for it. Nothing the guest can observe is left to host timing.
+
+Everything the guest cannot observe runs elsewhere: the display, the
+dashboard, console output (queued and written by a thread of its own), and
+the periodic `-fbdump` refresh. `-stopat=<n>` is how that is checked: run the
+same boot twice, or with two builds, and the `crash.log` files -- registers,
+CSRs, the instruction count and the last 4096 instructions -- must be
+identical byte for byte.
 
 The core dispatches on a plain switch statement rather than a table of
 function pointers. I went in assuming function pointers would be the

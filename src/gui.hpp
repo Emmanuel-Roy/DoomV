@@ -1,6 +1,8 @@
 #pragma once
 #include <SDL2/SDL.h>
+#include <atomic>
 #include <cstdint>
+#include <mutex>
 #include <string>
 #include <vector>
 #include "snapshot.hpp"
@@ -50,6 +52,12 @@ struct RawInputEvent {
 
 	int dx = 0, dy = 0;         // MouseMotion, MouseWheel
 	int button = 0;             // MouseButton: SDL_BUTTON_*
+	// MouseMotion, MouseButton, MouseWheel: where the pointer is in the
+	// guest's own framebuffer pixels. poll_input only reports mouse events
+	// that happen over the display -- the rest of the window is the
+	// dashboard's, and a click on a register is not a click in the guest --
+	// so these are always inside [0, w) x [0, h).
+	int x = 0, y = 0;
 };
 
 class Gui {
@@ -77,13 +85,41 @@ public:
 
 	bool init(int window_w = 1920, int window_h = 1080);
 
-	void render(const Snapshot &snap);
+	// The guest display's size in pixels: DOOM's 320x200 or the Linux
+	// framebuffer's. Fixed for a run, and set before any thread starts.
+	void set_guest_display(int w, int h);
+	// An absolute pointer (Linux, through the virtio tablet) rather than a
+	// relative one (DOOM's mouse look). Decides what capturing the mouse
+	// means -- see set_mouse_captured.
+	void set_absolute_pointer(bool on) { absolute_pointer = on; }
+
+	// The window is drawn by three threads, each owning one job:
+	//
+	//   * the display thread hands over finished guest frames (submit_frame)
+	//   * the dashboard thread draws the CSRs, register file and trace log
+	//     into a layer of their own (render_dashboard)
+	//   * the window thread -- the one that owns SDL -- composites whichever
+	//     of those changed and presents (present)
+	//
+	// They meet at two swaps under two small locks, and neither producer
+	// waits for the window: a frame or a dashboard nobody has composited yet
+	// is simply replaced by the next one.
+
+	// Display thread. `pixels` must be set_guest_display's size; it is
+	// swapped with the pending frame, so it comes back holding a buffer of
+	// the same size to reuse.
+	void submit_frame(std::vector<uint32_t> &pixels);
+	// Dashboard thread.
+	void render_dashboard(const Snapshot &snap);
+	// Window thread.
+	void present();
 	std::vector<RawInputEvent> poll_input();
 
-	// Relative mouse mode: the pointer is hidden and confined, and motion
-	// arrives as deltas with no edges to run into. That is what a guest
-	// with its own cursor needs, and it is also a trap for the person at
-	// the keyboard -- so it is off until asked for, and the caller is
+	// Capture confines the host pointer to the display area -- not the
+	// whole window -- and hides it, since the guest draws its own. For
+	// DOOM it also switches to relative motion, so the view can keep
+	// turning with no edge to run into. That is a trap for the person at
+	// the keyboard, so it is off until asked for, and the caller is
 	// expected to give them a way back out. See the Ctrl+Alt+G handling in
 	// DoomSystem::run.
 	void set_mouse_captured(bool on);
@@ -94,7 +130,7 @@ public:
 	// window, and at 1920x1080 the compact layout already shows the console
 	// at 1:1 beside it. It matters on a smaller window, where the dashboard
 	// falls back to letterboxing the console into DOOM's display box.
-	void toggle_fb_fullscreen() { fb_full = !fb_full; }
+	void toggle_fb_fullscreen();
 
 	// Write the composed canvas -- dashboard, panels, guest display and
 	// all -- to a PPM. This is -fbdump's trick applied to the window
@@ -112,7 +148,37 @@ private:
 	SDL_Texture *texture = nullptr;
 
 	bool captured = false;
-	bool fb_full = false;
+	bool absolute_pointer = false;
+	bool fb_full = false;          // window thread only
+	uint32_t buttons_down = 0;     // presses that were forwarded, by SDL button
+
+	int guest_w = Memory::FB_W, guest_h = Memory::FB_H;
+	bool guest_is_linux() const { return guest_w != Memory::FB_W || guest_h != Memory::FB_H; }
+
+	struct Rect { int x, y, w, h; };
+	// Where the guest display goes on the canvas, for the current layout.
+	// One definition shared by the compositor, the dashboard and the
+	// pointer mapping, so a click lands on the pixel that is drawn there.
+	Rect display_rect(bool full, bool *compact = nullptr) const;
+	// Window coordinates to guest framebuffer pixels. False if the point
+	// is outside the display.
+	bool map_pointer(int wx, int wy, int &gx, int &gy) const;
+	void apply_mouse_rect();
+
+	// Display layer. `frame` is the latest submitted frame, `frame_shown`
+	// the one on the canvas; present() swaps them when frame_seq moves.
+	std::mutex frame_mutex;
+	std::vector<uint32_t> frame, frame_shown;
+	uint64_t frame_seq = 0, frame_seen = ~0ull;
+	void blit_display(const Rect &r);
+
+	// Dashboard layer, canvas-sized. The dashboard thread draws into
+	// dash_work and swaps it into dash_ready; present() swaps that into
+	// dash_shown.
+	std::mutex dash_mutex;
+	std::vector<uint32_t> dash_work, dash_ready, dash_shown;
+	uint64_t dash_seq = 0, dash_seen = ~0ull;
+	bool composed_full = false;
 	std::string canvas_dump_path;
 	int canvas_dump_frames = 0;
 	void dump_canvas();
@@ -124,7 +190,7 @@ private:
 	// and 1 for the compact Linux one, which is laid out in real pixels so
 	// that its text can be drawn at exactly one pixel per font pixel.
 	float text_ux = 1.0f, text_uy = 1.0f;
-	std::vector<uint32_t> screen_buf;
+	std::vector<uint32_t> screen_buf;   // the composited canvas, window thread only
 	void resize_canvas_if_needed();
 
 	uint8_t font8x8[128][8];

@@ -101,6 +101,7 @@ public:
 		EV_SYN = 0x00,
 		EV_KEY = 0x01,
 		EV_REL = 0x02,
+		EV_ABS = 0x03,
 	};
 	enum : uint16_t {
 		SYN_REPORT = 0x00,
@@ -108,6 +109,8 @@ public:
 		REL_Y      = 0x01,
 		REL_WHEEL  = 0x08,
 		REL_HWHEEL = 0x06,
+		ABS_X      = 0x00,
+		ABS_Y      = 0x01,
 		BTN_LEFT   = 0x110,
 		BTN_RIGHT  = 0x111,
 		BTN_MIDDLE = 0x112,

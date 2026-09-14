@@ -207,6 +207,13 @@ public:
 	void     write8(uint64_t addr, uint8_t val);
 	void     write32(uint64_t addr, uint32_t val);
 	void     write64(uint64_t addr, uint64_t val);
+	// A run of read8/write8 over [addr, addr+len), with the same results,
+	// done as one memcpy when the range is plain RAM. Devices copy request
+	// and response buffers through these instead of a call per byte; any
+	// range that touches something else takes the byte path, in order, so a
+	// side-effecting register is read exactly as it would have been.
+	void read_bytes(uint64_t addr, uint8_t *out, size_t len);
+	void write_bytes(uint64_t addr, const uint8_t *data, size_t len);
 
 	bool load_elf(const char *path);
 
@@ -270,6 +277,13 @@ public:
 
 	const uint8_t *framebuffer() const { return fb.data(); }
 	const uint8_t *linux_framebuffer() const { return lfb.data(); }
+	// Bumped on every store into the matching framebuffer. The display
+	// thread reads them to tell a frame the guest is still drawing from one
+	// it has finished -- see DoomSystem::display_loop. Only the CPU thread
+	// writes them, so a relaxed load-and-store is enough and puts no lock
+	// prefix on the hot path.
+	uint64_t fb_generation() const { return fb_gen.load(std::memory_order_relaxed); }
+	uint64_t lfb_generation() const { return lfb_gen.load(std::memory_order_relaxed); }
 
 	// Set by a guest write to the sifive,test0 register; polled by the
 	// render thread, which owns process exit.
@@ -339,6 +353,8 @@ private:
 	uint32_t tick_counter;  // instr_count / INSTR_PER_MS -- what MMIO_TICK exposes
 	uint32_t ms_accum;      // instructions banked toward the next tick_counter++ (avoids a divide every instruction)
 	uint32_t fb_write_count;
+	std::atomic<uint64_t> fb_gen{0};
+	std::atomic<uint64_t> lfb_gen{0};
 
 	VirtioBlk disk;
 	VirtioBlk drives[NUM_DRIVES]{

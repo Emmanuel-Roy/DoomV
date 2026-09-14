@@ -1184,7 +1184,7 @@ void Virtio9p::process_queue(Memory &mem, Aplic &aplic)
 			} else {
 				const size_t at = req.size();
 				req.resize(at + len);
-				for (uint32_t i = 0; i < len; i++) req[at + i] = mem.read8(addr + i);
+				mem.read_bytes(addr, req.data() + at, len);
 			}
 			if (!(flags & DESC_F_NEXT)) break;
 			d = next;
@@ -1196,7 +1196,7 @@ void Virtio9p::process_queue(Memory &mem, Aplic &aplic)
 		for (const auto &seg : outs) {
 			if (written == resp.size()) break;
 			const size_t n = std::min<size_t>(seg.second, resp.size() - written);
-			for (size_t i = 0; i < n; i++) mem.write8(seg.first + i, resp[written + i]);
+			mem.write_bytes(seg.first, resp.data() + written, n);
 			written += n;
 		}
 

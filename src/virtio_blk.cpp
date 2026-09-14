@@ -170,16 +170,25 @@ bool VirtioBlk::do_io(Memory &mem, uint32_t type, uint64_t sector,
 	// pointer, because the guest buffer is a *physical* address that need
 	// not be plain RAM -- and Memory is the only thing that knows which
 	// addresses are backed and which are devices.
+	// Whole buffers, still inside the notify that asked for them: the guest
+	// sees the data and the completion at exactly the instruction it always
+	// did. What changed is the cost -- this was an fgetc or fputc and a
+	// guest-memory call per byte, 8192 calls for one 4KiB block. A short
+	// read past the end of the file reads as zeros, as fgetc's EOF did.
+	io_buf.resize(buf_len);
 	if (type == BLK_T_IN) {
-		for (uint32_t i = 0; i < buf_len; i++) {
-			int c = std::fgetc(file);
-			mem.write8(buf_addr + i, (uint8_t)(c < 0 ? 0 : c));
-		}
+		const size_t got = std::fread(io_buf.data(), 1, buf_len, file);
+		if (got < buf_len) std::memset(io_buf.data() + got, 0, buf_len - got);
+		mem.write_bytes(buf_addr, io_buf.data(), buf_len);
 		return true;
 	}
 	if (ro) return false;
-	for (uint32_t i = 0; i < buf_len; i++)
-		std::fputc(mem.read8(buf_addr + i), file);
+	mem.read_bytes(buf_addr, io_buf.data(), buf_len);
+	std::fwrite(io_buf.data(), 1, buf_len, file);
+	// Flushed per request, as before. The guest is never told to flush --
+	// VIRTIO_BLK_F_FLUSH is not offered -- so this is the only point at which
+	// its writes reach the operating system, and a run that is killed keeps
+	// everything up to here.
 	std::fflush(file);
 	return true;
 }

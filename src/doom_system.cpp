@@ -219,6 +219,7 @@ void DoomSystem::step()
 
 	uint64_t pc = regs.get_pc();
 	if (debugger.should_halt(pc, false)) {
+		console_drain();
 		debugger.dump_log(regs, memory, "crash.log");
 		if (has_sig_range) debugger.dump_signature(memory, sig_begin, sig_end, sig_path.c_str());
 		dump_framebuffer();
@@ -265,6 +266,7 @@ void DoomSystem::step()
 	// run at all.
 	if (memory.tohost_written()) {
 		debugger.halted = true;
+		console_drain();
 		debugger.dump_log(regs, memory, "crash.log");
 		if (has_sig_range) debugger.dump_signature(memory, sig_begin, sig_end, sig_path.c_str());
 		// The verdict goes in its own file rather than being read back out
@@ -291,6 +293,7 @@ void DoomSystem::step()
 			pending_illegal = true;
 			pending_illegal_tval = recorded_instr;
 		}
+		console_drain();
 		debugger.dump_log(regs, memory, "crash.log");
 		if (has_sig_range) debugger.dump_signature(memory, sig_begin, sig_end, sig_path.c_str());
 		run_finished = true;
@@ -321,10 +324,37 @@ void DoomSystem::watch_tohost(uint64_t addr)
 void DoomSystem::dump_framebuffer()
 {
 	if (fb_dump_path.empty()) return;
+	// After the guest output that came before it, not interleaved with it.
+	console_drain();
+	write_framebuffer_dump(reinterpret_cast<const uint32_t *>(memory.linux_framebuffer()));
+}
+
+// The periodic refresh used to be every 200th snapshot publish, on the CPU
+// thread: a pass over 1.2M pixels and a 3.7MB write, a few seconds apart,
+// for a file only the host reads. It is a copy and a write here instead,
+// while the guest keeps running. A copy taken while the guest is drawing can
+// be half old and half new, which for a debugging picture refreshed every
+// few seconds does not matter; the dump written when a run stops is exact.
+void DoomSystem::fbdump_loop()
+{
+	using clock = std::chrono::steady_clock;
+	std::vector<uint32_t> copy((size_t)Memory::LFB_W * Memory::LFB_H);
+	clock::time_point next = clock::now() + std::chrono::seconds(5);
+	while (!stopping) {
+		std::this_thread::sleep_for(std::chrono::milliseconds(50));
+		if (clock::now() < next) continue;
+		next = clock::now() + std::chrono::seconds(5);
+		std::memcpy(copy.data(), memory.linux_framebuffer(), copy.size() * sizeof(uint32_t));
+		write_framebuffer_dump(copy.data());
+	}
+}
+
+void DoomSystem::write_framebuffer_dump(const uint32_t *px)
+{
+	std::lock_guard<std::mutex> lock(fb_dump_mutex);
 	std::ofstream f(fb_dump_path, std::ios::binary);
 	if (!f.is_open()) return;
 	f << "P6\n" << Memory::LFB_W << " " << Memory::LFB_H << " " << 255 << "\n";
-	const uint32_t *px = reinterpret_cast<const uint32_t *>(memory.linux_framebuffer());
 	uint64_t nonzero = 0;
 	for (size_t i = 0; i < (size_t)Memory::LFB_W * Memory::LFB_H; i++) {
 		const uint32_t v = px[i];
@@ -343,33 +373,8 @@ void DoomSystem::dump_framebuffer()
 
 void DoomSystem::publish_snapshot()
 {
-	// Refresh the framebuffer dump periodically, not only when the run
-	// stops. A Linux guest reaches a login prompt and then sits there
-	// forever, so "when it stops" never arrives -- and the whole point of
-	// the dump is to be able to check what is on the screen of a machine
-	// that is still running. Every 200th publish is a few seconds apart and
-	// costs one 2MB write.
-	if (!fb_dump_path.empty() && ++fb_dump_tick % 200 == 0) dump_framebuffer();
-
 	Snapshot snap;
-
-	// Two framebuffers, one window. DOOM's is the 320x200 buffer
-	// doomgeneric hands us through MMIO_FB; Linux's is the 1168x1056 linear
-	// aperture at LFB_BASE that simple-framebuffer writes. Which one is
-	// live is decided by how the machine was started, not by which has been
-	// written -- an unwritten framebuffer is black, and a black screen is a
-	// legitimate thing for a Linux guest to be showing before fbcon takes
-	// over.
-	if (linux_mode) {
-		snap.fb_w = Memory::LFB_W;
-		snap.fb_h = Memory::LFB_H;
-		snap.framebuffer.resize((size_t)Memory::LFB_W * Memory::LFB_H);
-		const uint32_t *lfb32 = reinterpret_cast<const uint32_t *>(memory.linux_framebuffer());
-		std::copy(lfb32, lfb32 + (size_t)Memory::LFB_W * Memory::LFB_H, snap.framebuffer.begin());
-	} else {
-		const uint32_t *fb32 = reinterpret_cast<const uint32_t *>(memory.framebuffer());
-		std::copy(fb32, fb32 + Memory::FB_W * Memory::FB_H, snap.framebuffer.begin());
-	}
+	snap.seq = ++snapshot_seq;
 
 	for (int i = 0; i < 32; i++) snap.x[i] = regs.read_x(i);
 	for (int i = 0; i < 32; i++) std::memcpy(&snap.v_lo[i], regs.read_v(i), sizeof(uint64_t));
@@ -390,6 +395,142 @@ void DoomSystem::publish_snapshot()
 
 	std::lock_guard<std::mutex> lock(snapshot_mutex);
 	shared_snapshot = std::move(snap);
+}
+
+// Whole frames out of the guest framebuffer, on a thread of its own.
+//
+// The framebuffer used to be copied once per CPU burst, wherever the guest
+// had got to. A guest draws a frame over many bursts -- DOOM's 64000 pixels
+// take a tenth of a second of emulated work, and fbcon scrolling a full
+// console takes longer -- so what reached the window was the frame being
+// built, a band at a time: new text appearing line by line, a scroll wiping
+// down the screen, DOOM's view tearing.
+//
+// Neither framebuffer has a way to say "this frame is done": simple-
+// framebuffer has no page flip, and DOOM's MMIO buffer is written in place.
+// What they do have is a shape. A frame is drawn in one burst of writes, and
+// then the guest goes and does something else -- runs the game logic, waits
+// for the next printk, handles an event. So a frame is taken once the writes
+// have stopped for QUIET, and the copy is checked against the generation
+// counter afterwards: if a write landed while copying, the guest has started
+// the next frame and this one is thrown away rather than shown torn.
+//
+// MAX_HOLD bounds how long a picture can stay stale. A guest that draws
+// without ever pausing -- a kernel log scrolling for seconds -- would
+// otherwise freeze the display until it stopped, so past MAX_HOLD the frame
+// is taken as it stands, once, and the wait starts again.
+//
+// Reading the framebuffer while the CPU thread writes it is a race on plain
+// bytes, which on this host is the price of one torn pixel at worst -- and
+// the generation check means a torn copy is never the one shown unless
+// MAX_HOLD forced it.
+void DoomSystem::display_loop()
+{
+	using clock = std::chrono::steady_clock;
+	const auto QUIET = std::chrono::milliseconds(12);
+	const auto MAX_HOLD = std::chrono::milliseconds(500);
+
+	const bool lfb = linux_mode;
+	const size_t pixels = lfb ? (size_t)Memory::LFB_W * Memory::LFB_H
+	                          : (size_t)Memory::FB_W * Memory::FB_H;
+	const uint8_t *src = lfb ? memory.linux_framebuffer() : memory.framebuffer();
+	const auto generation = [&] { return lfb ? memory.lfb_generation() : memory.fb_generation(); };
+
+	std::vector<uint32_t> buf(pixels);
+	uint64_t seen = generation();
+	uint64_t shown = seen - 1;   // differs from everything: the first frame is always taken
+	clock::time_point last_change = clock::now();
+	clock::time_point dirty_since = last_change;
+
+	while (!stopping) {
+		std::this_thread::sleep_for(std::chrono::milliseconds(2));
+		const clock::time_point now = clock::now();
+
+		const uint64_t g = generation();
+		if (g != seen) {
+			if (seen == shown) dirty_since = now;
+			seen = g;
+			last_change = now;
+		}
+		if (seen == shown) continue;
+
+		const bool quiet = now - last_change >= QUIET;
+		const bool stale = now - dirty_since >= MAX_HOLD;
+		if (!quiet && !stale) continue;
+
+		const uint64_t before = generation();
+		std::memcpy(buf.data(), src, pixels * sizeof(uint32_t));
+		const uint64_t after = generation();
+		if (after != before && !stale) {
+			// The guest started drawing again mid-copy.
+			seen = after;
+			last_change = clock::now();
+			continue;
+		}
+
+		gui.submit_frame(buf);
+		shown = before;
+		if (after != before) {
+			seen = after;
+			dirty_since = clock::now();
+		}
+	}
+}
+
+// The CSRs, register file and trace log, on a thread of their own. Formatting
+// and drawing some sixty lines of text is not free, and it used to happen on
+// the window thread for every frame whether or not the machine had moved.
+// This draws each published snapshot once, into the dashboard's own layer,
+// and the window only composites the result.
+void DoomSystem::dashboard_loop()
+{
+	uint64_t drawn = 0;
+	while (!stopping) {
+		Snapshot snap;
+		bool fresh = false;
+		{
+			std::lock_guard<std::mutex> lock(snapshot_mutex);
+			if (shared_snapshot.seq != drawn) {
+				snap = shared_snapshot;
+				fresh = true;
+			}
+		}
+		if (fresh) {
+			gui.render_dashboard(snap);
+			drawn = snap.seq;
+		}
+		std::this_thread::sleep_for(std::chrono::milliseconds(16));
+	}
+}
+
+void DoomSystem::move_pointer(int x, int y)
+{
+	if (x < 0) x = 0;
+	if (y < 0) y = 0;
+	if (x >= Memory::LFB_W) x = Memory::LFB_W - 1;
+	if (y >= Memory::LFB_H) y = Memory::LFB_H - 1;
+	pointer_x = x;
+	pointer_y = y;
+	VirtioInput &ms = memory.get_mouse();
+	ms.push(VirtioInput::EV_ABS, VirtioInput::ABS_X, (uint32_t)x);
+	ms.push(VirtioInput::EV_ABS, VirtioInput::ABS_Y, (uint32_t)y);
+	// One SYN for the pair: a report is a complete state change, and
+	// splitting X from Y makes a diagonal movement arrive as two steps.
+	ms.sync();
+}
+
+void DoomSystem::stop_at_limit()
+{
+	// Exact, not approximate: every path through step() advances mtime by
+	// one, trap or instruction, so the first check to see stop_at is the one
+	// straight after that instruction.
+	const uint64_t n = memory.get_timer().get_mtime();
+	stop_at = 0;
+	debugger.halted = true;
+	console_drain();
+		debugger.dump_log(regs, memory, "crash.log");
+	std::cout << "stopped after instruction " << n << "; state in crash.log" << std::endl;
+	run_finished = true;
 }
 
 void DoomSystem::resume_from_halt()
@@ -427,6 +568,10 @@ void DoomSystem::cpu_loop()
 		for (int i = 0; i < 200000; i++) {
 			if (debugger.halted) break;
 			step();
+			if (stop_at && memory.get_timer().get_mtime() >= stop_at) {
+				stop_at_limit();
+				break;
+			}
 			// Deliver queued input part-way through the burst, not just
 			// between bursts. A burst is about 30ms of wall time, and a
 			// mouse sampled at 30Hz is a mouse that feels broken; this
@@ -454,6 +599,7 @@ void DoomSystem::cpu_loop()
 		// path.
 		if (memory.poweroff_requested()) {
 			dump_framebuffer();
+			console_drain();
 			std::cout << "guest requested poweroff" << std::endl;
 			run_finished = true;
 			return;
@@ -862,11 +1008,15 @@ void DoomSystem::replay_input_script()
 			if (!linux_mode) {
 				memory.push_mouse_motion(dx, dy);
 			} else {
-				VirtioInput &ms = memory.get_mouse();
-				if (dx) ms.push(VirtioInput::EV_REL, VirtioInput::REL_X, (uint32_t)dx);
-				if (dy) ms.push(VirtioInput::EV_REL, VirtioInput::REL_Y, (uint32_t)dy);
-				ms.sync();
+				// The pointer is absolute, so a relative step is taken from
+				// where it is.
+				move_pointer(pointer_x + dx, pointer_y + dy);
 			}
+		} else if (cmd == "abs") {
+			// Linux only: put the pointer at a framebuffer pixel.
+			int x = 0, y = 0;
+			in >> x >> y;
+			if (linux_mode) move_pointer(x, y);
 		} else if (cmd == "btn") {
 			std::string which;
 			int val = 0;
@@ -905,24 +1055,35 @@ void DoomSystem::replay_input_script()
 
 void DoomSystem::run()
 {
-	// CPU execution and rendering run on separate threads: instruction
-	// bursts no longer stall input polling/rendering, and vice versa. The
-	// two sides only ever communicate through shared_snapshot (a full copy
-	// under snapshot_mutex, published once per burst) and Memory's key
-	// queue (locked separately) -- everything else in Memory/Registers/
-	// Debugger stays exclusively CPU-thread-owned, so it needs no locking.
-	// Publish once before the CPU thread starts, while this is still the
-	// only thread. Without it the window's first frames draw a
-	// default-constructed Snapshot, which claims DOOM's 320x200 framebuffer
-	// whatever the machine is -- so a Linux boot came up in the DOOM
-	// layout, with zeroed registers and "???" in the trace, and only jumped
-	// to its own layout when the CPU thread finished its first 200000-
-	// instruction burst, a second or more in. Publishing here means the
-	// first frame already has the right geometry and the real reset state.
+	// Four threads. The CPU thread executes. The display thread takes whole
+	// frames from the guest framebuffer, the dashboard thread draws the
+	// register panels from shared_snapshot (published under snapshot_mutex
+	// once per burst), and this thread owns the window: it polls input and
+	// composites what the other two hand it. Memory/Registers/Debugger stay
+	// exclusively CPU-thread-owned; the only other ways in are the input
+	// queues, which lock, and the framebuffer bytes the display thread
+	// reads, which it checks against a write counter.
+	//
+	// The guest's display size is given to the window, and one snapshot
+	// published, before any of those threads start. Without that the first
+	// frames were laid out for DOOM's 320x200 whatever the machine was --
+	// a Linux boot came up in the DOOM layout, with zeroed registers and
+	// "???" in the trace, until the CPU thread finished its first
+	// 200000-instruction burst, a second or more in.
+	if (!headless) {
+		gui.set_guest_display(linux_mode ? Memory::LFB_W : Memory::FB_W,
+		                      linux_mode ? Memory::LFB_H : Memory::FB_H);
+		gui.set_absolute_pointer(linux_mode);
+	}
 	publish_snapshot();
 
 	std::thread cpu_thread(&DoomSystem::cpu_loop, this);
 	cpu_thread.detach();
+
+	// Refreshed while the machine runs, headless or not: the point of the
+	// dump is to see the screen of a guest that is still going.
+	if (!fb_dump_path.empty())
+		fbdump_thread = std::thread(&DoomSystem::fbdump_loop, this);
 
 	// A scripted input replay runs in either mode and whether or not there
 	// is a window: the point of it is to exercise the input path without a
@@ -942,8 +1103,14 @@ void DoomSystem::run()
 		// hand, in a window, by a person. stdin covers that gap.
 		if (linux_mode) std::thread(&DoomSystem::console_stdin_loop, this).detach();
 		while (!run_finished) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+		stopping = true;
+		if (fbdump_thread.joinable()) fbdump_thread.join();
+		console_drain();
 		std::exit(0);
 	}
+
+	display_thread = std::thread(&DoomSystem::display_loop, this);
+	dashboard_thread = std::thread(&DoomSystem::dashboard_loop, this);
 
 	while (true) {
 		for (const RawInputEvent &ev : gui.poll_input()) {
@@ -1040,16 +1207,11 @@ void DoomSystem::run()
 				for (const char *p = ev.text; *p; p++)
 					memory.get_uart().push_rx((uint8_t)*p);
 				break;
-			case RawInputEvent::Kind::MouseMotion: {
-				VirtioInput &ms = memory.get_mouse();
-				if (ev.dx) ms.push(VirtioInput::EV_REL, VirtioInput::REL_X, (uint32_t)ev.dx);
-				if (ev.dy) ms.push(VirtioInput::EV_REL, VirtioInput::REL_Y, (uint32_t)ev.dy);
-				// One SYN for the pair: a report is a complete state
-				// change, and splitting X from Y makes a diagonal
-				// movement arrive as two separate steps.
-				ms.sync();
+			case RawInputEvent::Kind::MouseMotion:
+				// Only ever over the display (poll_input drops the rest),
+				// already in framebuffer pixels.
+				move_pointer(ev.x, ev.y);
 				break;
-			}
 			case RawInputEvent::Kind::MouseButton: {
 				uint16_t code = 0;
 				if (ev.button == SDL_BUTTON_LEFT)   code = VirtioInput::BTN_LEFT;
@@ -1072,12 +1234,9 @@ void DoomSystem::run()
 			}
 		}
 
-		Snapshot snap;
-		{
-			std::lock_guard<std::mutex> lock(snapshot_mutex);
-			snap = shared_snapshot;
-		}
-		gui.render(snap);
+		// Composite whatever the display and dashboard threads have
+		// handed over, and present. VSYNC paces this loop.
+		gui.present();
 
 		// Poweroff, specifically -- not run_finished, which is also set by
 		// a debugger halt and by a test finishing, both of which want the
@@ -1087,4 +1246,10 @@ void DoomSystem::run()
 		// frame the guest drew is the one on screen.
 		if (memory.poweroff_requested()) break;
 	}
+
+	stopping = true;
+	display_thread.join();
+	dashboard_thread.join();
+	if (fbdump_thread.joinable()) fbdump_thread.join();
+	console_drain();
 }

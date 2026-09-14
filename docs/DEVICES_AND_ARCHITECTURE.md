@@ -237,7 +237,7 @@ The [UART](../src/uart.cpp) is a small polled ns16550a-style register subset at 
 
 | Offset | Name | Behavior |
 |---|---|---|
-| 0 | RBR on read / THR on write | Pop received byte / print and flush host stdout |
+| 0 | RBR on read / THR on write | Pop received byte / queue the byte for host stdout |
 | 1 | IER | Stored byte; does not create an interrupt connection |
 | 2 | FCR on write | Stored; reads return default zero, not complete IIR behavior |
 | 3 | LCR | Stored; does not implement full line-control/DLAB behavior |
@@ -246,7 +246,7 @@ The [UART](../src/uart.cpp) is a small polled ns16550a-style register subset at 
 | 6 | MSR | Zero |
 | 7 | SCR | Scratch storage |
 
-There is no baud-rate timing, serial bit stream, divisor-latch bank switching or TX FIFO scheduling. Writing offset zero immediately emits a character. UART register storage is not proof that every hardware function controlled by the bits exists.
+There is no baud-rate timing, serial bit stream, divisor-latch bank switching or TX FIFO scheduling. Writing offset zero hands the character to a console output thread, which writes queued bytes to stdout in order and in batches; the guest cannot observe when that happens, since the transmitter always reads as empty. UART register storage is not proof that every hardware function controlled by the bits exists.
 
 In Linux mode each keypress goes two places. The virtio keyboard receives it as an evdev key event, which is what the framebuffer console on tty0 and X read. The same press is also translated into console bytes for `push_rx`, with typed text arriving as SDL text input, so the SBI console on hvc0 can be driven from the window too. A mutex protects RX producer/consumer operations. From the GUI, the ring drops incoming bytes when full. The headless stdin feed (`-ng`) waits for room instead, and `-expect=` holds that feed back until the guest has printed a given string. Output goes to the host process's stdout, so the terminal and SDL window serve different roles.
 
@@ -263,7 +263,7 @@ Every device a distribution needs beyond the console is virtio over MMIO, versio
 
 A block request is a header, data buffers and a status byte, in 512-byte sectors. The root disk and the drives are one class at different addresses and sources, so the drives enumerate after the root disk as further `/dev/vd*` devices.
 
-virtio-input answers the config-space select/subsel queries the Linux driver uses to learn a device's name and which event types and codes it sends. SDL scancodes map to evdev key codes, mouse motion to relative X/Y, the wheel to a relative wheel axis, and the buttons to `BTN_LEFT`, `BTN_RIGHT` and `BTN_MIDDLE`. The GUI thread queues events on the host; the CPU thread delivers them in `pump_input` every 4,096 instructions, part-way through a burst, so input does not wait for the next snapshot.
+virtio-input answers the config-space select/subsel queries the Linux driver uses to learn a device's name and which event types and codes it sends. SDL scancodes map to evdev key codes. The pointer is absolute: its position over the display becomes `ABS_X`/`ABS_Y` in framebuffer pixels, with the range (0–1167 by 0–1055) answered through `CFG_ABS_INFO`, so the guest cursor sits under the host pointer. The wheels stay relative, and the buttons map to `BTN_LEFT`, `BTN_RIGHT` and `BTN_MIDDLE`. Only events over the display area are forwarded. The window thread queues events on the host; the CPU thread delivers them in `pump_input` every 4,096 instructions, part-way through a burst, so input does not wait for the next snapshot.
 
 The 9P device is a 9P2000.L file server running inside the emulator. Requests are gathered from all of a request's readable descriptors and replies laid across its writable ones, which is what the Linux client's zero-copy reads and writes require. The server uses Windows wide-character APIs with extended-length paths and returns Linux errno values. It resolves the final path of every handle it opens and refuses anything outside the shared folder, including through links. Changes on either side are visible to the other immediately, because there is no cache to synchronize.
 
@@ -279,7 +279,7 @@ The framebuffer is 320×200 32-bit pixels. The guest writes final pixels; the ho
 
 The key queue has 16 slots with one slot reserved to distinguish full from empty, yielding 15 queued events. It stores `(pressed << 8) | doom_keycode`; a read32 at input pops one word. Host controls mapping comes from [controls.json](../controls.json) and [controls.cpp](../src/controls.cpp), supplemented by fixed special-key translations in DoomSystem. Full queues drop events.
 
-The mouse uses two more registers. Motion accumulates between reads of `0x1000000C`, and a read returns it and clears it; `0x10000010` reports the buttons. The guest turns them into DOOM's `ev_mouse`, so mouse look and fire follow DOOM's own defaults rather than `controls.json`. Ctrl+Alt+G grabs the host pointer so it does not stop at the window edge.
+The mouse uses two more registers. Motion accumulates between reads of `0x1000000C`, and a read returns it and clears it; `0x10000010` reports the buttons. The guest turns them into DOOM's `ev_mouse`, so mouse look and fire follow DOOM's own defaults rather than `controls.json`. Ctrl+Alt+G captures the host pointer, fenced inside the display area, and switches to deltas so it has no edge to stop at.
 
 The tick register supplies instruction-scaled timing. The debug register prints the byte written at its base address, allowing newlib `_write` to emit text. These custom interfaces are separate from the Linux UART and SBI path; naming the debug character sink a “UART” would overstate its protocol.
 
@@ -341,8 +341,9 @@ receive queue contains data. A subsequent byte read at `0x10000100` removes
 one character. Repeatedly reading the data register is therefore a state
 change; it is not a harmless inspection of a stored RAM byte.
 
-The reverse direction is immediate: writing a byte at `0x10000100` calls
-`putchar` and flushes stdout. There is no simulated baud-rate delay. The
+The reverse direction never waits: writing a byte at `0x10000100` queues it
+for the console output thread, which writes it to stdout. There is no
+simulated baud-rate delay. The
 transmitter-empty bits are always set, and storing an interrupt-enable value
 does not create an interrupt connection.
 
@@ -374,11 +375,11 @@ Guest EBREAK is an architectural breakpoint exception routed through trap entry.
 
 ## Snapshots GUI and concurrency
 
-The CPU thread owns the mutable core/register/device execution state and runs instruction bursts. The GUI thread polls input and renders. A mutex protects copying `shared_snapshot`, which contains framebuffer, selected register views, trace data and recent CSR information. Keyboard and UART RX queues have their own locks; resume requests use an atomic flag.
+The CPU thread owns the mutable core/register/device execution state and runs instruction bursts. Three more threads handle the window. The **display thread** copies whole frames out of the guest framebuffer: Memory keeps a write-generation counter per framebuffer, and the thread copies only once the counter has been still for 12 ms, discarding a copy that a write landed in; a guest that never pauses gets its frame shown every 500 ms. The **dashboard thread** draws the panels from `shared_snapshot`, which the CPU thread publishes under a mutex after each burst and which holds selected register views, trace data and CSR values but no pixels. The **window thread** polls SDL input and composites the two layers when either has changed. The layers meet the window at two buffer swaps under two small locks. Keyboard and UART RX queues have their own locks; resume requests use an atomic flag.
 
 The snapshot is a copied observation, not a second machine state that executes independently. It displays only selected slices of state; for example the dashboard vector snapshot contains low portions, while crash dumps include full vector registers. Rendering old data between publications is expected.
 
-`run()` publishes one snapshot before the CPU thread starts, so the first frame already knows which framebuffer the guest uses and lays the window out for it. In a window of at least 1920×1080 every guest gets the same compact layout. The display sits on the left at the Linux framebuffer's size, with DOOM scaled into it. Beside it are the CSR panel, the register file, the trace log and the pause banner, with equal margins all round. Smaller windows fall back to an older scaled layout. The CSR panel shows the ten CSRs used most across the last 1,024 CSR accesses (`Registers::top_csrs`), not every CSR the guest has ever touched.
+`run()` gives the window the guest's display size and publishes one snapshot before the CPU thread starts, so the first frame is already laid out for the guest. In a window of at least 1920×1080 every guest gets the same compact layout. The display sits on the left at the Linux framebuffer's size, with DOOM scaled into it. Beside it are the CSR panel, the register file, the trace log and the pause banner, with equal margins all round. Smaller windows fall back to an older scaled layout. The CSR panel shows the ten CSRs used most across the last 1,024 CSR accesses (`Registers::top_csrs`), not every CSR the guest has ever touched.
 
 When halted, the CPU still publishes snapshots and sleeps for 10 ms between checks, keeping the GUI responsive. The detached loop has no elaborate guest shutdown/device teardown lifecycle. Host burst size affects responsiveness and throughput, not an architectural instruction grouping rule.
 

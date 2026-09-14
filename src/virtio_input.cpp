@@ -92,18 +92,40 @@ uint8_t VirtioInput::config_payload(uint8_t out[128]) const
 			set_bit(out, size, BTN_MIDDLE);
 			return size;
 		}
+		// The pointer is absolute: ABS_X/ABS_Y in framebuffer pixels, so
+		// the guest's cursor sits exactly where the host pointer is over
+		// the display, the way QEMU's tablet does it. A relative mouse
+		// cannot do that -- the guest integrates deltas under its own
+		// acceleration, and the two cursors drift apart the moment the
+		// host pointer leaves the display or the guest drops an event.
+		// The wheels stay relative; there is no absolute wheel.
 		if (cfg_subsel == EV_REL) {
-			set_bit(out, size, REL_X);
-			set_bit(out, size, REL_Y);
 			set_bit(out, size, REL_WHEEL);
 			set_bit(out, size, REL_HWHEEL);
 			return size;
 		}
+		if (cfg_subsel == EV_ABS) {
+			set_bit(out, size, ABS_X);
+			set_bit(out, size, ABS_Y);
+			return size;
+		}
 		if (cfg_subsel == EV_SYN) { set_bit(out, size, SYN_REPORT); return size; }
 		return 0;
+	case CFG_ABS_INFO: {
+		// struct virtio_input_absinfo: min, max, fuzz, flat, res, all LE32.
+		// The range is the framebuffer's, which is also the X screen's, so
+		// the guest maps a coordinate to a pixel with no scaling at all.
+		if (kind != Kind::Mouse) return 0;
+		uint32_t max = 0;
+		if (cfg_subsel == ABS_X) max = (uint32_t)Memory::LFB_W - 1;
+		else if (cfg_subsel == ABS_Y) max = (uint32_t)Memory::LFB_H - 1;
+		else return 0;
+		std::memcpy(out + 4, &max, sizeof(max));
+		return 20;
+	}
 	default:
-		// ID_SERIAL, PROP_BITS, ABS_INFO: nothing to say. Size zero is a
-		// valid answer and the driver skips the feature.
+		// ID_SERIAL, PROP_BITS: nothing to say. Size zero is a valid
+		// answer and the driver skips the feature.
 		return 0;
 	}
 }

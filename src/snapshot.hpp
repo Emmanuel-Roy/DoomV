@@ -4,19 +4,20 @@
 #include <cstdint>
 #include <vector>
 
-// Everything the render thread needs to draw one frame, copied out of the
-// CPU thread's live state under a lock. The render thread never touches
-// Memory/Registers/Debugger directly -- those are only ever mutated by the
-// CPU thread, which keeps the whole rest of the emulator single-threaded
-// and avoids needing locks scattered through it.
+// Everything the dashboard thread needs to draw the panels, copied out of
+// the CPU thread's live state under a lock. Neither the dashboard nor the
+// window thread touches Memory/Registers/Debugger directly -- those are only
+// ever mutated by the CPU thread, which keeps the whole rest of the emulator
+// single-threaded and avoids needing locks scattered through it.
+//
+// The framebuffer is not in here any more. It used to be, copied whole on
+// every burst -- 4.9MB for a Linux guest, whether or not a pixel had
+// changed, and whatever the guest was halfway through drawing. The display
+// thread takes frames on its own schedule now; see DoomSystem::display_loop.
 struct Snapshot {
-	std::vector<uint32_t> framebuffer = std::vector<uint32_t>(Memory::FB_W * Memory::FB_H, 0);
-	// Which geometry `framebuffer` actually holds. DOOM's is 320x200 and
-	// Linux's is LFB_W x LFB_H, and the renderer scales whichever it is
-	// given to the window -- so the dimensions travel with the pixels
-	// rather than being a compile-time constant the renderer assumes.
-	int fb_w = Memory::FB_W;
-	int fb_h = Memory::FB_H;
+	// Increments on every publish, so a reader can tell a new snapshot from
+	// the one it already drew without comparing the contents.
+	uint64_t seq = 0;
 	uint64_t x[32] = {};
 	// Just the low 64 bits of each 128-bit V register -- plenty for a
 	// dashboard display (they're all zero until V is actually implemented
