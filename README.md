@@ -229,6 +229,14 @@ what happens here: an emulator that boots Linux should be able to run the
 distribution's own tooling, and if it cannot, that is a bug worth finding.
 See [tools/linux/ubuntu/](tools/linux/ubuntu/README.md).
 
+It also runs a desktop, installed the same way -- by DoomV running `apt`:
+
+| Openbox | XFCE | bare X |
+|---|---|---|
+| ![Openbox with an xterm, Ubuntu 24.04 on DoomV](docs/images/ubuntu-openbox.png) | ![The XFCE desktop, Ubuntu 24.04 on DoomV](docs/images/ubuntu-xfce.png) | ![Two xterms on bare X, Ubuntu 24.04 on DoomV](docs/images/ubuntu-x.png) |
+
+<sub>Captured from DoomV's 1168x1056 Linux framebuffer with `-fbdump`.</sub>
+
 Every suite runs headless (`-ng`), which is what makes them practical to
 run at all: arch-test's 663 tests take about 40 seconds and the 43-group
 hypervisor suite about 10. Reproduce all of it with one command:
@@ -514,6 +522,12 @@ paused banner, with the same margin all the way round the window. The CSR
 panel lists the ten CSRs the guest has used most across its last 1024 CSR
 instructions, so it shows what the machine is doing now rather than
 everything it ever touched.
+
+<p align="center">
+  <img src="docs/images/doom-gui.png" width="49%" alt="DOOM running on DoomV, with the register file and trace log beside it">
+  <img src="docs/images/linux-gui.png" width="49%" alt="Linux booting on DoomV's framebuffer console, stopped at a breakpoint">
+</p>
+<p align="center"><sub>Left: DOOM. Right: Linux 6.12's boot log on the framebuffer console, stopped at a breakpoint, which is what the banner under the trace log is for.</sub></p>
 
 DOOM writes its native 320x200 through `MMIO_FB`, and the window scales it
 up to fill the display area while keeping its shape.

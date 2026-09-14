@@ -216,6 +216,12 @@ Openbox is the most responsive once it is up. Ctrl+Alt+G grabs the mouse.
 `systemd-logind` failing to start appears in the boot log on every desktop
 boot and is harmless: nothing here needs a login session manager.
 
+| Openbox | XFCE | bare X |
+|---|---|---|
+| ![Openbox with an xterm, Ubuntu 24.04 on DoomV](../../../docs/images/ubuntu-openbox.png) | ![The XFCE desktop, Ubuntu 24.04 on DoomV](../../../docs/images/ubuntu-xfce.png) | ![Two xterms on bare X, Ubuntu 24.04 on DoomV](../../../docs/images/ubuntu-x.png) |
+
+<sub>Captured from DoomV's 1168x1056 Linux framebuffer with `-fbdump`.</sub>
+
 The two xterm sessions report their progress on the serial console as
 `DOOMV-SESSION:` lines -- the session starting, the font loading, and
 `xterm is up` from the shell inside each terminal -- which is how a slow
