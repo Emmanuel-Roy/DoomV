@@ -539,6 +539,13 @@ Windows cannot hold are refused rather than altered, and symlinks fail with
 refused too. For a real Linux filesystem, use a drive instead. Details in
 [shared/README.md](shared/README.md).
 
+What the guest learns about the folder does not come from the host's clock
+or disk either, so a run that uses it is as reproducible as one that does
+not. A file the guest changes is timestamped with the guest's own time -- the
+instruction count as nanoseconds from 2024-01-01 -- and that time is written
+to the Windows file too. Inode numbers count up in the order the guest first
+sees each file, listings are sorted by name, and `df` reports a fixed 1 TiB.
+
 ### The display
 
 There are two framebuffers, and which one the window shows depends on how
@@ -680,6 +687,12 @@ time. A person at the window, or a live pipe, decides what arrives outside
 the machine; `-record` logs exactly what was committed and at which
 instruction, and `-replay` commits it again at the same instructions, which
 reproduces that session.
+
+The shared folder is the last place the host could leak in, and it is
+closed the same way: timestamps for anything the guest changes come from the
+instruction count, inode numbers from the order the guest sees files, and
+free space is a fixed figure. The folder's starting contents are an input,
+like a disk image; given the same contents, the guest sees the same folder.
 
 The core dispatches on a plain switch statement rather than a table of
 function pointers. I went in assuming function pointers would be the

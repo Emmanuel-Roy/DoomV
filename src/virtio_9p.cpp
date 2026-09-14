@@ -302,7 +302,8 @@ struct HostStat {
 	bool dir = false;
 	bool readonly = false;
 	uint64_t size = 0;
-	uint64_t id = 0;
+	uint64_t id = 0;         // what the guest sees; see Virtio9p::guest_id
+	uint64_t host_id = 0;    // the NTFS file index
 	uint64_t atime = 0, atime_ns = 0, mtime = 0, mtime_ns = 0;
 	uint64_t ctime = 0, ctime_ns = 0, btime = 0, btime_ns = 0;
 };
@@ -373,12 +374,56 @@ public:
 		st.size = st.dir ? 0 : (((uint64_t)bi.nFileSizeHigh << 32) | bi.nFileSizeLow);
 		// The NTFS file index is stable across renames, which a path hash
 		// would not be, and Linux keys its inode cache on this.
-		st.id = ((uint64_t)bi.nFileIndexHigh << 32) | bi.nFileIndexLow;
-		unix_time(bi.ftLastAccessTime, st.atime, st.atime_ns);
+		st.host_id = ((uint64_t)bi.nFileIndexHigh << 32) | bi.nFileIndexLow;
+		// But the number the guest sees is not the index itself. NTFS hands
+		// indices out according to everything else happening on the volume,
+		// so a file the guest creates would get a different inode number on
+		// every run. Numbering files in the order the guest first sees them
+		// depends only on what the guest has done.
+		st.id = d.guest_id(st.host_id);
 		unix_time(bi.ftLastWriteTime, st.mtime, st.mtime_ns);
-		unix_time(bi.ftLastWriteTime, st.ctime, st.ctime_ns);
+		// Access and change time are reported as the modification time.
+		// The host's access time moves whenever anything on the host reads
+		// the file, this server included, and NTFS has no change time that
+		// means what POSIX's does.
+		st.atime = st.ctime = st.mtime;
+		st.atime_ns = st.ctime_ns = st.mtime_ns;
 		unix_time(bi.ftCreationTime, st.btime, st.btime_ns);
 		return true;
+	}
+
+	// The guest's clock, for every timestamp the guest causes.
+	//
+	// A file the guest writes used to get the host's time, from the host's
+	// clock, at whatever moment the host got there -- so `ls -l` in the
+	// guest, and every build tool that compares timestamps, gave a different
+	// answer on every run. The guest's time is the instruction count
+	// instead: the device tree's timebase is 1e9, so one instruction is
+	// exactly one nanosecond of guest time, counted from a fixed epoch. It
+	// is written to the host file too, so a later run that finds the file
+	// already there sees the same time this one gave it.
+	FILETIME guest_time() const
+	{
+		constexpr uint64_t VIRTUAL_EPOCH = 1704067200ull;   // 2024-01-01T00:00:00Z
+		return file_time(VIRTUAL_EPOCH + d.guest_ns / 1000000000ull, d.guest_ns % 1000000000ull);
+	}
+
+	// Stamp a file the guest just changed. Setting a time explicitly through
+	// a handle also stops NTFS updating it through that handle later, so a
+	// write that NTFS would otherwise timestamp at close keeps this one.
+	void touch(HANDLE h, bool created)
+	{
+		const FILETIME t = guest_time();
+		SetFileTime(h, created ? &t : nullptr, &t, &t);
+	}
+
+	void touch_path(const std::string &rel, bool created = false)
+	{
+		const HANDLE h = CreateFileW(host_path(rel).c_str(), FILE_WRITE_ATTRIBUTES, SHARE_ALL, nullptr,
+		                             OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+		if (h == INVALID_HANDLE_VALUE) return;
+		touch(h, created);
+		CloseHandle(h);
 	}
 
 	Virtio9p::Fid *fid(uint32_t n)
@@ -388,7 +433,7 @@ public:
 	}
 
 	// Open the file at f.path for I/O. `disposition` is CreateFileW's.
-	uint32_t open_file(Virtio9p::Fid &f, uint32_t flags, DWORD disposition)
+	uint32_t open_file(Virtio9p::Fid &f, uint32_t flags, DWORD disposition, bool *created = nullptr)
 	{
 		DWORD access = GENERIC_READ;
 		const uint32_t acc = flags & L_O_ACCMODE;
@@ -401,6 +446,11 @@ public:
 		const HANDLE h = CreateFileW(host_path(f.path).c_str(), access, SHARE_ALL, nullptr,
 		                             disposition, FILE_ATTRIBUTE_NORMAL, nullptr);
 		if (h == INVALID_HANDLE_VALUE) return linux_errno(GetLastError());
+		// OPEN_ALWAYS and CREATE_ALWAYS report an existing file this way.
+		const bool existed = GetLastError() == ERROR_ALREADY_EXISTS;
+		if (created)
+			*created = disposition == CREATE_NEW
+			           || ((disposition == OPEN_ALWAYS || disposition == CREATE_ALWAYS) && !existed);
 		std::wstring resolved;
 		if (!final_path(h, resolved) || !inside(resolved)) {
 			CloseHandle(h);
@@ -601,6 +651,7 @@ void NinePServer::handle(const std::vector<uint8_t> &req, std::vector<uint8_t> &
 			end.QuadPart = (LONGLONG)size;
 			const bool ok = SetFilePointerEx(h, end, nullptr, FILE_BEGIN) && SetEndOfFile(h);
 			const DWORD e = GetLastError();
+			if (ok) touch(h, false);
 			CloseHandle(h);
 			if (!ok) { error_reply(resp, tag, linux_errno(e)); return; }
 		}
@@ -608,8 +659,8 @@ void NinePServer::handle(const std::vector<uint8_t> &req, std::vector<uint8_t> &
 			const HANDLE h = CreateFileW(path.c_str(), FILE_WRITE_ATTRIBUTES, SHARE_ALL, nullptr,
 			                             OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
 			if (h == INVALID_HANDLE_VALUE) { error_reply(resp, tag, linux_errno(GetLastError())); return; }
-			FILETIME now;
-			GetSystemTimeAsFileTime(&now);
+			// "Now" for touch(1) and utimensat(UTIME_NOW) is the guest's.
+			const FILETIME now = guest_time();
 			const FILETIME a = (valid & P9_SETATTR_ATIME_SET) ? file_time(atime_s, atime_ns) : now;
 			const FILETIME m = (valid & P9_SETATTR_MTIME_SET) ? file_time(mtime_s, mtime_ns) : now;
 			const bool ok = SetFileTime(h, nullptr,
@@ -645,6 +696,7 @@ void NinePServer::handle(const std::vector<uint8_t> &req, std::vector<uint8_t> &
 		} else {
 			err = open_file(*f, flags, (flags & L_O_TRUNC) ? TRUNCATE_EXISTING : OPEN_EXISTING);
 			if (err) { error_reply(resp, tag, err); return; }
+			if (flags & L_O_TRUNC) touch((HANDLE)f->handle, false);
 			if (!stat(f->path, st, err)) { error_reply(resp, tag, err); return; }
 		}
 		begin_reply(resp, (uint8_t)(Tlopen + 1), tag);
@@ -670,7 +722,16 @@ void NinePServer::handle(const std::vector<uint8_t> &req, std::vector<uint8_t> &
 		DWORD disposition = OPEN_ALWAYS;
 		if (flags & L_O_EXCL) disposition = CREATE_NEW;
 		else if (flags & L_O_TRUNC) disposition = CREATE_ALWAYS;
-		uint32_t err = open_file(*f, flags, disposition);
+		bool created = false;
+		uint32_t err = open_file(*f, flags, disposition, &created);
+		if (!err) {
+			if (created) {
+				touch((HANDLE)f->handle, true);
+				touch_path(dir);       // a new entry changes its directory
+			} else if (flags & L_O_TRUNC) {
+				touch((HANDLE)f->handle, false);
+			}
+		}
 		HostStat st;
 		if (!err && !stat(f->path, st, err)) {}
 		if (err) {
@@ -739,6 +800,7 @@ void NinePServer::handle(const std::vector<uint8_t> &req, std::vector<uint8_t> &
 			error_reply(resp, tag, linux_errno(GetLastError()));
 			return;
 		}
+		if (put) touch((HANDLE)f->handle, false);
 		begin_reply(resp, (uint8_t)(Twrite + 1), tag);
 		Writer{resp}.u32(put);
 		finish_reply(resp);
@@ -777,6 +839,11 @@ void NinePServer::handle(const std::vector<uint8_t> &req, std::vector<uint8_t> &
 				} while (FindNextFileW(h, &fd));
 				FindClose(h);
 			}
+			// Sorted, rather than whatever order the host filesystem
+			// enumerates in: NTFS happens to sort, but FAT and exFAT list in
+			// creation order, which depends on the folder's history.
+			std::sort(f->listing.begin() + 2, f->listing.end(),
+			          [](const Virtio9p::DirEntry &x, const Virtio9p::DirEntry &y) { return x.name < y.name; });
 			f->listed = true;
 		}
 		count = std::min(count, d.msize - 11);
@@ -820,6 +887,8 @@ void NinePServer::handle(const std::vector<uint8_t> &req, std::vector<uint8_t> &
 			error_reply(resp, tag, linux_errno(GetLastError()));
 			return;
 		}
+		touch_path(rel, true);
+		touch_path(f->path);
 		HostStat st;
 		uint32_t err = 0;
 		if (!stat(rel, st, err)) { error_reply(resp, tag, err); return; }
@@ -847,6 +916,10 @@ void NinePServer::handle(const std::vector<uint8_t> &req, std::vector<uint8_t> &
 		const bool ok = st.dir ? RemoveDirectoryW(host_path(rel).c_str())
 		                       : DeleteFileW(host_path(rel).c_str());
 		if (!ok) { error_reply(resp, tag, linux_errno(GetLastError())); return; }
+		// A file created later must not inherit this one's inode number just
+		// because NTFS happened to reuse its index.
+		d.forget_id(st.host_id);
+		touch_path(f->path);
 		begin_reply(resp, (uint8_t)(Tunlinkat + 1), tag);
 		finish_reply(resp);
 		return;
@@ -880,10 +953,18 @@ void NinePServer::handle(const std::vector<uint8_t> &req, std::vector<uint8_t> &
 		// Replacing an existing target, as rename(2) does. MoveFileW alone
 		// refuses to, which would break every editor that saves by writing
 		// a temporary file and renaming it over the original.
+		HostStat moved, replaced;
+		uint32_t serr = 0;
+		const bool have_moved = stat(from, moved, serr);
+		const bool replacing = stat(to, replaced, serr);
 		if (!MoveFileExW(host_path(from).c_str(), host_path(to).c_str(), MOVEFILE_REPLACE_EXISTING)) {
 			error_reply(resp, tag, linux_errno(GetLastError()));
 			return;
 		}
+		// A target that was replaced is gone, the same as an unlink.
+		if (replacing && !(have_moved && replaced.host_id == moved.host_id)) d.forget_id(replaced.host_id);
+		touch_path(parent_of(from));
+		if (parent_of(to) != parent_of(from)) touch_path(parent_of(to));
 		rename_fids(from, to);
 		begin_reply(resp, (uint8_t)(type + 1), tag);
 		finish_reply(resp);
@@ -905,6 +986,8 @@ void NinePServer::handle(const std::vector<uint8_t> &req, std::vector<uint8_t> &
 		const bool ok = st.dir ? RemoveDirectoryW(host_path(rel).c_str())
 		                       : DeleteFileW(host_path(rel).c_str());
 		if (!ok) { error_reply(resp, tag, linux_errno(GetLastError())); return; }
+		d.forget_id(st.host_id);
+		touch_path(parent_of(rel));
 		begin_reply(resp, (uint8_t)(Tremove + 1), tag);
 		finish_reply(resp);
 		return;
@@ -925,17 +1008,19 @@ void NinePServer::handle(const std::vector<uint8_t> &req, std::vector<uint8_t> &
 	case Tstatfs: {
 		r.u32();
 		if (r.bad) break;
-		std::wstring root = d.root_w;
-		if (root.back() != L'\\') root += L'\\';
-		ULARGE_INTEGER avail{}, total{}, free_bytes{};
-		GetDiskFreeSpaceExW(root.c_str(), &avail, &total, &free_bytes);
+		// Fixed figures, not the host disk's. Free space on the host moves
+		// with everything else the host does, so reporting it would make
+		// `df` -- and any installer that checks for room first -- differ
+		// between runs. A write the host cannot fit still fails, with
+		// ENOSPC, at the write.
+		constexpr uint64_t BLOCKS = (1ull << 40) / 4096;   // 1 TiB
 		begin_reply(resp, (uint8_t)(Tstatfs + 1), tag);
 		Writer w{resp};
 		w.u32(0x01021997);             // V9FS_MAGIC
 		w.u32(4096);
-		w.u64(total.QuadPart / 4096);
-		w.u64(free_bytes.QuadPart / 4096);
-		w.u64(avail.QuadPart / 4096);
+		w.u64(BLOCKS);
+		w.u64(BLOCKS);
+		w.u64(BLOCKS);
 		w.u64(0);                      // files: the host does not say
 		w.u64(0);
 		w.u64(0);                      // fsid
@@ -1154,6 +1239,8 @@ void Virtio9p::write32(uint64_t offset, uint32_t value, Memory &mem, Aplic &apli
 void Virtio9p::process_queue(Memory &mem, Aplic &aplic)
 {
 	if (!avail_addr || !used_addr || !desc_addr) return;
+	// Every request in this notify is served at the instruction that sent it.
+	guest_ns = mem.get_timer().get_mtime();
 	const uint32_t qsz = queue_num ? queue_num : QUEUE_MAX;
 	const uint16_t avail_idx = mem.read16(avail_addr + 2);
 	bool completed = false;

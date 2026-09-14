@@ -113,6 +113,21 @@ private:
 	std::map<uint32_t, Fid> fids;
 	uint32_t msize = 8192;
 
+	// Guest-visible metadata the host would otherwise decide, which would
+	// make two runs of the same guest differ. See the comment above
+	// NinePServer::guest_time in virtio_9p.cpp.
+	uint64_t guest_ns = 0;                  // instruction count of the request being served
+	std::map<uint64_t, uint64_t> ids;       // host file index -> inode number the guest sees
+	uint64_t next_id = 1;
+	uint64_t guest_id(uint64_t host_id)
+	{
+		const auto it = ids.find(host_id);
+		if (it != ids.end()) return it->second;
+		ids[host_id] = next_id;
+		return next_id++;
+	}
+	void forget_id(uint64_t host_id) { ids.erase(host_id); }
+
 	uint32_t status = 0;
 	uint32_t device_feat_sel = 0;
 	uint32_t queue_sel = 0;

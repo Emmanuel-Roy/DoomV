@@ -49,5 +49,20 @@ names, so the guest sees an approximation:
   listed above. A drive image is the right home for them.
 - **The guest cannot reach outside this folder.** A Windows link or junction
   inside it that points elsewhere is refused.
+- **Times come from the guest, not from Windows.** A file or directory the
+  guest creates or changes is stamped with the guest's time: 2024-01-01 plus
+  the instruction count as nanoseconds. The stamp is written to the Windows
+  file as well, so Explorer shows the same time the guest does -- which is why
+  a file saved from Linux can look like it was modified in 2024. Access and
+  change times read the same as the modification time.
+- **Inode numbers are the guest's own.** They count up from 1 in the order the
+  guest first sees each file, instead of being the NTFS file index, which
+  would be different on every run.
+- **`df` reports a fixed 1 TiB free.** The real free space of the Windows disk
+  changes with everything else the host does. A write the disk cannot fit
+  still fails, at the write.
+
+All of that is so that a run using the folder is deterministic: given the
+same starting contents, the guest sees exactly the same folder on every run.
 
 `-shared=<dir>` serves a different folder, and `-shared=` turns it off.
