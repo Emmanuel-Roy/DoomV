@@ -23,6 +23,11 @@ python scripts/boot.py linux --smoke
 python scripts/boot.py ubuntu
 python scripts/boot.py ubuntu --login
 
+# Desktops: install all three once (DoomV runs the install, for hours), then
+# pick one per boot.
+python scripts/boot.py ubuntu --install-desktops
+python scripts/boot.py ubuntu --desktop openbox    # or xfce, or x
+
 # Make a storage drive; every *.img in drives/ is attached to Linux at boot.
 python scripts/mkdrive.py data 1G
 # shared/ needs no setup: it is served to Linux live. In the guest:

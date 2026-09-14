@@ -115,3 +115,7 @@ fb*.png
 # README is part of the repository.
 /shared/*
 !/shared/README.md
+
+# The copy `boot.py ubuntu --install-desktops` takes before changing the image.
+/ubuntu.pre-desktop.img
+/build/logs/ubuntu-desktop-install.log

@@ -165,6 +165,68 @@ Two things not to do:
 * **No `init=` override** after stage 2. `init=/bin/sh` reaches a shell far
   faster and skips systemd entirely, which is the whole point of this image.
 
+## Desktops
+
+The image can also boot into an X11 desktop, drawn on the same framebuffer
+and driven by the same virtio keyboard and mouse. Three are installed side by
+side, and which one starts is a boot option:
+
+```
+python scripts/boot.py ubuntu --install-desktops   # once; DoomV does the install
+python scripts/boot.py ubuntu --desktop openbox    # Xorg + Openbox + xterm
+python scripts/boot.py ubuntu --desktop xfce       # the XFCE desktop
+python scripts/boot.py ubuntu --desktop x          # bare X: xterm windows, no window manager
+```
+
+Plain `boot.py ubuntu`, without `--desktop`, is the text console as before.
+
+**Installing** follows the same split as building the image. On the host,
+`mkdesktop.sh` downloads the riscv64 packages -- 270 of them, about 124 MB --
+into the image as a local apt repository, and writes the X configuration,
+the three sessions and an install script, executing nothing riscv64. Then
+DoomV boots the image with that script as init, and the guest's own apt and
+dpkg install everything. That took about three and a half hours here --
+checking the local packages, unpacking them, then configuring them -- for
+the same reason stage 2 took four.
+`--install-desktops` copies the image to `ubuntu.pre-desktop.img` first, and
+if apt fails the local repository stays in the image so the install can
+simply be run again.
+
+**Choosing a desktop** is a kernel command line argument. Each of
+`ubuntu-openbox.dtb`, `ubuntu-xfce.dtb` and `ubuntu-x.dtb` adds
+`doomv.desktop=<name>` to the plain Ubuntu device tree, and a
+`doomv-desktop` systemd unit in the guest, which only runs when that
+argument is present, starts the matching X session on VT 7.
+
+**The X server** uses the `fbdev` driver on `/dev/fb0` and names the input
+devices explicitly -- keyboard `event0`, mouse `event1` -- because the image
+has no udev to discover them with. GNOME is not offered: it wants a GPU and
+several gigabytes of memory, and this machine has neither.
+
+Expect a desktop to take a while to appear, because systemd, then Xorg,
+then the session all start at emulated speed. Measured from power-on:
+
+| Desktop | X draws the screen | Usable |
+| --- | --- | --- |
+| Openbox | ~14 min | ~25 min, when the xterm comes up |
+| bare X | ~14 min | ~25 min, the two xterms |
+| XFCE | ~29 min | ~30 min, panel and desktop drawn |
+
+Openbox is the most responsive once it is up. Ctrl+Alt+G grabs the mouse.
+`systemd-logind` failing to start appears in the boot log on every desktop
+boot and is harmless: nothing here needs a login session manager.
+
+The two xterm sessions report their progress on the serial console as
+`DOOMV-SESSION:` lines -- the session starting, the font loading, and
+`xterm is up` from the shell inside each terminal -- which is how a slow
+terminal is told apart from a broken one on a headless run. A change to the
+X configuration or the sessions reaches an installed image without
+reinstalling anything:
+
+```
+wsl -d Ubuntu -u root -- bash tools/linux/ubuntu/mkdesktop.sh --sessions-only /mnt/z/.../ubuntu.img
+```
+
 ## Known constraints
 
 **Memory.** DoomV currently has 1 GB (`Memory::RAM_SIZE` in

@@ -12,14 +12,22 @@ for. See tools/linux/ubuntu/README.md.
   python scripts/boot.py ubuntu --no-build      # boot what is already there
   python scripts/boot.py ubuntu --headless      # no window; log to the console
   python scripts/boot.py ubuntu --login         # prove the login works, headless
+
+  python scripts/boot.py ubuntu --install-desktops   # once: DoomV installs them (hours)
+  python scripts/boot.py ubuntu --desktop openbox    # Xorg + Openbox + xterm
+  python scripts/boot.py ubuntu --desktop xfce       # the XFCE desktop
+  python scripts/boot.py ubuntu --desktop x          # bare X, xterm windows only
 """
 import argparse
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import time
 
-from common import ROOT, BUILD, build_emulator, checkout_lock, entrypoint, environment, require_files, run, wsl_script
+from common import ROOT, BUILD, build_emulator, checkout_lock, entrypoint, environment, require_files, run, wsl_path, wsl_script
+
+DESKTOPS = ("openbox", "xfce", "x")
 
 # Printed by the serial getty once userspace is up. The gate for --login has
 # to be a string that survives systemd's own formatting: unit names are
@@ -64,9 +72,9 @@ sleep 45000
 LOGIN_MARKER = "DOOMV-LOGIN-OK"
 
 
-def ubuntu_command(image: Path, headless=False, extra=()):
+def ubuntu_command(image: Path, headless=False, extra=(), dtb="ubuntu.dtb"):
     images = BUILD / "linux"
-    paths = [images / "fw_jump.elf", images / "Image", images / "ubuntu.dtb"]
+    paths = [images / "fw_jump.elf", images / "Image", images / dtb]
     require_files(ROOT / "riscv_doom.exe", *paths, image)
     command = [str(ROOT / "riscv_doom.exe")]
     if headless:
@@ -149,6 +157,97 @@ def login_test(image: Path, timeout: float):
                     proc.wait()
 
 
+def emulator_running():
+    """Whether any DoomV is running. Two emulators on one disk image corrupt it."""
+    try:
+        out = subprocess.run(["tasklist", "/FI", "IMAGENAME eq riscv_doom.exe", "/NH"],
+                             capture_output=True, text=True, check=False).stdout
+    except OSError:
+        return False
+    return "riscv_doom.exe" in out.lower()
+
+
+def install_desktops(image: Path, timeout_hours: float):
+    """Put Openbox, XFCE and bare X into the image, with DoomV doing the install.
+
+    Three steps. The image is copied aside first, because this changes it and
+    takes hours. Then mkdesktop.sh, on the host, downloads the packages into
+    the image as a local apt repository and writes the X config, sessions and
+    the install script -- running nothing riscv64. Then DoomV boots the image
+    with that script as init, and the guest's own apt and dpkg install
+    everything, exactly as stage 2 configured the base system.
+    """
+    if emulator_running():
+        raise RuntimeError("A DoomV is already running. Close it first: two emulators "
+                           "writing ubuntu.img at once would corrupt it.")
+    backup = image.with_name(image.stem + ".pre-desktop.img")
+    if backup.exists():
+        print(f"backup already exists, keeping it: {backup}")
+    else:
+        print(f"backing up the image to {backup} ...", flush=True)
+        shutil.copyfile(image, backup)
+
+    run(["wsl.exe", "-d", "Ubuntu", "-u", "root", "--", "bash",
+         wsl_path(ROOT / "tools/linux/ubuntu/mkdesktop.sh"), wsl_path(image)])
+
+    log = BUILD / "logs/ubuntu-desktop-install.log"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    command = ubuntu_command(image, headless=True, dtb="ubuntu-install.dtb")
+    print(f"DoomV is installing the desktops. This takes hours; the log is {log}", flush=True)
+    started = time.monotonic()
+    with log.open("wb") as output:
+        proc = subprocess.Popen(command, cwd=ROOT, env=environment(),
+                                stdout=output, stderr=subprocess.STDOUT)
+        try:
+            position, set_up, last_report, result = 0, 0, 0.0, None
+            deadline = started + timeout_hours * 3600
+            while time.monotonic() < deadline:
+                # Read only what is new: the log runs to megabytes over hours.
+                with log.open("rb") as f:
+                    f.seek(position)
+                    chunk = f.read().decode("utf-8", errors="replace")
+                    position = f.tell()
+                set_up += chunk.count("Setting up ")
+                if "Kernel panic" in chunk:
+                    raise RuntimeError(f"the guest panicked; see {log}")
+                if "DOOMV-DESKTOP-FAILED" in chunk:
+                    result = False
+                if "DOOMV-DESKTOP-OK" in chunk:
+                    result = True
+                if result is not None:
+                    break
+                now = time.monotonic()
+                if now - last_report > 300:
+                    print(f"  {(now - started) / 3600:4.1f} h: {set_up} packages set up so far", flush=True)
+                    last_report = now
+                if proc.poll() is not None:
+                    raise RuntimeError(f"the emulator exited before the install finished; see {log}")
+                time.sleep(2)
+            if result is None:
+                raise RuntimeError(f"the install did not finish within {timeout_hours:g} h; see {log}")
+            # The marker is printed after the guest's sync. Give it a couple
+            # of minutes to power itself off rather than being killed.
+            for _ in range(120):
+                if proc.poll() is not None:
+                    break
+                time.sleep(1)
+            if not result:
+                raise RuntimeError("apt in the guest failed; the failing package is in "
+                                   f"{log}. The image still has the local repository, so "
+                                   "--install-desktops can be run again.")
+            hours = (time.monotonic() - started) / 3600
+            print(f"PASS: desktops installed in {hours:.1f} h ({set_up} packages set up).")
+            print("Boot one with: python scripts/boot.py ubuntu --desktop openbox|xfce|x")
+        finally:
+            if proc.poll() is None:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.wait()
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -162,10 +261,18 @@ def main():
                         help="headless: log in through the emulated keyboard and exit")
     parser.add_argument("--timeout", type=float, default=1800,
                         help="--login timeout in seconds (a systemd boot here is minutes)")
+    parser.add_argument("--desktop", choices=DESKTOPS,
+                        help="boot into an X desktop: openbox, xfce, or bare x")
+    parser.add_argument("--install-desktops", action="store_true",
+                        help="install all three desktops into the image (DoomV does it; hours)")
+    parser.add_argument("--install-timeout", type=float, default=16,
+                        help="--install-desktops timeout in hours")
     args = parser.parse_args()
     if args.timeout <= 0:
         parser.error("--timeout must be positive")
     image = args.image.resolve()
+    if sum(bool(x) for x in (args.login, args.desktop, args.install_desktops)) > 1:
+        parser.error("--login, --desktop and --install-desktops are separate runs; pick one")
     # Checked before building: a kernel build takes minutes and there is no
     # point spending them to then discover there is nothing to boot.
     require_image(image)
@@ -173,8 +280,18 @@ def main():
         if not args.no_build:
             build_emulator()
             wsl_script("build_linux.sh")
-        if args.login:
+        if args.install_desktops:
+            install_desktops(image, args.install_timeout)
+        elif args.login:
             login_test(image, args.timeout)
+        elif args.desktop:
+            if emulator_running():
+                raise RuntimeError("A DoomV is already running on an image; close it first.")
+            print(f"Ubuntu boots into the {args.desktop} desktop in the emulator window.")
+            print("systemd, then X, then the session all start at emulated speed: X draws")
+            print("the screen after ~15 min and the desktop is usable after ~25-30 min.")
+            print("Ctrl+Alt+G grabs the mouse.")
+            run(ubuntu_command(image, headless=args.headless, dtb=f"ubuntu-{args.desktop}.dtb"))
         else:
             if not args.headless:
                 print("Ubuntu opens in the emulator window. Log in as root / doomv at the")

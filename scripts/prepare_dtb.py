@@ -32,7 +32,7 @@ def device_tree(source, initrd_size, smoke=False):
     return source
 
 
-def disk_device_tree(source):
+def disk_device_tree(source, extra_args=""):
     """The Ubuntu variant: root on the disk, and no initramfs at all.
 
     The two edits are not independent. Leaving linux,initrd-start pointing at
@@ -41,9 +41,10 @@ def disk_device_tree(source):
     that and never mounts the disk, which looks like a successful boot of
     nothing. So the properties are removed rather than adjusted.
     """
-    source, count = re.subn(r'bootargs = "[^"]*";',
-                            'bootargs = "earlycon=sbi console=tty0 console=hvc0 '
-                            'root=/dev/vda1 rootwait rw";', source)
+    bootargs = "earlycon=sbi console=tty0 console=hvc0 root=/dev/vda1 rootwait rw"
+    if extra_args:
+        bootargs += " " + extra_args
+    source, count = re.subn(r'bootargs = "[^"]*";', lambda m: f'bootargs = "{bootargs}";', source)
     if count != 1:
         raise ValueError("expected exactly one bootargs property")
     source, count = re.subn(r"\s*linux,initrd-(start|end)\s*=\s*<[^>]*>;", "", source)
@@ -69,6 +70,15 @@ def main():
     # tree this project uses is produced in one place from one source, and so
     # that booting the image needs no WSL round trip for dtc.
     compile_dtb(args.images / "ubuntu.dts", disk_device_tree(source))
+    # Variants of it that differ only in the kernel command line: one boots
+    # the desktop install script as init, and one per desktop names the
+    # session the guest's doomv-desktop service should start. See
+    # tools/linux/ubuntu/mkdesktop.sh.
+    for stem, extra in (("ubuntu-install", "init=/doomv-desktop-install"),
+                        ("ubuntu-openbox", "doomv.desktop=openbox"),
+                        ("ubuntu-xfce", "doomv.desktop=xfce"),
+                        ("ubuntu-x", "doomv.desktop=x")):
+        compile_dtb(args.images / f"{stem}.dts", disk_device_tree(source, extra))
 
 
 if __name__ == "__main__":
