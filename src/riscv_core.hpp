@@ -11,9 +11,36 @@ class Memory;
 // ext_i.cpp and ext_m.cpp.
 inline uint64_t sext32(uint32_t v) { return (uint64_t)(int64_t)(int32_t)v; }
 
+#include <vector>
+
+// One load or store an instruction made, as lockstep.cpp logs it: the
+// address the instruction used and the one it reached.
+struct AccessRecord {
+	uint64_t vaddr, paddr;
+	uint8_t size;
+	bool store;
+};
+
 class RiscvCore {
 public:
 	RiscvCore();
+
+	// Commit-log bookkeeping for lockstep.cpp. enter_trap counts every trap
+	// and remembers the last; translate_or_trap appends each load and store
+	// to access_log while it is set.
+	uint64_t trap_count = 0;
+	uint64_t last_trap_cause = 0, last_trap_tval = 0, last_trap_epc = 0;
+	bool last_trap_interrupt = false;
+	std::vector<AccessRecord> *access_log = nullptr;
+	// Whether interrupt `bit` would be taken now were it pending: the enable
+	// and delegation half of check_and_take_interrupt. In lock-step the
+	// pending half belongs to the reference.
+	bool interrupt_enabled(Registers &regs, int bit);
+	// Enter interrupt `bit`'s trap now, as check_and_take_interrupt would.
+	void take_interrupt(Registers &regs, int bit)
+	{
+		enter_trap(regs, (1ull << 63) | (uint64_t)bit, 0, /*is_interrupt=*/true);
+	}
 
 	// Each function is responsible for leaving pc correctly set before
 	// returning -- advanced by the instruction's length for straight-line

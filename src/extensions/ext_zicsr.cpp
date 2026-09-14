@@ -361,6 +361,34 @@ constexpr uint64_t MSTATUS_MPIE = 1ull << 7;
 constexpr uint64_t MSTATUS_SPP  = 1ull << 8;    // 1 bit: previous mode was S(1) or U(0)
 constexpr uint64_t MSTATUS_MPP  = 3ull << 11;   // 2 bits: previous mode, PrivMode-encoded
 
+// What an mstatus write may change. Every field this hart has is named, and
+// anything else reads zero -- the same shape as Sail's legalize_mstatus,
+// which DoomV is held to.
+//
+// mstatus writes used to go straight to storage, so every bit stuck:
+// XS (16:15), which summarises non-standard extension state this hart does
+// not have and so is read-only zero; MBE, SBE and UBE, which are read-only
+// zero on a little-endian hart; a reserved MPP of 2; and SD, which is
+// derived from FS, VS and XS and never written. Lock-stepping against Sail
+// found XS at the first mstatus write of 140 riscv-tests.
+uint64_t legalize_mstatus(uint64_t value)
+{
+	uint64_t keep = MSTATUS_SIE | MSTATUS_MIE | MSTATUS_SPIE | MSTATUS_MPIE | MSTATUS_SPP
+	              | (1ull << 17)    // MPRV
+	              | (1ull << 18)    // SUM
+	              | (1ull << 19)    // MXR
+	              | (1ull << 20)    // TVM
+	              | (1ull << 21)    // TW
+	              | (1ull << 22);   // TSR
+	if (Extensions.F || Extensions.D) keep |= 3ull << 13;   // FS
+	if (Extensions.V) keep |= 3ull << 9;                    // VS
+	if (Extensions.H) keep |= (1ull << 38) | (1ull << 39);  // GVA, MPV
+	if (Extensions.ZICFILP) keep |= (1ull << 23) | (1ull << 41);   // SPELP, MPELP
+	uint64_t mpp = (value >> 11) & 3;
+	if (mpp == 2) mpp = 0;   // not a privilege level: the lowest one, U
+	return (value & keep) | (mpp << 11);
+}
+
 constexpr uint64_t CAUSE_ECALL_FROM_U = 8;
 constexpr uint64_t CAUSE_ECALL_FROM_S = 9;
 constexpr uint64_t CAUSE_ECALL_FROM_M = 11;
@@ -430,6 +458,9 @@ uint64_t compute_misa()
 	if (Extensions.D) bit('D');
 	if (Extensions.V) bit('V');
 	if (Extensions.H) bit('H');
+	// B is Zba, Zbb and Zbs together -- the ratified B extension is defined
+	// as exactly that set, and misa reports it when all three are present.
+	if (Extensions.ZBA && Extensions.ZBB && Extensions.ZBS) bit('B');
 	bit('S');
 	bit('U');
 	v |= (Extensions.XLEN64 ? 2ull : 1ull) << (Extensions.XLEN64 ? 62 : 30);
@@ -692,6 +723,19 @@ bool RiscvCore::csr_access_permitted(Registers &regs, uint16_t csr, bool writing
 	// Unassigned user-level addresses, for the same reason and with the
 	// same answer: no such register, illegal at every privilege.
 	if (is_unimplemented_user_csr(csr)) return false;
+
+	// Smrnmi's CSRs -- mnscratch, mnepc, mncause, mnstatus. DoomV has no
+	// resumable NMI, so they are not there, and an access traps as it does
+	// in Sail's RVA23S64 configuration. They used to fall through to generic
+	// CSR storage, which let riscv-tests' reset vector write mnstatus where
+	// the reference traps; lock-stepping against Sail found it at the 37th
+	// instruction of every test.
+	if (csr >= 0x740 && csr <= 0x744) return false;
+	// Sdtrig's trigger CSRs (tdata1-3, tinfo, tcontrol, mcontext) and the
+	// debug-mode CSRs (dcsr, dpc, dscratch0-1): DoomV has no triggers and no
+	// debug mode, so these are absent, as in the reference. tselect alone
+	// stays -- see its read in read_csr_effective.
+	if (csr >= 0x7A1 && csr <= 0x7B3) return false;
 
 	// csr[9:8] normally encodes the lowest privilege that may access the
 	// register -- 0 for U, 1 for S, 3 for M. The value 2 is not a
@@ -957,7 +1001,12 @@ uint64_t RiscvCore::read_csr_effective(Registers &regs, Memory &mem, uint16_t cs
 {
 	// PMP entries past the implemented count read as zero rather than as
 	// whatever was last written to an unimplemented register.
-	if (csr == CSR_MSTATUS) return vcommon::with_sd(regs.read_csr(CSR_MSTATUS));
+	// UXL (33:32) and SXL (35:34) are read-only 2: this hart's U and S modes
+	// only run at 64 bits. sstatus's view already said so for UXL, but
+	// mstatus read them from storage, where nothing ever set them -- so they
+	// read as 0 ("no such mode") until reset, which Sail does not. Found by
+	// lock-stepping against Sail at the first trap of every riscv-test.
+	if (csr == CSR_MSTATUS) return vcommon::with_sd(regs.read_csr(CSR_MSTATUS)) | (2ull << 32) | (2ull << 34);
 	if (pmp::is_pmpcfg(csr)) return pmp::read_cfg(regs, csr);
 	if (pmp::is_pmpaddr(csr)) return pmp::read_addr(regs, csr);
 	if (csr == 0x100) return read_sstatus(regs);
@@ -973,6 +1022,11 @@ uint64_t RiscvCore::read_csr_effective(Registers &regs, Memory &mem, uint16_t cs
 	    && !(regs.read_csr(0x60A) & (1ull << 3)))
 		return regs.read_csr(0x10A) & ~(1ull << 3);
 	if (csr == CSR_MIDELEG) return regs.read_csr(CSR_MIDELEG) | mideleg_fixed_ones();
+	// tselect reads back the inverse of what was written. That is the
+	// debug spec's way of saying there are no triggers: software writes a
+	// trigger index and, when it does not read back, stops looking. It is
+	// what Sail does, and the only trigger CSR Sail has.
+	if (csr == 0x7A0) return ~regs.read_csr(0x7A0);
 	// GEILEN is zero: no guest external interrupt file exists, so both
 	// registers that describe one read as zero however they were written.
 	if (Extensions.H && (csr == CSR_HGEIE || csr == CSR_HGEIP)) return 0;
@@ -1105,6 +1159,8 @@ bool RiscvCore::translate_or_trap(Registers &regs, Memory &mem, uint64_t vaddr, 
 		enter_trap(regs, cause, tval);
 		return false;
 	}
+	if (access_log && type != AccessType::Fetch)
+		access_log->push_back({vaddr, paddr, (uint8_t)size, type == AccessType::Store});
 
 	// An access that crosses a page boundary is two accesses as far as the
 	// page tables are concerned, and the second page can answer differently
@@ -1224,6 +1280,11 @@ void RiscvCore::enter_trap(Registers &regs, uint64_t cause, uint64_t tval, bool 
 {
 	uint64_t pc = regs.get_pc();
 	PrivMode from = regs.get_priv();
+	trap_count++;
+	last_trap_cause = cause;
+	last_trap_tval = tval;
+	last_trap_epc = pc;
+	last_trap_interrupt = is_interrupt;
 
 	// Interrupt causes have bit 63 set (e.g. (1<<63)|7 for an M-timer
 	// interrupt) -- strip it for the delegation-bit lookup, which always
@@ -1425,6 +1486,22 @@ void RiscvCore::enter_trap(Registers &regs, uint64_t cause, uint64_t tval, bool 
 	// offset for interrupts isn't implemented; every trap goes to the same
 	// base address regardless of mode or cause.
 	regs.set_pc(regs.read_csr(CSR_MTVEC) & ~0x3ull);
+}
+
+bool RiscvCore::interrupt_enabled(Registers &regs, int bit)
+{
+	if (bit < 0 || bit > 63) return false;
+	if (!(regs.read_csr(CSR_MIE) & (1ull << bit))) return false;
+	PrivMode priv = regs.get_priv();
+	bool to_s = (regs.read_csr(CSR_MIDELEG) & (1ull << bit)) != 0;
+	uint64_t mstatus = regs.read_csr(CSR_MSTATUS);
+	if (Extensions.H && to_s && (regs.read_csr(0x603) & (1ull << bit))) {
+		if (!regs.get_virt()) return false;
+		return !(priv == PrivMode::S && !(regs.read_csr(0x200) & MSTATUS_SIE));
+	}
+	if (!to_s) return !(priv == PrivMode::M && !(mstatus & MSTATUS_MIE));
+	if (priv == PrivMode::M) return false;
+	return !(!regs.get_virt() && priv == PrivMode::S && !(mstatus & MSTATUS_SIE));
 }
 
 bool RiscvCore::check_and_take_interrupt(Registers &regs, Memory &mem)
@@ -2079,6 +2156,7 @@ void RiscvCore::exec_32ZICSR(const DecodedInstruction &instr, Registers &regs, M
 
 	if (pmp::is_pmpcfg(csr)) pmp::write_cfg(regs, csr, updated);
 	else if (pmp::is_pmpaddr(csr)) pmp::write_addr(regs, csr, updated);
+	else if (csr == CSR_MSTATUS) regs.write_csr(CSR_MSTATUS, legalize_mstatus(updated));
 	else if (csr == 0x100) write_sstatus(regs, updated);
 	else if (Extensions.H && csr == hyp::CSR_HSTATUS_ADDR) hyp::write_hstatus(regs, updated);
 	else if (Extensions.SSCOFPMF && sscofpmf::is_mhpmevent(csr))
@@ -2112,13 +2190,28 @@ void RiscvCore::exec_32ZICSR(const DecodedInstruction &instr, Registers &regs, M
 	else if (csr == CSR_MTOPEI) { if (did_write) mem.get_imsic_m().claim(); }
 	else if (csr == CSR_STOPEI) { if (did_write) mem.get_imsic_s().claim(); }
 	else if (csr == CSR_MTOPI || csr == CSR_STOPI) { /* read-only */ }
-	else if (csr == 0x001) regs.set_fflags((uint8_t)updated);
-	else if (csr == 0x002) regs.set_frm((uint8_t)updated);
-	else if (csr == 0x003) { regs.set_frm((uint8_t)(updated >> 5)); regs.set_fflags((uint8_t)updated); }
-	else if (csr == 0x008) regs.set_vstart(updated);
-	else if (csr == 0x009) regs.set_vxsat((uint8_t)updated);
-	else if (csr == 0x00A) regs.set_vxrm((uint8_t)updated);
-	else if (csr == 0x00F) { regs.set_vxrm((uint8_t)(updated >> 1)); regs.set_vxsat((uint8_t)updated); }
+	// Writing fflags, frm or fcsr changes floating-point state, and so does
+	// writing vstart, vxsat, vxrm or vcsr for the vector unit: either marks
+	// its status field Dirty, in mstatus and (under V) vsstatus. The CSR
+	// write never did, so a context switch deciding what to save from FS or
+	// VS could skip state a CSR instruction had just changed. Sail marks it
+	// on every such write; lock-stepping against it found the gap at the
+	// first fcsr write of every floating-point test.
+	else if (csr == 0x001) { regs.set_fflags((uint8_t)updated); if (Extensions.F) vcommon::mark_fp_dirty(regs); }
+	else if (csr == 0x002) { regs.set_frm((uint8_t)updated); if (Extensions.F) vcommon::mark_fp_dirty(regs); }
+	else if (csr == 0x003) {
+		regs.set_frm((uint8_t)(updated >> 5));
+		regs.set_fflags((uint8_t)updated);
+		if (Extensions.F) vcommon::mark_fp_dirty(regs);
+	}
+	else if (csr == 0x008) { regs.set_vstart(updated); if (Extensions.V) vcommon::mark_vector_dirty(regs); }
+	else if (csr == 0x009) { regs.set_vxsat((uint8_t)updated); if (Extensions.V) vcommon::mark_vector_dirty(regs); }
+	else if (csr == 0x00A) { regs.set_vxrm((uint8_t)updated); if (Extensions.V) vcommon::mark_vector_dirty(regs); }
+	else if (csr == 0x00F) {
+		regs.set_vxrm((uint8_t)(updated >> 1));
+		regs.set_vxsat((uint8_t)updated);
+		if (Extensions.V) vcommon::mark_vector_dirty(regs);
+	}
 	else regs.write_csr(csr, updated);
 
 	regs.write_x(instr.rd, old);

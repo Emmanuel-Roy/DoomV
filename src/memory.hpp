@@ -269,6 +269,17 @@ public:
 	bool is_backed(uint64_t addr, unsigned size) const;
 
 	uint64_t tohost_addr = 0;
+
+	// While set, the bytes of every store, from the outermost call only
+	// (lockstep.cpp): write64 is two write32s and a device write32 is four
+	// write8s, and only the outermost is the guest's store.
+	std::vector<std::pair<uint64_t, uint8_t>> *store_log = nullptr;
+	int store_depth = 0;
+	bool is_ram(uint64_t paddr, unsigned size) const
+	{
+		const uint64_t span = RAM_SIZE + WAD_SIZE;
+		return paddr >= RAM_BASE && size <= span && paddr - RAM_BASE <= span - size;
+	}
 	uint64_t tohost_value = 0;
 	bool htif_busy = false;   // see Memory::check_tohost
 

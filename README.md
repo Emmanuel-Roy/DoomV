@@ -167,10 +167,12 @@ has nothing to batch.
 CSR accesses are privilege-checked: writing a read-only CSR, or touching
 one above the current privilege level, raises an illegal instruction, and
 `cycle`/`time`/`instret` are gated in S- and U-mode by the
-`mcounteren`/`scounteren` chain. CSR *numbers* this machine gives no
-meaning to are still readable and writable — OpenSBI detects hart features
-by reading a spread of CSRs to see which trap, so making unknown ones
-illegal is a much larger change than making privilege boundaries real.
+`mcounteren`/`scounteren` chain. The CSRs of extensions this hart does not
+have -- Smrnmi's, Sdtrig's triggers, the debug-mode registers -- trap, as they
+do in Sail. Other CSR *numbers* this machine gives no meaning to are still
+readable and writable: OpenSBI detects hart features by reading a spread of
+CSRs to see which trap, so making every unknown one illegal is a much larger
+change than making privilege boundaries real.
 
 Every extension is a runtime toggle, not a compile-time one — pass
 `-march=rv64imafdc_zicsr_zifencei` (the default), add a `v` for vector
@@ -355,6 +357,8 @@ riscv_doom.exe -opensbi=<f> -kernel=<f> -dtb=<f> -initrd=<f> [options]   # Linux
 | `-stopat=<n>` | Stop after exactly `n` instructions and write the machine state to `crash.log`. Two runs of the same guest with the same inputs leave identical files -- see [Determinism](#determinism). |
 | `-record=<path>` | Log every input the guest receives -- keys, pointer, serial bytes -- with the instruction it arrived at. |
 | `-replay=<path>` | Deliver a `-record` log's input at exactly those instructions, and ignore the window, stdin and `-input`. Reproduces a recorded run instruction for instruction. |
+| `-trace=<path>` | Write a trace of every instruction, register and CSR write, store and trap, in Sail's trace format. |
+| `-lockstep=<path>` | Run against a reference trace -- Sail's, or an RTL simulation's -- and halt at the first record that does not match. See [Lock-stepping](#lockstep). |
 
 `-ng` is what makes the conformance suites practical. With a window open a
 finished test never exits on its own and has to be killed from outside, so
@@ -693,6 +697,71 @@ closed the same way: timestamps for anything the guest changes come from the
 instruction count, inode numbers from the order the guest sees files, and
 free space is a fixed figure. The folder's starting contents are an input,
 like a disk image; given the same contents, the guest sees the same folder.
+
+<a id="lockstep"></a>
+**Lock-stepping against Sail.** That determinism is what makes DoomV
+checkable one instruction at a time, and the reference it is held to is
+**Sail**, the RISC-V model generated from the same source the architecture
+is specified in. `-trace=<path>` writes DoomV's run in the trace format
+`sail_riscv_sim` prints with `--trace-instr --trace-gpr --trace-fpr
+--trace-vreg --trace-csr --trace-mem --trace-exception --trace-interrupt`:
+a line per instruction, then a line per effect.
+
+```
+[36] [M]: 0x00000000800000E0 (0x30529073)
+CSR mtvec (0x305) <- 0x00000000800000E8
+[83] [U]: 0x00000000800001BC (0x00113023)
+mem[W,0x0000000080002000] <- 0x00AA00AA00AA00AA
+[37] [M]: 0x00000000800000E4 (0x74445073)
+trapping from M to M to handle illegal-instruction
+handling exc#illegal-instruction at priv M | tval=0x0000000074445073 | tval2=0x0000000000000000 | tinst=0x0000000000000000
+CSR mcause (0x342) <- 0x0000000000000002
+```
+
+`-lockstep=<path>` runs DoomV against a reference trace in that format --
+Sail's, or an RTL testbench's written the same way -- one record at a time.
+It stops at the first record that differs, prints both records and the field,
+writes `crash.log`, and exits 1 when headless:
+
+```
+lockstep: MISMATCH at reference line 177, after 56 matching records (instruction 57)
+  CSR mideleg (0x303): reference 0x0000000000001444, DoomV 0x0000000000000444
+  reference:
+    [56] [M]: 0x000000008000012C (0x30305073) csrrwi x0, mideleg, 0x0     reset_vector+220
+    CSR mideleg (0x303) <- 0x0000000000001444
+  DoomV:
+    [56] [M]: 0x000000008000012C (0x30305073)
+    CSR mideleg (0x303) <- 0x0000000000000444
+```
+
+Compared, for an instruction that completes: privilege (with V), pc and
+instruction bits; every register and CSR write, against DoomV's value after
+it; every store, by physical address and value; and that DoomV wrote nothing
+the reference did not. For a trap or an interrupt: the same cause, epc and
+tval, and the same values in every CSR trap entry writes.
+
+Not compared, because an implementation's own clock and devices decide them:
+reads of the counters and the time, of pending-interrupt state (`mip`, `sip`,
+the `topi`/`topei` registers), and loads from anything that is not RAM. DoomV
+takes those values from the reference and carries on. Interrupts too: DoomV
+takes one exactly where the reference did, and never on its own, checking
+that it was enabled there. A log in Spike's `--log-commits` format is also
+read, for a reference that only produces that.
+
+`tools/verification/lockstep_sail.py` does this for the riscv-tests: Sail
+traces each test, and DoomV lock-steps against the trace. The Sail
+configuration it uses is the suites' own with the hart parameters DoomV
+actually has -- no guest external interrupt lines, direct trap vectors only,
+a read-only `misa` -- because a lock-step compares every CSR write, and a reference describing a
+different hart differs in ways that are configuration rather than error.
+
+```sh
+python tools/verification/lockstep_sail.py                  # every rv64 test
+python tools/verification/lockstep_sail.py rv64mi-p-csr     # one
+```
+
+It found six differences on its first run that every conformance suite had
+passed over -- see [Part XIII of the bug history](docs/BUGS.md#part-xiii).
 
 The core dispatches on a plain switch statement rather than a table of
 function pointers. I went in assuming function pointers would be the

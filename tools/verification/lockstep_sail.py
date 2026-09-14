@@ -1,0 +1,154 @@
+#!/usr/bin/env python3
+"""Lock-step DoomV against Sail, the golden reference, one test at a time.
+
+For every riscv-tests ELF Sail passes, Sail writes its full trace (every
+instruction, register, CSR, store, exception and interrupt), and DoomV runs
+the same ELF with -lockstep against that trace. DoomV halts at the first
+record that differs from Sail's, so a failure here names the exact
+instruction and field where DoomV and the reference parted ways.
+
+    python tools/verification/lockstep_sail.py              # every rv64 test
+    python tools/verification/lockstep_sail.py rv64ui-p-add rv64mi-p-illegal
+    python tools/verification/lockstep_sail.py --jobs 8 --keep
+"""
+import argparse
+import concurrent.futures
+import json
+import pathlib
+import re
+import shutil
+import subprocess
+import sys
+
+ROOT = pathlib.Path(__file__).resolve().parents[2]
+SUITES = ROOT / "tools" / "verification" / "tests" / "suites"
+sys.path.insert(0, str(SUITES))
+import run_suite  # noqa: E402  (the suite runner's march, Sail paths and ELF symbol reader)
+
+TESTS = SUITES / "riscv-tests"
+WORK = ROOT / "build" / "lockstep-sail"
+SAIL_FLAGS = ["--trace-instr", "--trace-gpr", "--trace-fpr", "--trace-vreg", "--trace-csr",
+              "--trace-mem", "--trace-exception", "--trace-interrupt"]
+
+
+# The hart Sail models has to be the hart DoomV is. The suites' Sail config
+# was generated for signature comparison, where a few hart parameters never
+# show; lock-stepping compares every CSR write, so they have to agree. Each
+# entry here is a parameter the suites' config sets differently from DoomV.
+HART = {
+    # Guest external interrupt lines. DoomV has none: hgeie and hgeip read as
+    # zero, and mideleg's SGEI bit is not read-only one.
+    "geilen": 0,
+}
+
+# The same, for settings that are only meaningful at one place in the config.
+HART_AT = {
+    # DoomV's trap vectors are direct only. A write asking for vectored mode
+    # keeps the old mode and the new base, which is what Sail does for a mode
+    # the hart does not support.
+    ("base", "mtvec", "vectored", "supported"): False,
+    ("base", "stvec", "vectored", "supported"): False,
+    ("base", "vstvec", "vectored", "supported"): False,
+    # DoomV's misa is read-only: its extensions are chosen on the command line,
+    # not switched off at run time by writing misa.
+    ("base", "writable_misa"): False,
+}
+
+
+def matched_config() -> pathlib.Path:
+    cfg = json.loads((ROOT / "tools" / "verification" / "simulators" / "sail" / "rva23s64.json").read_text())
+
+    def apply(node):
+        if isinstance(node, dict):
+            for key in node:
+                if key in HART:
+                    node[key] = HART[key]
+                else:
+                    apply(node[key])
+        elif isinstance(node, list):
+            for item in node:
+                apply(item)
+
+    apply(cfg)
+    for path, value in HART_AT.items():
+        node = cfg
+        for key in path[:-1]:
+            node = node[key]
+        node[path[-1]] = value
+    out = WORK / "sail-doomv.json"
+    out.write_text(json.dumps(cfg, indent=2))
+    return out
+
+
+def wsl(path: pathlib.Path) -> str:
+    s = str(path.resolve()).replace("\\", "/")
+    return "/mnt/" + s[0].lower() + s[2:]
+
+
+def one(elf: pathlib.Path, config: pathlib.Path, keep: bool, timeout: int):
+    work = WORK / elf.name
+    shutil.rmtree(work, ignore_errors=True)
+    work.mkdir(parents=True)
+    trace = work / "sail.log"
+
+    sail = subprocess.run(["wsl", "-d", "Ubuntu", "-u", "root", "--", run_suite.WSL_SAIL, "--config", wsl(config)]
+                          + SAIL_FLAGS + ["--trace-output", wsl(trace), wsl(elf)],
+                          capture_output=True, text=True, timeout=timeout, env=run_suite._env())
+    if "SUCCESS" not in (sail.stdout or "") + (sail.stderr or ""):
+        shutil.rmtree(work, ignore_errors=True)
+        return elf.name, "skip", "Sail does not pass it"
+
+    syms = run_suite.elf_symbols(elf)
+    cmd = [str(ROOT / "riscv_doom.exe"), "-ng", str(ROOT / "tools" / "doom" / "doombuild" / "DOOM1.WAD"), str(elf),
+           "-march=" + run_suite.SUITE_MARCH, "-tohost={:x}".format(syms["tohost"]),
+           "-lockstep=" + str(trace), "-stopat=100000000"]
+    try:
+        r = subprocess.run(cmd, cwd=work, capture_output=True, text=True, timeout=timeout)
+        out = (r.stdout or "") + (r.stderr or "")
+        code = r.returncode
+    except subprocess.TimeoutExpired:
+        return elf.name, "fail", "DoomV timed out"
+
+    if "MISMATCH" in out:
+        at = out.index("lockstep: MISMATCH")
+        return elf.name, "fail", out[at:].strip()
+    tohost = (work / "tohost.log").read_text().strip() if (work / "tohost.log").exists() else "?"
+    summary = next((l for l in out.splitlines() if l.startswith("lockstep: ")), "no lockstep summary")
+    if code != 0 or tohost != "1":
+        return elf.name, "fail", f"exit {code}, tohost {tohost}: {summary}"
+    if not keep:
+        shutil.rmtree(work, ignore_errors=True)
+    return elf.name, "pass", summary
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("tests", nargs="*", help="test names; default: every rv64 test")
+    ap.add_argument("--jobs", type=int, default=8)
+    ap.add_argument("--keep", action="store_true", help="keep traces of passing tests")
+    ap.add_argument("--timeout", type=int, default=300)
+    args = ap.parse_args()
+
+    if args.tests:
+        elfs = [TESTS / t for t in args.tests]
+    else:
+        elfs = sorted(p for p in TESTS.iterdir()
+                      if re.match(r"rv64[a-z]+-[pv]-", p.name) and p.is_file() and not p.suffix)
+    WORK.mkdir(parents=True, exist_ok=True)
+    config = matched_config()
+
+    results = {"pass": [], "fail": [], "skip": []}
+    with concurrent.futures.ThreadPoolExecutor(args.jobs) as pool:
+        for name, status, detail in pool.map(lambda e: one(e, config, args.keep, args.timeout), elfs):
+            results[status].append((name, detail))
+            if status == "fail":
+                print(f"FAIL {name}\n  " + detail.replace("\n", "\n  "), flush=True)
+            else:
+                print(f"{status:4} {name}: {detail}", flush=True)
+
+    print(f"\npass {len(results['pass'])}  fail {len(results['fail'])}  skip {len(results['skip'])}")
+    return 1 if results["fail"] else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -244,8 +244,22 @@ uint64_t Memory::read64(uint64_t addr)
 	return (uint64_t)read32(addr) | ((uint64_t)read32(addr + 4) << 32);
 }
 
+namespace {
+struct StoreCapture {
+	Memory &m;
+	const bool on;
+	StoreCapture(Memory &mem, uint64_t addr, uint64_t val, unsigned size) : m(mem), on(mem.store_log != nullptr)
+	{
+		if (on && m.store_depth++ == 0)
+			for (unsigned i = 0; i < size; i++) m.store_log->push_back({addr + i, (uint8_t)(val >> (8 * i))});
+	}
+	~StoreCapture() { if (on) m.store_depth--; }
+};
+}
+
 void Memory::write8(uint64_t addr, uint8_t val)
 {
+	StoreCapture capture(*this, addr, val, 1);
 	if (addr >= RAM_BASE && addr < RAM_BASE + RAM_SIZE + WAD_SIZE) {
 		ram[addr - RAM_BASE] = val;
 	} else if (addr >= LFB_BASE && addr < LFB_BASE + LFB_SIZE) {
@@ -343,6 +357,7 @@ void Memory::check_tohost()
 
 void Memory::write32(uint64_t addr, uint32_t val)
 {
+	StoreCapture capture(*this, addr, val, 4);
 	// Unlike the byte-addressable devices below (RAM/framebuffer/debug
 	// putchar, all handled through write8), these are register-file-style
 	// devices whose writes need to land atomically (e.g. setipnum's
@@ -416,6 +431,7 @@ void Memory::write32(uint64_t addr, uint32_t val)
 
 void Memory::write64(uint64_t addr, uint64_t val)
 {
+	StoreCapture capture(*this, addr, val, 8);
 	write32(addr + 0, (uint32_t)(val & 0xFFFFFFFFu));
 	write32(addr + 4, (uint32_t)(val >> 32));
 

@@ -66,6 +66,11 @@ public:
 	// at exactly those counts and ignores the window, stdin and -input.
 	bool set_input_record(const char *path);
 	bool set_input_replay(const char *path);
+	// -trace: a commit log of every instruction and trap, in Spike's format.
+	// -lockstep: run against a reference's commit log and halt at the first
+	// record that does not match. See lockstep.cpp.
+	bool set_trace(const char *path);
+	bool set_lockstep(const char *path);
 	void set_canvas_dump(const char *path) { gui.set_canvas_dump(path); }
 
 	// Attach a raw image as the virtio-blk backing store. Returns false if
@@ -210,6 +215,22 @@ private:
 	void run_script(uint64_t now);
 	void exec_script_line(uint64_t now, const std::string &line);
 	void type_script_char(uint64_t now, char ch);
+
+	// lockstep.cpp
+	void traced_step();
+	void lockstep_end();
+	void lockstep_report();
+	bool tracing = false;          // -trace or -lockstep: steps go through traced_step
+	bool lockstep_active = false;
+	bool lockstep_failed = false;
+	std::FILE *trace_file = nullptr;
+	struct LockstepState;
+	LockstepState *lock = nullptr;
+	// Set by step(): whether the instruction it ran committed, and what it was.
+	bool step_committed = false;
+	bool step_decoded = false;     // it got as far as decoding an instruction
+	uint32_t step_insn = 0;
+	uint8_t step_insn_len = 4;
 
 	// CPU execution runs on its own thread so the window isn't blocked on
 	// (or blocking) instruction bursts. Only this thread ever touches

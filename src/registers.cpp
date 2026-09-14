@@ -73,6 +73,7 @@ uint64_t Registers::read_csr(uint16_t addr) const
 void Registers::write_csr(uint16_t addr, uint64_t value)
 {
 	csr[addr] = value;
+	if (csr_log) csr_log->push_back(addr);
 }
 
 uint8_t Registers::get_frm() const

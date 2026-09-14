@@ -1,6 +1,7 @@
 #pragma once
 #include "riscv_decoder.hpp" // for DecodedInstruction, embedded in HistoryEntry below
 #include <cstdint>
+#include <vector>
 
 // Values match the spec's own privilege encoding (used directly in
 // mstatus.MPP/sstatus.SPP, both 2-bit fields with this same numbering --
@@ -77,6 +78,8 @@ public:
 
 	uint64_t read_csr(uint16_t addr) const;
 	void write_csr(uint16_t addr, uint64_t value);
+	// While set, every write_csr appends its address (lockstep.cpp).
+	std::vector<uint16_t> *csr_log = nullptr;
 
 	// fflags/frm are the two fields fcsr (CSR 0x003) packs together --
 	// dedicated storage instead of the generic csr[] array because fflags

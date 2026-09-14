@@ -31,6 +31,7 @@ int main(int argc, char *argv[])
 	bool headless = false;
 	uint64_t stop_at = 0;
 	std::string record_path, replay_path;
+	std::string trace_path, lockstep_path;
 	for (int i = 1; i < argc; i++) {
 		std::string arg = argv[i];
 		if (arg.rfind("-march=", 0) == 0) {
@@ -89,6 +90,12 @@ int main(int argc, char *argv[])
 			// A folder of raw *.img files to attach as extra virtio disks,
 			// after the root disk. -drives= with nothing turns it off.
 			drives_dir = arg.substr(8);
+		} else if (arg.rfind("-trace=", 0) == 0) {
+			// A commit log of every instruction and trap, in Spike's format.
+			trace_path = arg.substr(7);
+		} else if (arg.rfind("-lockstep=", 0) == 0) {
+			// Run against a reference commit log; halt at the first mismatch.
+			lockstep_path = arg.substr(10);
 		} else if (arg.rfind("-record=", 0) == 0) {
 			// Log every input the guest receives, with the instruction it
 			// arrived at, so the run can be reproduced with -replay.
@@ -182,6 +189,14 @@ int main(int argc, char *argv[])
 	}
 	if (!record_path.empty() && !system.set_input_record(record_path.c_str())) {
 		std::cout << "cannot write input log: " << record_path << "\n";
+		return -1;
+	}
+	if (!trace_path.empty() && !system.set_trace(trace_path.c_str())) {
+		std::cout << "cannot write commit log: " << trace_path << "\n";
+		return -1;
+	}
+	if (!lockstep_path.empty() && !system.set_lockstep(lockstep_path.c_str())) {
+		std::cout << "cannot read reference commit log: " << lockstep_path << "\n";
 		return -1;
 	}
 

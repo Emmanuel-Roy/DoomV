@@ -321,6 +321,17 @@ of console output (`2667bf1`, re-verified in `936df17`).
 156. [A console keyboard rebuilt from keysyms only works on one layout](#bug156)
 157. [Not a bug: the test that measured the test](#bug157)
 
+<a id="part-xiii-toc"></a>
+### Part XIII — Lock-stepping against Sail, and what the signatures never looked at (2026-09-14)
+
+158. [Smrnmi's CSRs were plain storage](#bug158)
+159. [mstatus reported UXL and SXL as zero](#bug159)
+160. [mstatus writes were never legalized](#bug160)
+161. [Writing fcsr did not make FS dirty](#bug161)
+162. [misa never reported B](#bug162)
+163. [The trigger and debug CSRs were plain storage](#bug163)
+164. [Not a bug: three ways the reference described a different hart](#bug164)
+
 <a id="part-vii"></a>
 ### Part VII — Cross-cutting
 
@@ -6908,3 +6919,112 @@ robust answer is to key off something the guest emits rather than off a
 delay. `-expect` does that for the console; the input script still cannot,
 because a mouse has nothing to say.
 
+
+<a id="part-xiii"></a>
+## Part XIII — Lock-stepping against Sail, and what the signatures never looked at
+
+Every suite in this project compares a *result*: a signature region, a
+`tohost` verdict, a shell prompt. That is a strong check on what a test chose
+to record and no check at all on what it did not. Lock-stepping compares
+everything instead -- every register write, every CSR write, every store, and
+every trap entry, one instruction at a time, against Sail's own trace (see the
+README's section on it, and `tools/verification/lockstep_sail.py`).
+
+Its first run over the rv64 riscv-tests matched 158 of 372 from reset to exit.
+Every one of the other 214 stopped on one of the six differences below, and
+every one of the six had passed arch-test, riscv-tests, the vector suites and
+the hypervisor suite: the tests that exercise these registers install a trap
+handler, or write a register and never read it back, or record only the
+fields they meant to check.
+
+<a id="bug158"></a>
+### 158. Smrnmi's CSRs were plain storage
+
+The first difference in every test, at the 37th instruction. riscv-tests'
+reset vector enables resumable NMIs with `csrwi mnstatus, 8`, inside a trap
+handler that skips the write on a hart without Smrnmi. Sail's configuration
+has no Smrnmi, so the write traps and the handler moves on. DoomV has no
+Smrnmi either -- but `mnscratch`, `mnepc`, `mncause` and `mnstatus` fell
+through to generic CSR storage, so the write landed and the test carried on
+down the other branch. Both branches pass, which is why nothing noticed.
+
+They trap now (`csr_access_permitted`).
+
+<a id="bug159"></a>
+### 159. mstatus reported UXL and SXL as zero
+
+Found at the next instruction, in the CSR values trap entry writes. On an
+RV64 hart whose U and S modes only run at 64 bits, `mstatus.UXL` (33:32) and
+`SXL` (35:34) are read-only 2. `sstatus`'s view already reported UXL as 2;
+`mstatus` read both from storage, where nothing had ever put them, so until
+software wrote a value with them set, `mstatus` said this hart had neither a
+U-mode nor an S-mode of any width. Sail reports `0xA` in those bits from reset.
+
+<a id="bug160"></a>
+### 160. mstatus writes were never legalized
+
+The largest group -- 140 tests, all stopped at the first `mstatus` write. Every
+other register with WARL fields had its own legalization in the CSR write
+path; `mstatus` had none, and went straight to storage. So XS (16:15), which
+summarises non-standard extension state and is read-only zero on a hart with
+none, kept whatever `vm_boot` wrote into it. So did MBE, SBE and UBE, which
+are read-only zero on a little-endian hart; a reserved MPP of 2; and SD,
+which is derived from FS, VS and XS rather than written.
+
+`legalize_mstatus` now names the fields this hart has -- the same list Sail's
+legalization keeps -- and everything else reads zero.
+
+<a id="bug161"></a>
+### 161. Writing fcsr did not make FS dirty
+
+35 tests: every floating-point one, stopped at the `csrwi fcsr, 0` in the
+reset vector. The status fields FS and VS exist so that an operating system
+knows which state to save on a context switch, and the rule is that anything
+changing that state makes the field Dirty. DoomV did it for every
+floating-point *instruction* and for none of the CSR writes: `fflags`, `frm`
+and `fcsr` changed floating-point state and left FS as it was, and `vstart`,
+`vxsat`, `vxrm` and `vcsr` did the same to VS. A kernel that trusted FS would
+have skipped saving an `fcsr` a task had just written. Sail marks both on
+every such write, in `mstatus` and, under V, in `vsstatus`.
+
+<a id="bug162"></a>
+### 162. misa never reported B
+
+The ratified B extension is defined as Zba, Zbb and Zbs together, and `misa`
+bit 1 reports it. DoomV has had all three for a long time and `compute_misa`
+never set the bit.
+
+<a id="bug163"></a>
+### 163. The trigger and debug CSRs were plain storage
+
+The same shape as the first. `rv64mi-p-breakpoint` probes for Sdtrig by
+writing `tcontrol`; Sail has no Sdtrig and traps, and DoomV stored the value.
+The trigger CSRs and the debug-mode ones (`dcsr`, `dpc`, `dscratch0-1`) trap
+now -- except `tselect`, which Sail keeps and which reads back the inverse of
+what was written. That is the debug specification's way of saying there are
+no triggers: software writes an index, sees something else come back, and
+stops looking. DoomV does the same.
+
+<a id="bug164"></a>
+### 164. Not a bug: three ways the reference described a different hart
+
+Three of the mismatches were not DoomV being wrong but Sail's
+configuration describing a slightly different machine, and a lock-step that
+compares every CSR write finds every such difference.
+
+`mideleg` reads `0x1444` in Sail and `0x444` in DoomV. Bit 12 is read-only one
+when the hart has guest external interrupt lines, and Sail's configuration
+sets `geilen` to 63 where DoomV has none at all -- `hgeie` and `hgeip` read as
+zero here. And `mtvec` keeps a vectored mode in Sail and drops it in DoomV,
+because Sail's configuration offers vectored trap vectors and DoomV
+implements direct ones only. And `rv64mi-p-ma_fetch` clears `misa.C` to test
+misaligned fetches without compressed instructions: Sail's configuration makes
+`misa` writable, so the bit clears, and DoomV's `misa` is read-only -- its
+extensions are chosen on the command line, not switched off by a CSR write.
+All three are legal choices for the hart to make.
+
+Neither changes a signature, which is how the configuration came to disagree
+with the hart without anything saying so. `lockstep_sail.py` runs Sail with a
+copy of the suites' configuration that states DoomV's actual parameters. The
+suites' own `rva23s64.json` still says `geilen: 63`; aligning it would mean
+regenerating the arch-test reference signatures.

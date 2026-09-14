@@ -209,8 +209,13 @@ uint8_t DoomSystem::translate_key(uint32_t sdl_keysym) const
 void DoomSystem::step()
 {
 	if (debugger.halted) return;
+	const uint64_t traps_before = core.trap_count;
+	step_committed = false;
+	step_decoded = false;
 
-	if (core.check_and_take_interrupt(regs, memory)) {
+	// In lock-step the reference decides when an interrupt is taken (see
+	// traced_step), so the machine's own devices never interrupt by themselves.
+	if (!lockstep_active && core.check_and_take_interrupt(regs, memory)) {
 		// pc has already been redirected into the trap handler -- this
 		// "step" was the interrupt itself, not whatever instruction was
 		// about to execute at the old pc.
@@ -254,11 +259,17 @@ void DoomSystem::step()
 		}
 		instr |= (uint32_t)memory.read16(hi_paddr) << 16;
 	}
+	step_decoded = true;
 	DispatchResult result = decoder.decode_and_dispatch(pc, instr);
 	// A compressed instruction's raw fetch also contains the next
 	// instruction's bytes in its upper half -- mask those off so the
 	// trace log/crash dump show just the actual 16-bit encoding.
 	uint32_t recorded_instr = (result.decoded.length == 2) ? (instr & 0xFFFF) : instr;
+	step_insn = recorded_instr;
+	step_insn_len = result.decoded.length;
+	// Committed: it ran to completion -- not illegal, and no trap taken while
+	// it executed, such as a page fault or an ecall.
+	step_committed = !result.illegal && core.trap_count == traps_before;
 	regs.record_history(pc, recorded_instr, result.decoded);
 
 	// A test that signals completion through HTIF stops here, with its
@@ -582,7 +593,8 @@ void DoomSystem::cpu_loop()
 		// often the dashboard updates.
 		for (int i = 0; i < 200000; i++) {
 			if (debugger.halted) break;
-			step();
+			if (tracing) traced_step();
+			else step();
 			// Input is committed at instruction counts, never at a point
 			// in a burst: the burst boundaries depend on halts and resumes,
 			// and an input delivered at "whenever the host got to it" is
@@ -1347,8 +1359,9 @@ void DoomSystem::run()
 		while (!run_finished) std::this_thread::sleep_for(std::chrono::milliseconds(1));
 		stopping = true;
 		if (fbdump_thread.joinable()) fbdump_thread.join();
+		if (lockstep_active) lockstep_report();
 		console_drain();
-		std::exit(0);
+		std::exit(lockstep_failed ? 1 : 0);
 	}
 
 	display_thread = std::thread(&DoomSystem::display_loop, this);
