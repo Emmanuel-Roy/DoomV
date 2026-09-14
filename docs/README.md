@@ -1,8 +1,9 @@
 # Understanding DoomV
 
 DoomV interprets RISC-V instructions in a C++ program. The same simulated
-machine can run a bare-metal DOOM guest or boot OpenSBI, Linux and BusyBox.
-These guides explain the code that connects those pieces.
+machine can run a bare-metal DOOM guest, boot OpenSBI, Linux and BusyBox, or
+boot an Ubuntu 24.04 disk image through systemd to an X desktop. These guides
+explain the code that connects those pieces.
 
 ## Choose a starting point
 
@@ -12,6 +13,8 @@ These guides explain the code that connects those pieces.
 | Where a load, store or interrupt goes | [Devices and architecture](DEVICES_AND_ARCHITECTURE.md) | The translation example, then the address map |
 | A particular instruction or CSR | [ISA reference](ISA_EXTENSIONS.md) | The relevant family, then its linked implementation |
 | How to run the scripts | [Script usage](../scripts/README.md) | The actual script for its current defaults |
+| How Ubuntu is built, booted and given a desktop | [Ubuntu root filesystem](../tools/linux/ubuntu/README.md) | The Ubuntu section of the boot walkthrough |
+| Keyboard, mouse, storage drives or the shared folder | [Top-level README](../README.md#input) | Virtio devices in the architecture guide |
 | Why an earlier implementation was wrong | [Bug history](BUGS.md) | Current source and tests before assuming the bug still exists |
 
 For a first read, follow **boot → architecture → ISA**. The instruction tables
@@ -27,6 +30,7 @@ are lookup material; you do not need to read them before understanding the boot.
 | ISA | Instruction-set architecture: the contract visible to guest software |
 | CSR | Control/status register, accessed by CSR instructions rather than ordinary memory loads |
 | MMIO | Memory-mapped I/O: an address access handled by a device instead of RAM |
+| Virtio | A standard paravirtual device interface; DoomV's disks, keyboard, mouse and shared folder use its MMIO transport |
 | PTE | Page-table entry: translation information and access permissions |
 | PMP | Physical memory protection, checked independently of page-table permissions |
 | SBI | Supervisor Binary Interface: firmware services called by the supervisor |
@@ -35,6 +39,12 @@ are lookup material; you do not need to read them before understanding the boot.
 | Signature | Guest-produced result bytes collected and compared by a test harness |
 
 ## Reading the evidence
+
+The address map, TLB, interrupt wiring, virtio devices, framebuffers, input,
+GUI, Linux build and Ubuntu boot were brought up to date at `a1c7d20`. Every
+regression suite passed after the last device change (`5ba6f40`), and the
+Ubuntu desktops were each booted at `a1c7d20`. Sections a guide's revision
+note does not name keep their earlier review scope.
 
 The original detailed inventory used commit
 `6b37ec0675cb052e4821c227a7b4c57af89b280f`. This readability pass checked the

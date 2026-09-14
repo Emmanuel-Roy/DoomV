@@ -89,7 +89,7 @@ Implementation: [src/extensions/ext_zicsr.cpp](../../src/extensions/ext_zicsr.cp
 
 ## Supervisor privilege and Sv39
 
-S mode owns process translation and ordinary OS trap handling; U-mode application accesses are constrained by PTE permissions and PMP. Sv39 uses 3 levels of 512 eight-byte PTEs and 4-KiB pages, with 2-MiB/1-GiB aligned superpage leaves. Upper virtual bits must sign-extend bit 38. Read/write/execute, U, A and D bits are checked. SUM permits certain S accesses to U pages; MXR allows loads from executable pages. Every walk rereads guest RAM; no TLB exists. RV32 execution support does not imply Sv32 paging: the CSR/walker paths here are RV64/Sv39-shaped.
+S mode owns process translation and ordinary OS trap handling; U-mode application accesses are constrained by PTE permissions and PMP. Sv39 uses 3 levels of 512 eight-byte PTEs and 4-KiB pages, with 2-MiB/1-GiB aligned superpage leaves. Upper virtual bits must sign-extend bit 38. Read/write/execute, U, A and D bits are checked. SUM permits certain S accesses to U pages; MXR allows loads from executable pages. A small TLB caches single-stage, non-virtualized S/U translations whose A and D bits are already set; every other walk, including every two-stage walk, rereads guest RAM. RV32 execution support does not imply Sv32 paging: the CSR/walker paths here are RV64/Sv39-shaped.
 
 Implementation: [src/mmu.cpp](../../src/mmu.cpp), [src/extensions/ext_zicsr.cpp](../../src/extensions/ext_zicsr.cpp).
 

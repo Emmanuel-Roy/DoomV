@@ -1,7 +1,9 @@
 # DoomV devices and system architecture
 
 Original inventory: `6b37ec0`. Translation, UART and debugger paths rechecked
-at `c7d881b`; other register inventories retain their original review scope.
+at `c7d881b`. Address map, TLB, APLIC wiring, virtio devices, framebuffers,
+input and GUI updated at `a1c7d20`; other register inventories retain their
+original review scope.
 
 [Documentation home](README.md) · [ISA reference](ISA_EXTENSIONS.md) · [Boot walkthrough](BOOT_FLOW.md)
 
@@ -27,6 +29,8 @@ The address map is a lookup table. The worked examples explain how to use it.
 - [IMSIC: interrupt-file architecture](#imsic-interrupt-file-architecture)
 - [Interrupt delivery through CSRs](#interrupt-delivery-through-csrs)
 - [UART console](#uart-console)
+- [Virtio devices: disks, input and the shared folder](#virtio-devices-disks-input-and-the-shared-folder)
+- [Linux framebuffer and power-off](#linux-framebuffer-and-power-off)
 - [DOOM display input and debug output](#doom-display-input-and-debug-output)
 - [Debugger and architectural traps](#debugger-and-architectural-traps)
 - [Snapshots GUI and concurrency](#snapshots-gui-and-concurrency)
@@ -38,7 +42,7 @@ The address map is a lookup table. The worked examples explain how to use it.
 
 [DoomSystem](../src/doom_system.hpp) owns the virtual machine's core state: `Registers`, `Memory`, `RiscvCore`, `Decoder`, `Debugger`, controls and GUI. The core executes architectural operations, the decoder interprets instruction bits, and Memory routes physical accesses. There is one simulated hart; the host CPU/render threads do not represent separate guest harts.
 
-[Memory](../src/memory.hpp) owns a timer, M and S IMSIC files, an APLIC and UART. The APLIC holds a reference to the S IMSIC. Member declaration order matters: the S file must exist before constructing the APLIC reference. The connection is a direct C++ call, not a simulated packet bus with latency.
+[Memory](../src/memory.hpp) owns a timer, M and S IMSIC files, an APLIC, the UART, the virtio devices (root disk, eight drive slots, keyboard, mouse and the shared folder), both framebuffers and the power-off register. The APLIC holds a reference to the S IMSIC. Member declaration order matters: the S file must exist before constructing the APLIC reference. The connection is a direct C++ call, not a simulated packet bus with latency.
 
 ```mermaid
 flowchart TD
@@ -60,19 +64,31 @@ All ranges below are half-open: base is included, end is excluded. Values come f
 
 | Region | Base | Size | End | Owner/purpose |
 |---|---|---|---|---|
+| Test / power-off | `0x00100000` | `0x1000` | `0x00101000` | `sifive,test0`: `0x5555` powers off, `0x7777` reboots, `0x3333` fails |
 | CLINT-compatible window | `0x02000000` | `0x10000` | `0x02010000` | Timer register subset |
 | APLIC | `0x0C000000` | `0x4000` | `0x0C004000` | Source configuration and MSI forwarding |
 | DOOM input | `0x10000000` | 4 | `0x10000004` | Pop a packed key event |
 | DOOM tick | `0x10000004` | 4 | `0x10000008` | Scaled guest tick counter |
 | DOOM debug | `0x10000008` | 4 | `0x1000000C` | Character output at first byte |
+| DOOM mouse motion | `0x1000000C` | 4 | `0x10000010` | Motion accumulated since the last read; reading clears it |
+| DOOM mouse buttons | `0x10000010` | 4 | `0x10000014` | Button state |
+| DOOM WAD base and size | `0x10000014` | 8 | `0x1000001C` | Where the host loaded the WAD, and its length |
 | UART | `0x10000100` | `0x100` | `0x10000200` | Polled byte register interface |
-| Framebuffer | `0x10001000` | `0x3E800` | `0x1003F800` | 320×200×4 bytes |
+| DOOM framebuffer | `0x10001000` | `0x3E800` | `0x1003F800` | 320×200×4 bytes |
+| Root disk (virtio-blk) | `0x10008000` | `0x1000` | `0x10009000` | `-disk=` image; APLIC source 1 |
+| Keyboard (virtio-input) | `0x10100000` | `0x1000` | `0x10101000` | APLIC source 2 |
+| Mouse (virtio-input) | `0x10101000` | `0x1000` | `0x10102000` | APLIC source 3 |
+| Drive slots (8 × virtio-blk) | `0x10102000` | `0x8000` | `0x1010A000` | `drives/*.img`; APLIC sources 4–11 |
+| Shared folder (virtio-9p) | `0x1010A000` | `0x1000` | `0x1010B000` | `shared/`; APLIC source 12 |
 | M IMSIC file | `0x24000000` | `0x1000` | `0x24001000` | M-target MSI doorbell |
 | S IMSIC file | `0x28000000` | `0x1000` | `0x28001000` | S-target MSI doorbell |
-| RAM | `0x80000000` | `0x10000000` | `0x90000000` | 256 MiB |
-| WAD | `0x90000000` | `0x01400000` | `0x91400000` | 20-MiB asset window |
+| Linux framebuffer | `0x50000000` | `0x4B4800` | `0x504B4800` | 1168×1056×4 bytes, `simple-framebuffer` |
+| RAM | `0x80000000` | `0x40000000` | `0xC0000000` | 1 GiB |
+| WAD | `0xC0000000` | `0x01400000` | `0xC1400000` | 20-MiB asset window |
 
-The framebuffer allocation is exactly 256,000 bytes, not a rounded 256-KiB backing region. RAM and WAD share one contiguous allocation. The device tree advertises only the RAM portion as ordinary Linux RAM.
+The DOOM framebuffer allocation is exactly 256,000 bytes, not a rounded 256-KiB backing region. RAM and WAD share one contiguous allocation. The device tree advertises only the RAM portion as ordinary Linux RAM; the Linux framebuffer deliberately sits outside it, so the kernel never allocates over the aperture.
+
+An empty drive slot is still a device window: it reads device ID 0, which the virtio-mmio driver skips. That is how the device tree can list all eight slots whether or not eight drives exist.
 
 ## MMIO bus and access widths
 
@@ -82,15 +98,17 @@ MMIO means a CPU load/store reaches a device register because its translated phy
 
 | Access method | Dispatch behavior |
 |---|---|
-| `read8` | Direct RAM/WAD, framebuffer or UART; otherwise zero |
+| `read8` | Direct RAM/WAD, either framebuffer, UART or a virtio config space; otherwise zero |
 | `read16` | Two little-endian byte reads |
-| `read32` | Special input/tick/timer/APLIC/IMSIC handling, then RAM fast path or composed reads |
+| `read32` | Special input/mouse/WAD/tick/timer/APLIC/IMSIC/virtio handling, then RAM and Linux-framebuffer fast paths or composed reads |
 | `read64` | RAM fast path, otherwise two read32 calls |
-| `write8` | RAM/WAD, framebuffer, first debug byte, UART |
-| `write32` | Timer/APLIC/IMSIC handling before four byte writes |
+| `write8` | RAM/WAD, either framebuffer, first debug byte, UART, virtio-input config selectors |
+| `write32` | Timer/APLIC/IMSIC/virtio/power-off handling and the Linux-framebuffer fast path before four byte writes |
 | `write64` | Two write32 calls |
 
 Thus a word write to an IMSIC doorbell calls `set_pending` once with the full identity; decomposing that into bytes would lose the command. Conversely, a byte read of DOOM input does not pop a key, because the pop is implemented in read32.
+
+A virtio `QueueNotify` store is the same kind of command. The device processes the queue inside that write32 call and raises its APLIC source before the store returns.
 
 `is_backed(addr,size)` checks that an entire access lies inside a known region and detects wraparound. It is a region check, not full per-register validation: holes inside a device window can still read zero or ignore writes. The normal core wrapper raises an architectural access fault for an unbacked access; direct Memory calls themselves retain forgiving zero/ignored behavior.
 
@@ -100,9 +118,9 @@ RAM read fast paths use memcpy and the project assumes a little-endian host in r
 
 ## RAM WAD and loaders
 
-RAM/WAD use one byte vector sized 276 MiB. Framebuffer uses a separate byte vector. No DRAM timings, refresh, banks or cache-coherence transactions are modeled.
+RAM/WAD use one byte vector sized 1,044 MiB: 1 GiB of RAM plus the 20-MiB WAD window. Each framebuffer uses a separate byte vector. No DRAM timings, refresh, banks or cache-coherence transactions are modeled.
 
-`load_wad` copies bytes into the WAD slice. The bus also accepts writes there, so it is not enforced as read-only ROM. Its role as asset storage comes from software usage.
+`load_wad` copies bytes into the WAD slice. The bus also accepts writes there, so it is not enforced as read-only ROM. Its role as asset storage comes from software usage. The DOOM guest asks for the window's address and length through `MMIO_WAD_BASE` and `MMIO_WAD_SIZE` instead of compiling them in, which is why growing RAM to 1 GiB did not move DOOM's assets out from under it.
 
 `load_elf` reads PT_LOAD segments using ELF structures chosen by runtime XLEN, places segments by p_vaddr and zeroes BSS tails. It does not discover XLEN from ELF class for dispatch, use e_entry for startup, implement relocations or dynamically link a program. It performs basic format/range checks, not hardened validation of every malformed ELF case.
 
@@ -124,7 +142,7 @@ The normal `translate_or_trap` path combines translation, actual physical backin
 | Illegal instruction/CSR access | Illegal instruction 2 | Handler may emulate, reject or terminate |
 | Virtualized privileged operation requiring HS intervention | Virtual instruction 22 where implemented | Hypervisor can distinguish an intercept |
 
-There is no TLB, so fences do not flush stored translations. There is a decode cache, but it validates instruction bytes and is not the same thing as a TLB or architectural instruction cache.
+There is a small direct-mapped TLB ([mmu.hpp](../src/mmu.hpp)). It caches only single-stage, non-virtualized, non-M-mode translations whose A and D bits were already set, so a hit can never skip a required fault; two-stage, HLV/HSV and everything under H re-walk every time. `sfence.vma`, `sinval.vma` and writes to the CSRs a walk depends on flush it wholesale. There is also a decode cache, but it validates instruction bytes and is not the same thing as a TLB or architectural instruction cache.
 
 ## Timer and local interrupts
 
@@ -146,9 +164,9 @@ DOOM's tick register is different: `Memory::step_instructions` accumulates steps
 
 ## APLIC: interrupt sources to message identities
 
-APLIC means **Advanced Platform-Level Interrupt Controller**. Architecturally it accepts platform interrupt sources and routes them to harts, including MSI delivery to IMSIC. DoomV models one flat domain with sources 1–31; source 0 is reserved. It stores source modes and target fields, but has no general external pin/edge/level sampling API.
+APLIC means **Advanced Platform-Level Interrupt Controller**. Architecturally it accepts platform interrupt sources and routes them to harts, including MSI delivery to IMSIC. DoomV models one flat domain with sources 1–31; source 0 is reserved. It stores source modes and target fields, and does no edge or level sampling of its own.
 
-The implemented trigger is a software MMIO write to setipnum. [aplic.cpp](../src/aplic.cpp) checks that the source number is valid, sourcecfg is nonzero and domain delivery is enabled, then directly sets the target EIID pending in the S IMSIC object.
+A source becomes pending in one of two ways: a guest MMIO write to setipnum, or a device calling `Aplic::assert_source`. The second is the virtio devices' interrupt line, raised after a queue has been processed. Both share one forwarding path. [aplic.cpp](../src/aplic.cpp) checks that the source number is valid, sourcecfg is nonzero and domain delivery is enabled, then directly sets the target EIID pending in the S IMSIC object.
 
 | Offset from `0x0C000000` | Register | Implemented behavior |
 |---|---|---|
@@ -171,7 +189,7 @@ flowchart TD
     E -->|No| W["Pending remains stored"]
 ```
 
-The diagram's last stage also requires IMSIC global delivery enabled. Nothing connects UART RX to this source interface in the current machine.
+The diagram's last stage also requires IMSIC global delivery enabled. The virtio devices use sources 1–12 (see the address map). The UART is still polled and has no source.
 
 ## IMSIC: interrupt-file architecture
 
@@ -230,13 +248,38 @@ The [UART](../src/uart.cpp) is a small polled ns16550a-style register subset at 
 
 There is no baud-rate timing, serial bit stream, divisor-latch bank switching or TX FIFO scheduling. Writing offset zero immediately emits a character. UART register storage is not proof that every hardware function controlled by the bits exists.
 
-In Linux mode the render/input thread translates SDL keypresses into console bytes and calls `push_rx`; releases are ignored. A mutex protects RX producer/consumer operations. The ring drops incoming bytes when full. Output goes to the host process's stdout, so the terminal and SDL window serve different roles.
+In Linux mode each keypress goes two places. The virtio keyboard receives it as an evdev key event, which is what the framebuffer console on tty0 and X read. The same press is also translated into console bytes for `push_rx`, with typed text arriving as SDL text input, so the SBI console on hvc0 can be driven from the window too. A mutex protects RX producer/consumer operations. From the GUI, the ring drops incoming bytes when full. The headless stdin feed (`-ng`) waits for room instead, and `-expect=` holds that feed back until the guest has printed a given string. Output goes to the host process's stdout, so the terminal and SDL window serve different roles.
+
+## Virtio devices: disks, input and the shared folder
+
+Every device a distribution needs beyond the console is virtio over MMIO, version 2 (the non-legacy transport). Each has a 4-KiB register window with the standard layout, split virtqueues of up to 256 entries, and one APLIC source. The guest builds descriptor tables in its own RAM. On `QueueNotify` the device walks them, reads and writes guest memory directly, updates the used ring and asserts its source. There is no DMA timing: the whole request completes inside the store that announced it.
+
+| Device | Implementation | Device ID | Queues | Backing |
+|---|---|---|---|---|
+| Root disk | [virtio_blk.cpp](../src/virtio_blk.cpp) | 2, or 0 without `-disk` | 1 | The `-disk=` image |
+| Drive slots 0–7 | Same class | 2, or 0 when empty | 1 | `drives/*.img` in name order, at most eight; a read-only drive sets `VIRTIO_BLK_F_RO` |
+| Keyboard, mouse | [virtio_input.cpp](../src/virtio_input.cpp) | 18 | 2 (eventq, statusq) | SDL events, or a `-input=` replay script |
+| Shared folder | [virtio_9p.cpp](../src/virtio_9p.cpp) | 9 | 1 | `shared/` on the host, mount tag `shared` |
+
+A block request is a header, data buffers and a status byte, in 512-byte sectors. The root disk and the drives are one class at different addresses and sources, so the drives enumerate after the root disk as further `/dev/vd*` devices.
+
+virtio-input answers the config-space select/subsel queries the Linux driver uses to learn a device's name and which event types and codes it sends. SDL scancodes map to evdev key codes, mouse motion to relative X/Y, the wheel to a relative wheel axis, and the buttons to `BTN_LEFT`, `BTN_RIGHT` and `BTN_MIDDLE`. The GUI thread queues events on the host; the CPU thread delivers them in `pump_input` every 4,096 instructions, part-way through a burst, so input does not wait for the next snapshot.
+
+The 9P device is a 9P2000.L file server running inside the emulator. Requests are gathered from all of a request's readable descriptors and replies laid across its writable ones, which is what the Linux client's zero-copy reads and writes require. The server uses Windows wide-character APIs with extended-length paths and returns Linux errno values. It resolves the final path of every handle it opens and refuses anything outside the shared folder, including through links. Changes on either side are visible to the other immediately, because there is no cache to synchronize.
+
+## Linux framebuffer and power-off
+
+A Linux guest gets a second framebuffer: a 1168×1056, 32-bit linear aperture at `0x50000000`, described by a `simple-framebuffer` node. The kernel's simplefb driver trusts the node's width, height, stride and format completely, so [doomv.dts](../tools/linux/dts/doomv.dts) and `Memory::LFB_W`/`LFB_H` must agree, and nothing checks that they do. fbcon draws a 146×66 character console into it. The X desktops use the same aperture through Xorg's fbdev driver.
+
+The `sifive,test0` register at `0x00100000` is how a guest stops the machine. OpenSBI's generic platform implements SBI system reset through it, so a guest `poweroff`, or `echo o > /proc/sysrq-trigger`, ends in a 32-bit store of `0x5555`. Memory records the request; the CPU loop checks it, writes any `-fbdump` image and ends the run. `0x7777` (reboot) and `0x3333` (fail) currently stop the run the same way.
 
 ## DOOM display input and debug output
 
 The framebuffer is 320×200 32-bit pixels. The guest writes final pixels; the host does no emulated GPU shading or rasterization. Memory increments a write counter per framebuffer byte written. A dashboard rate derived from that count is not a hardware vblank counter or a record of atomic frame presentation.
 
 The key queue has 16 slots with one slot reserved to distinguish full from empty, yielding 15 queued events. It stores `(pressed << 8) | doom_keycode`; a read32 at input pops one word. Host controls mapping comes from [controls.json](../controls.json) and [controls.cpp](../src/controls.cpp), supplemented by fixed special-key translations in DoomSystem. Full queues drop events.
+
+The mouse uses two more registers. Motion accumulates between reads of `0x1000000C`, and a read returns it and clears it; `0x10000010` reports the buttons. The guest turns them into DOOM's `ev_mouse`, so mouse look and fire follow DOOM's own defaults rather than `controls.json`. Ctrl+Alt+G grabs the host pointer so it does not stop at the window edge.
 
 The tick register supplies instruction-scaled timing. The debug register prints the byte written at its base address, allowing newlib `_write` to emit text. These custom interfaces are separate from the Linux UART and SBI path; naming the debug character sink a “UART” would overstate its protocol.
 
@@ -335,6 +378,8 @@ The CPU thread owns the mutable core/register/device execution state and runs in
 
 The snapshot is a copied observation, not a second machine state that executes independently. It displays only selected slices of state; for example the dashboard vector snapshot contains low portions, while crash dumps include full vector registers. Rendering old data between publications is expected.
 
+`run()` publishes one snapshot before the CPU thread starts, so the first frame already knows which framebuffer the guest uses and lays the window out for it. In a window of at least 1920×1080 every guest gets the same compact layout. The display sits on the left at the Linux framebuffer's size, with DOOM scaled into it. Beside it are the CSR panel, the register file, the trace log and the pause banner, with equal margins all round. Smaller windows fall back to an older scaled layout. The CSR panel shows the ten CSRs used most across the last 1,024 CSR accesses (`Registers::top_csrs`), not every CSR the guest has ever touched.
+
 When halted, the CPU still publishes snapshots and sleeps for 10 ms between checks, keeping the GUI responsive. The detached loop has no elaborate guest shutdown/device teardown lifecycle. Host burst size affects responsiveness and throughput, not an architectural instruction grouping rule.
 
 ## Device tree versus implemented hardware
@@ -349,6 +394,8 @@ Several deliberate or existing mismatches deserve explicit treatment:
 - UART is polled and has no interrupts property or modeled APLIC connection.
 - V/H runtime opt-in does not dynamically alter the static DTS.
 - The WAD window and custom DOOM devices are not normal Linux boot requirements.
+- The `simple-framebuffer` geometry is copied by hand from `Memory::LFB_*`.
+- All eight drive slots are listed whether or not a drive is attached; an empty slot reports device ID 0.
 
 These are reasons to explain the **implemented interface and tested guest configuration**, rather than claiming an interchangeable model of every board with similarly named devices.
 
@@ -368,10 +415,11 @@ The superproject tree was inventoried, including binary artifacts and submodule 
 | Shared FP/state helpers | `ext_fp16.hpp`, `ext_fp_common.hpp`, `ext_softfloat.hpp`, `ext_xstate.hpp`, `ext_v_common.hpp` | Numeric conversions, flags and state enable/dirty utilities |
 | Privileged features | `ext_h*`, `ext_sscofpmf*`, `ext_ssstateen*`, `ext_svinval.cpp`, `ext_zicsr.cpp` | H, traps, CSR-only extensions and fences |
 | Addressing | `src/memory.*`, `src/mmu.*`, `src/pmp.*` | Physical bus, loaders, translations and protection |
-| Devices | `src/timer.*`, `aplic.*`, `imsic.*`, `uart.*` | Timer, interrupt controllers and console |
+| Devices | `src/timer.*`, `aplic.*`, `imsic.*`, `uart.*`, `virtio_blk.*`, `virtio_input.*`, `virtio_9p.*` | Timer, interrupt controllers, console, disks, keyboard and mouse, shared folder |
 | Host inspection | `src/debugger.*`, `gui.*`, `snapshot.hpp`, `controls.*` | Breakpoints, snapshots, rendering and keys |
 | Bare-metal platform | `tools/doom/doombuild/` first-party files | Guest startup, linking, MMIO callbacks and libc/WAD adapters |
-| Linux platform | `tools/linux/dts`, firmware script and Linux/rootfs READMEs | Hardware description and guest artifact build contracts |
+| Linux platform | `tools/linux/dts`, `tools/linux/ubuntu/`, `scripts/build_linux.sh`, `scripts/prepare_dtb.py` | Hardware description; kernel, BusyBox and Ubuntu build contracts |
+| Host folders | `drives/`, `shared/`, `scripts/mkdrive.py` | Storage drive images and the live shared folder |
 | Architectural tests | `tools/verification/tests/archtest/` | Setup, reference generation and signature runs |
 | Differential tests | `tools/verification/tests/differential/` | Privileged/vector assembly, result extraction and comparison |
 | Reference tools | `tools/verification/simulators/` | Build/configuration support and pinned simulator submodules |
@@ -382,6 +430,6 @@ The tracked SDL headers/import libraries, SDL2.dll, WAD, kernel ELF/Image, DTB a
 
 ## Boundaries and verification
 
-This is a functional instruction interpreter with a small platform model. It has no pipeline timing, modeled caches/TLB, multi-hart fabric, DMA engine, PCIe root complex, GPU, disk controller, network adapter or standard hardware debug transport in the inspected first-party source. H changes CPU translation/privilege machinery; it does not supply a complete virtualized device platform.
+This is a functional instruction interpreter with a small platform model. It has no pipeline timing, modeled caches, multi-hart fabric, PCIe root complex, GPU, network adapter or standard hardware debug transport. Its disks, input devices and shared folder are paravirtual virtio devices that complete each request instantly, not models of real controllers, and its TLB is a host-speed cache rather than a modeled hardware structure. H changes CPU translation/privilege machinery; it does not supply a complete virtualized device platform.
 
-The documentation was checked statically against source definitions and links. No device integration tests or guest boots were run for this documentation-only change. For a device verification plan, test the actual public interface: register-width side effects, reset values, enabled versus pending state, boundary accesses, queue overflow, claim behavior and trap conditions. Compare against a matched machine configuration rather than assuming another simulator has the same number of interrupt identities or optional features.
+The address map and device sections were checked against source at `a1c7d20`, and every regression suite passed after the last device change (`5ba6f40`). A documentation review is not itself a boot or a device test. For a device verification plan, test the actual public interface: register-width side effects, reset values, enabled versus pending state, boundary accesses, queue overflow, claim behavior and trap conditions. Compare against a matched machine configuration rather than assuming another simulator has the same number of interrupt identities or optional features.

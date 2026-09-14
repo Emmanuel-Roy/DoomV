@@ -11,10 +11,15 @@ address, which fits an emulator with a fully custom, always-the-same
 memory map (no need for `fw_dynamic`'s relocation support, which is
 aimed at real hardware where the load address varies by board).
 
-Entry point: `0x80000000` (the generic platform's default RAM base --
-not DoomV's own `RAM_BASE`; reconciling the two, or telling the
-platform where DoomV's RAM/devices actually live, is Stage 3's job,
-not done yet).
+Entry point: `0x80000000`, which is also DoomV's `RAM_BASE`. The
+platform learns where RAM and the devices live from the device tree DoomV
+loads at `0x82200000`.
+
+The supported build is now `scripts/build_linux.sh`, run by
+`python scripts/build.py linux`. It builds the same pinned source with
+`riscv64-linux-gnu-gcc -std=gnu11` into `build/linux/fw_jump.elf`. The notes
+below describe the original standalone `build.sh` and why its workarounds
+exist.
 
 ## Why v1.3, not the latest release
 

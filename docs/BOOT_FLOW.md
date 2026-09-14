@@ -1,8 +1,9 @@
-# How DoomV boots DOOM and Linux
+# How DoomV boots DOOM, Linux and Ubuntu
 
 Original inventory: `6b37ec0`. Boot entry, extension defaults and debugger
-behavior rechecked at `c7d881b`. This guide explains source behavior; it does
-not report a fresh successful boot.
+behavior rechecked at `c7d881b`. Build scripts, device tree, consoles and the
+Ubuntu disk boot updated at `a1c7d20`. This guide explains source behavior; it
+does not itself report a boot.
 
 [Documentation home](README.md) · [ISA reference](ISA_EXTENSIONS.md) · [Devices and architecture](DEVICES_AND_ARCHITECTURE.md)
 
@@ -21,6 +22,7 @@ flowchart TD
     LINUX --> SBI["OpenSBI in M mode"]
     SBI --> KERNEL["Linux in S mode: paging, drivers and files"]
     KERNEL --> SHELL["BusyBox shell in U mode"]
+    KERNEL --> DISK["Or: ext4 root on virtio-blk, systemd, X"]
 ```
 
 Both branches use the same C++ instruction interpreter. Loading an ELF does
@@ -52,6 +54,7 @@ sections. Use the diagnosis table after you know the last stage that worked.
 - [Linux: physical entry to virtual memory](#linux-physical-entry-to-virtual-memory)
 - [Linux: interrupts timers and console](#linux-interrupts-timers-and-console)
 - [Linux: initramfs to userspace shell](#linux-initramfs-to-userspace-shell)
+- [Ubuntu: booting from a disk](#ubuntu-booting-from-a-disk)
 - [What Linux adds beyond DOOM](#what-linux-adds-beyond-doom)
 - [Diagnosing a boot that stops progressing](#diagnosing-a-boot-that-stops-progressing)
 - [Evidence and scope](#evidence-and-scope)
@@ -64,6 +67,7 @@ The host program is a C++ RISC-V interpreter with an SDL interface. The guest is
 |---|---|---|---|
 | Bare-metal doomgeneric | Project `_start` in its guest ELF | M-mode code, project MMIO and newlib shims | DOOM's framebuffer and input loop |
 | OpenSBI/Linux | OpenSBI firmware at RAM base | M-mode firmware hands off to an S-mode kernel, then U-mode userspace | BusyBox `/bin/sh` through SBI console |
+| OpenSBI/Linux from disk (Ubuntu) | OpenSBI firmware at RAM base | Same firmware and kernel, no initramfs; the root filesystem is on virtio-blk | systemd, a login on the framebuffer console, optionally an X desktop |
 
 The standard DOOM path does not boot Linux or use OpenSBI. Linux is a separate workload selected by command-line options. This source does not supply a third path that starts the Linux kernel and then automatically runs DOOM inside it.
 
@@ -93,11 +97,11 @@ For the Linux path, also obtain the pinned firmware, kernel and BusyBox source. 
 
 ## Host startup and instruction execution
 
-1. [main.cpp](../src/main.cpp) parses positional WAD/ELF arguments and optional `-march`, `-break`, `-sig`, `-opensbi`, `-kernel`, `-dtb`, `-initrd` flags.
+1. [main.cpp](../src/main.cpp) parses positional WAD/ELF arguments and optional flags: `-march`, `-break`, `-sig`, `-tohost`, `-ng`; the Linux artifacts `-opensbi`, `-kernel`, `-dtb`, `-initrd`; storage `-disk`, `-drives`, `-shared`; and the headless tooling `-fbdump`, `-guidump`, `-expect`, `-input`. The [top-level README](../README.md#command-line-options) describes each.
 2. `parse_march` runs only if explicitly requested. Omitting it preserves the broad `ExtensionConfig` defaults; passing a string can disable features the default enables. The parser is not a profile validator.
 3. Constructing `DoomSystem` constructs registers, memory, core and decoder. Registers start in M mode with virtualization false. Integer/FP/vector storage and generic CSRs are zeroed; `vtype.vill` starts set and `vl=0`.
 4. The selected initialization routine creates the SDL GUI and loads guest data. The host supplies a starting PC; it does not run a hardware ROM reset vector first.
-5. `run()` starts a detached CPU thread. The original thread polls SDL input and renders snapshots. The CPU performs bursts of up to 200,000 `step()` calls before publishing a snapshot.
+5. `run()` starts a detached CPU thread. The original thread polls SDL input and renders snapshots. The CPU performs bursts of up to 200,000 `step()` calls before publishing a snapshot, delivering queued keyboard and mouse input every 4,096 steps within a burst. `run()` also publishes one snapshot before the CPU thread starts, so the first frame already has the guest's display geometry.
 6. Each step first tests pending enabled interrupts. If one is taken, trap entry redirects PC and the step advances the modeled timer without executing the instruction formerly at PC.
 7. Otherwise, the host checks PC breakpoints, translates the instruction address and fetches the first 16 bits. If those bits describe a 32-bit instruction, it translates and fetches the next halfword separately. This matters at page/PMP boundaries.
 8. The decoder identifies the extension and fields, checks configuration/state, then calls its execution handler. A cache keyed by PC **and current raw bytes** avoids repeated decode work without using stale self-modified instructions.
@@ -177,27 +181,37 @@ It does not require page tables, a scheduler, system-call dispatch, OpenSBI, ext
 
 ## Linux: build and launch
 
-The firmware [build script](../tools/linux/opensbi/build.sh) builds the generic OpenSBI platform using `riscv-none-elf-`, RV64 IMAFDC/Zicsr/Zifencei and lp64d. It locally adjusts the pinned Makefile for GNU C11 and a Windows archive-command-length issue, then restores that Makefile with an EXIT trap. These are existing build-script actions; this documentation change does not execute or modify them.
+`python scripts/build.py linux` builds every Linux artifact inside WSL through [build_linux.sh](../scripts/build_linux.sh), from the pinned submodule commits, into `build/linux/`:
+
+| Artifact | What it is |
+|---|---|
+| `fw_jump.elf` | OpenSBI generic platform, `rv64imafdc_zicsr_zifencei`, lp64d, compiled as GNU C11 |
+| `Image` | Linux 6.12 `defconfig` plus the options below |
+| `initramfs.cpio`, `smoke.cpio` | Static BusyBox; the smoke archive adds a self-check init |
+| `doomv.dtb`, `smoke.dtb`, `ubuntu*.dtb` | The device tree, compiled per boot mode by [prepare_dtb.py](../scripts/prepare_dtb.py) |
+
+The kernel options enabled on top of `defconfig`, and what each is for:
+
+| Option | Needed for |
+|---|---|
+| `RISCV_SBI_V01` | The legacy SBI console calls this OpenSBI's reported version leads Linux to use |
+| `NONPORTABLE`, `HVC_RISCV_SBI` | `hvc0`; Kconfig does not offer the second without the first |
+| `BLK_DEV_INITRD`, `BINFMT_SCRIPT` | The initramfs, and a shell script as init |
+| `FB`, `FB_SIMPLE`, `FRAMEBUFFER_CONSOLE` | The `simple-framebuffer` console on tty0 |
+| `VIRTIO_INPUT`, `INPUT_EVDEV` | The keyboard and mouse |
+| `MAGIC_SYSRQ` | `echo o > /proc/sysrq-trigger`, the power-off available to an init that is not systemd |
+
+Boot with `python scripts/boot.py linux`, or directly:
 
 ```sh
-git submodule update --init tools/linux/opensbi/src
-bash tools/linux/opensbi/build.sh
-```
-
-Follow the existing [Linux build guide](../tools/linux/linux/README.md) and [BusyBox guide](../tools/linux/rootfs/README.md) for the Linux/WSL cross-build. Necessary console settings described there include `CONFIG_RISCV_SBI_V01=y`, `CONFIG_NONPORTABLE=y` and `CONFIG_HVC_RISCV_SBI=y`; the latter must actually survive Kconfig dependency resolution. Build the `Image` target. Statically link BusyBox and pack the installed files into a `newc` cpio archive.
-
-Compile the tree after checking its initrd end address against the actual archive length:
-
-```sh
-dtc -I dts -O dtb -o tools/linux/dts/doomv.dtb tools/linux/dts/doomv.dts
 ./riscv_doom.exe \
-  -opensbi=tools/linux/opensbi/fw_jump.elf \
-  -kernel=tools/linux/linux/Image \
-  -dtb=tools/linux/dts/doomv.dtb \
-  -initrd=tools/linux/rootfs/initramfs.cpio
+  -opensbi=build/linux/fw_jump.elf \
+  -kernel=build/linux/Image \
+  -dtb=build/linux/doomv.dtb \
+  -initrd=build/linux/initramfs.cpio
 ```
 
-Use the default runtime configuration with the supplied default DT. Adding a restrictive `-march` without adjusting DT extension claims can make the kernel use unsupported instructions. All four Linux-path options are required; there is no CLI mode for firmware-only boot in this main function. `vmlinux` is useful for symbols but the loader expects the raw `Image` in `-kernel`.
+Use the default runtime configuration with the supplied DT: a Linux boot with no `-march` gets the RVA23S64 profile the DT advertises. Adding a restrictive `-march` without adjusting the DT's extension claims can make the kernel use unsupported instructions. `-opensbi`, `-kernel` and `-dtb` are required; `-initrd` is left out for a disk boot. `vmlinux` is useful for symbols but the loader expects the raw `Image` in `-kernel`.
 
 ## Linux: physical image placement
 
@@ -216,7 +230,7 @@ Use the default runtime configuration with the supplied default DT. Adding a res
 
 Firmware jump constants, host offsets, DTS memory ranges and rebuilt artifact sizes must agree. The loader checks the backing allocation boundary, but does not detect overlap between separately loaded blobs. In this source inventory the kernel Image is 24,220,160 bytes, smaller than the 32-MiB space to the DTB, and initramfs is 2,024,960 bytes. These are snapshot file sizes, not permanent maximums.
 
-The DTS declares initrd start `0x82300000` and end `0x824ee600`, an exclusive end. Their difference is exactly 2,024,960 bytes. Rebuilding BusyBox may change that number; the host does not patch the DTB automatically.
+The checked-in DTS declares initrd start `0x82300000` and end `0x824ee600`, an exclusive end, 2,024,960 bytes apart. Those values are placeholders. The host does not patch the DTB when it loads the archive, so `prepare_dtb.py` rewrites the end address from the real archive size each time the scripts build, and removes both properties from the disk-boot trees.
 
 ## What the device tree tells firmware and Linux
 
@@ -225,10 +239,13 @@ A DTS is readable source. `dtc` compiles it into a DTB, a structured binary cont
 The [project DTS](../tools/linux/dts/doomv.dts) describes:
 
 - One hart, ID 0, with an Sv39 MMU and a declared ISA list.
-- RAM at `0x80000000`, size 256 MiB.
+- RAM at `0x80000000`, size 1 GiB.
 - The CLINT-compatible timer region and local interrupt numbers.
 - Separate M and S IMSIC interrupt files and an APLIC whose MSI parent is the S file.
 - A byte-spaced UART at `0x10000100`.
+- A `simple-framebuffer` at `0x50000000`, 1168×1056.
+- Twelve `virtio,mmio` nodes (root disk, keyboard, mouse, eight drive slots and the shared folder), each wired to an APLIC source.
+- A `sifive,test0` register with `syscon-poweroff` and `syscon-reboot` children.
 - A 1,000,000,000-Hz timebase and 64-byte cache-operation blocks.
 - `/chosen` boot arguments, firmware console path and initrd bounds.
 
@@ -272,9 +289,9 @@ The larger timebase avoids a feedback problem recorded in [BUGS.md](BUGS.md): if
 
 When AIA is advertised, the local interrupt driver reads `stopi` to discover the pending local cause. For external interrupt delivery it then reaches the IMSIC identity level via `stopei`/indirect registers. A timer interrupt is a local cause, not an APLIC source. Implementing only the external identity registers does not satisfy the local dispatcher.
 
-The console uses `earlycon=sbi console=hvc0`. Early and regular console phases are different drivers; seeing early text does not prove the later console exists. This pinned firmware's reported SBI version leads the documented kernel setup to use legacy SBI v0.1 console calls. `CONFIG_RISCV_SBI_V01` supports that path; `CONFIG_HVC_RISCV_SBI` supplies hvc0. The latter also requires its Kconfig prerequisites.
+The console uses `earlycon=sbi console=tty0 console=hvc0`. Both regular consoles are registered, so kernel messages reach the framebuffer and the SBI serial; the last one named becomes `/dev/console`, which puts the initramfs shell on hvc0, where scripts can drive it. Early and regular console phases are different drivers; seeing early text does not prove the later console exists. This pinned firmware's reported SBI version leads the documented kernel setup to use legacy SBI v0.1 console calls. `CONFIG_RISCV_SBI_V01` supports that path; `CONFIG_HVC_RISCV_SBI` supplies hvc0. The latter also requires its Kconfig prerequisites.
 
-For output, Linux asks firmware through ECALL; firmware writes the polled UART; the host prints stdout. For input, SDL keypresses enter the UART RX ring; firmware's polled receive returns them through SBI. The UART has no interrupt wire in this model or DTS. DOOM key events and Linux console characters use different queues and encodings.
+For output, Linux asks firmware through ECALL; firmware writes the polled UART; the host prints stdout. For hvc0 input, SDL keypresses are also translated into UART RX bytes, which firmware's polled receive returns through SBI; the UART has no interrupt wire in this model or DTS. tty0 takes its keys from the virtio keyboard instead, as evdev events that arrive by interrupt. DOOM key events and Linux console characters use different queues and encodings.
 
 ## Linux: initramfs to userspace shell
 
@@ -285,6 +302,20 @@ The kernel loads a userspace ELF into process memory, creates its register/stack
 The shell is PID 1 because it is the requested initial userspace program. This is not a full distribution startup with a service manager, disk-backed root filesystem or automatic network configuration. `/dev` availability and console file descriptors depend on the actual kernel configuration/archive and init path; do not infer that every device node is guaranteed merely from the presence of devtmpfs configuration in historical build notes.
 
 An interactive prompt and successful input/output are stronger evidence than an OpenSBI banner or a first kernel printk. Each marks a different amount of the boot contract exercised.
+
+## Ubuntu: booting from a disk
+
+The Ubuntu boot uses the same firmware and kernel with no initramfs. [boot_ubuntu.py](../scripts/boot_ubuntu.py) passes `-disk=ubuntu.img` and a DTB with no initrd properties, whose command line names the root filesystem. The kernel's virtio-blk driver finds the GPT partition, mounts ext4, and starts systemd as PID 1.
+
+The image is built in two stages by [mkrootfs.sh](../tools/linux/ubuntu/mkrootfs.sh). `debootstrap --foreign` unpacks packages on the host without running any riscv64 code; DoomV then boots the image with `init=/doomv-stage2` and runs Ubuntu's own `dpkg`, maintainer scripts and the programs they start.
+
+| Boot | Kernel command-line addition | Reaches |
+|---|---|---|
+| `boot.py ubuntu` | none | A login prompt on tty0 |
+| `boot.py ubuntu --desktop openbox`, `xfce` or `x` | `doomv.desktop=<kind>` | `doomv-desktop.service` starts Xorg on the framebuffer |
+| `boot.py ubuntu --install-desktops` | `init=/doomv-desktop-install` | Installs the X packages from a local repository, then powers off |
+
+X uses the fbdev driver on the `simple-framebuffer` aperture, and libinput reads the keyboard and mouse from `/dev/input/event0` and `event1`, configured statically. Guest time advances with instructions, not the wall clock, so these boots take real time. At about 6.6 MIPS, X paints after roughly 14 minutes for Openbox or bare X and 29 for XFCE. See the [Ubuntu guide](../tools/linux/ubuntu/README.md).
 
 ## What Linux adds beyond DOOM
 
@@ -368,8 +399,8 @@ console setup described above uses that legacy path, so do not apply the
 modern function-ID rule blindly. See the [SBI calling convention](https://github.com/riscv-non-isa/riscv-sbi-doc/blob/master/src/binary-encoding.adoc).
 
 For input, type into the SDL window. `DoomSystem::run` translates its keypresses
-and supplies UART receive bytes; this path does not read the host terminal's
-stdin. The kernel and firmware must also successfully service input before
+into UART receive bytes, and into virtio keyboard events for tty0. Headless
+(`-ng`), the host terminal's stdin feeds the UART instead. The kernel and firmware must also successfully service input before
 an interactive shell is established. Trace
 [doom_system.cpp](../src/doom_system.cpp), [uart.cpp](../src/uart.cpp), and the
 [console configuration notes](../tools/linux/linux/README.md).
@@ -395,13 +426,15 @@ did not execute it or verify the resulting images.
 | Last visible milestone | Inspect first | Why |
 |---|---|---|
 | No host window | Host executable dependencies and file paths | Failure may precede guest execution |
-| DOOM WAD not found | libc `_open` name, runtime WAD and WAD_LENGTH | Discovery and WAD backend are separate |
+| DOOM WAD not found | libc `_open` name, runtime WAD and `MMIO_WAD_SIZE` | Discovery and WAD backend are separate |
 | DOOM globals corrupt after malloc | `.sbss*` placement, end symbol, heap/stack | Heap can overlap static data or stack |
 | OpenSBI spins before handoff | misa.S, hart ID, FDT pointer, coldboot path | Firmware must admit a supervisor next stage |
 | Illegal fetch after paging changes | satp readback, virtual PC, root tables | Unsupported paging-mode acceptance can masquerade as instruction failure |
 | Early console works, later text stops | hvc0 driver and Kconfig dependencies | Early console is not the regular console |
 | Repeated timer trap, same PC | mtime, stimecmp, stopi, timebase | Livelock can execute indefinitely without illegal instructions |
 | Kernel reaches userspace setup but no shell | Initrd bounds, cpio contents, static `/bin/sh`, console | Firmware success does not validate rootfs |
+| Ubuntu stops before a login prompt | `e2fsck` state of `ubuntu.img`, the root argument, virtio-blk messages | A killed run, or a sysrq power-off without a read-only remount, leaves a journal to replay |
+| Login prompt on screen ignores typing | `VIRTIO_INPUT` in the kernel, the keyboard node in the DTB | tty0 reads the virtio keyboard, not the UART |
 | Debugger stops at illegal encoding | crash.log, extension flags and break-on-illegal setting | Ordinary illegal instructions now trap; a host stop requires the optional halt path or a breakpoint |
 
 Use `-break=<hex_pc>` for a known instruction boundary and
@@ -412,4 +445,4 @@ normally enter the architectural trap path; halting first is opt-in. See the
 
 ## Evidence and scope
 
-This guide was traced from main/system/memory/CSR/MMU/device code, the first-party DOOM platform and build files, DTS, pinned upstream entry files and existing build/bug notes. It explains intended boot flow and source behavior; no host executable, firmware, guest or conformance suite was built or run as part of writing these documents. Current source limitations are enumerated in [ISA_EXTENSIONS.md](ISA_EXTENSIONS.md); historical success statements in the repository are not substituted for a fresh boot result.
+This guide was traced from main/system/memory/CSR/MMU/device code, the first-party DOOM platform and build files, DTS, pinned upstream entry files and existing build/bug notes. It explains intended boot flow and source behavior; no host executable, firmware, guest or conformance suite was built or run as part of writing these documents. Current source limitations are enumerated in [ISA_EXTENSIONS.md](ISA_EXTENSIONS.md); historical success statements in the repository are not substituted for a fresh boot result. The build, device-tree, console and Ubuntu sections were updated at `a1c7d20`, by which point the Linux smoke test, the Ubuntu login and all three desktops had each been run on the current device map.

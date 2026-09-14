@@ -1,10 +1,13 @@
 # DoomV
 
-A RISC-V CPU, built from scratch in C++, that boots bare-metal DOOM.
+A RISC-V CPU, built from scratch in C++, that started out booting bare-metal
+DOOM and now boots OpenSBI, Linux, and Ubuntu 24.04 with a desktop.
 
-No OS, no Linux, no existing core as a reference implementation — just an
-instruction decoder, a register file, a memory bus, and enough of the RV64GC
-spec (plus Zicsr, Zifencei, and the V vector extension) to run a real game.
+No existing core as a reference implementation — just an instruction
+decoder, a register file, a memory bus, and the RVA23S64 profile (RV64GCV
+plus the extensions below, and H), with the handful of devices a
+distribution needs on top: AIA interrupt controllers, a framebuffer, virtio
+disks, a virtio keyboard and mouse, and a 9P folder shared with Windows.
 
 <img width="1919" height="1079" alt="image" src="https://github.com/user-attachments/assets/92adbcb6-cfe2-464e-8a09-8b817151a260" />
 
@@ -19,14 +22,17 @@ seemed like the right amount of stupid.
 The original goal was small on purpose: get bare-metal DOOM booting, and if
 it works, stop — nothing else needs to be implemented to call it done. That
 happened a while ago. Everything past that point (F/D, C, V, formal
-verification against a reference simulator) is stuff I kept going on because
+verification against a reference simulator, Linux, Ubuntu) is stuff I kept going on because
 it was fun, not because the project needed it.
 
 ## What's actually implemented
 
-DoomV's default target is `RV64GC` plus `Zicsr` and `Zifencei` — i.e.
-`RV64IMAFDC_Zicsr_Zifencei` — with the `V` (vector) extension on top,
-opt-in since it's not needed to boot Doom itself.
+With no `-march`, a bare-metal guest such as DOOM gets `RV64GC` plus `Zicsr`
+and `Zifencei` — i.e. `RV64IMAFDC_Zicsr_Zifencei` — along with the
+extensions below marked on by default. `V` (vector) and `H` stay opt-in
+there, since Doom needs neither. A Linux boot with no `-march` gets the full
+RVA23S64 profile instead, `V` included, because that is what the device
+tree tells the kernel the hart has.
 
 | Extension | Status |
 |---|---|
@@ -37,7 +43,7 @@ opt-in since it's not needed to boot Doom itself.
 | F / D (single/double float) | ✅ |
 | Zicsr | ✅ |
 | Zifencei | ✅ (no-op — see below) |
-| V (vector) | ✅, off by default |
+| V (vector) | ✅ (on for Linux boots, opt-in otherwise) |
 | Zba / Zbb / Zbs (bitmanip) | ✅ |
 | Zcb (compressed bitmanip/mem) | ✅ |
 | Zicond (conditional move) | ✅ |
@@ -59,7 +65,7 @@ opt-in since it's not needed to boot Doom itself.
 | Zfh / Zfhmin (half-precision arithmetic, converts) | ✅ |
 | Zvfh / Zvfhmin (vector half arithmetic, converts) | ✅ |
 | Zvfbfmin / Zvfbfwma (vector bf16 converts, widening FMA) | ✅ |
-| Svinval (fine-grained TLB invalidation) | ✅ (no TLB — see below) |
+| Svinval (fine-grained TLB invalidation) | ✅ (flushes the whole TLB — see below) |
 | Svnapot (64KB contiguous PTEs) | ✅ |
 | Svpbmt (page-based memory types) | ✅ |
 
@@ -151,10 +157,12 @@ type 3, and any nonzero type while `menvcfg.PBMTE` is clear, which is how
 an OS probes for the extension. Bits 60:54 of a PTE are now checked as
 reserved too; without that the other two would be meaningless.
 
-`Svinval`'s three instructions retire without effect for the same reason
-`fence.i` does: `mmu_translate` walks the page table in guest memory on
-every access, so a translation can never be stale and there is nothing to
-invalidate.
+`Svinval`'s `sinval.vma` flushes the TLB, and `sfence.w.inval` and
+`sfence.inval.ir` retire without effect. The TLB (`src/mmu.hpp`) is small,
+direct-mapped and only ever flushed wholesale — by `sfence.vma`,
+`sinval.vma`, and writes to the CSRs a translation depends on — so a
+finer-grained invalidation has nothing finer to aim at, and bracketing it
+has nothing to batch.
 
 CSR accesses are privilege-checked: writing a read-only CSR, or touching
 one above the current privilege level, raises an illegal instruction, and
@@ -196,7 +204,7 @@ to be the one that is wrong, but it does not decide anything.
 | riscv-tests | the Berkeley suite, 377 applicable of 667 | **377 / 377** |
 | damo-rv-priv-ats | hypervisor, the only H coverage that exists anywhere -- 43 groups | **43 / 43 groups** |
 | Linux | OpenSBI + 6.12 + busybox, ext4 root over virtio-blk | boots to an interactive shell, in a 1168x1056 framebuffer console |
-| Ubuntu 24.04 | 104 packages, configured by DoomV running Ubuntu's own `dpkg`, systemd as PID 1 | boots, and logs in at the framebuffer console |
+| Ubuntu 24.04 | 104 packages, configured by DoomV running Ubuntu's own `dpkg`, systemd as PID 1; 270 more for the desktops | boots, logs in at the framebuffer console, and starts Openbox, XFCE or bare X |
 | DOOM | bare-metal, no OS | plays |
 
 `riscv-vector-tests` is the suite that covers the vector ISA at the width
@@ -279,7 +287,7 @@ hand-written suites, `tests/archtest/` drives riscv-arch-test, and
 src/
   main.cpp             entry point, CLI flags, wires everything together
   doom_system.*         top-level system: owns decoder, registers, memory, gui
-  memory.*              guest RAM, WAD/ELF loader, MMIO bus (framebuffer, input)
+  memory.*              guest RAM, WAD/ELF loader, MMIO bus (framebuffers, input, virtio devices)
   registers.*           x0-31, f0-31, v0-31, PC, CSRs, and the trace history ring
   extensions.*           the enabled-extension table + -march= parser
   riscv_decoder.*        instruction word -> decoded struct, extension gate, dispatch
@@ -562,10 +570,20 @@ python scripts/build.py doom
 python scripts/build.py linux
 python scripts/build.py all
 
-# Boot either guest; --smoke proves Linux reaches BusyBox userspace.
+# Boot a guest. --smoke proves Linux reaches BusyBox userspace; --login
+# proves Ubuntu logs in through the emulated keyboard.
 python scripts/boot.py doom
+python scripts/boot.py linux
 python scripts/boot.py linux --smoke
 python scripts/boot.py ubuntu
+python scripts/boot.py ubuntu --login
+
+# Ubuntu desktops: install all three once (hours), then pick one per boot.
+python scripts/boot.py ubuntu --install-desktops
+python scripts/boot.py ubuntu --desktop openbox    # or xfce, or x
+
+# A storage drive for Linux. shared/ needs no setup.
+python scripts/mkdrive.py data 1G
 
 # All suites by default, or selected suites by name.
 python scripts/verify.py

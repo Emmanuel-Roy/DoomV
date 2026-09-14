@@ -4,118 +4,95 @@
 pinned to tag `v6.12` (shallow -- `.gitmodules` sets `shallow = true` so
 future clones/updates only fetch that one commit, not kernel history).
 
-`Image` and `vmlinux` in this directory (gitignored build output, same
-as the other `tools/*` build artifacts) are `defconfig` builds for
-`ARCH=riscv`, entry point `0xffffffff80000000` (standard Sv39 kernel
-high-half mapping), with one config override on top of defconfig:
-`CONFIG_RISCV_SBI_V01=y` (see below).
-
-## Built via WSL, not natively on this machine
-
-Configuring/building directly under MSYS2 on this Windows dev machine
-fails immediately (`fixdep: read: No error`) -- a genuinely old,
-well-documented incompatibility between Kbuild's `fixdep` host tool and
-Cygwin/MSYS2-style POSIX emulation on native Windows, with reports
-going back to at least 2005-2007 kernel mailing list threads and never
-properly fixed upstream. Unlike the OpenSBI/spike build issues (a
-few-years-old codebase vs. a newer GCC default, or a Windows-can't-
-checkout-a-real-symlink quirk -- both genuinely fixable), this is a
-structural gap in how Kbuild's host tools do low-level file I/O under
-MSYS2's POSIX-on-Win32 emulation, not worth patching around locally.
-
-Built instead inside WSL2 (Ubuntu), which sidesteps the issue entirely
-since it's a real Linux kernel underneath, not emulated POSIX:
+## Building it
 
 ```
-wsl --install -d Ubuntu --no-launch   # one-time setup
-wsl -d Ubuntu -- bash -c "apt-get update && apt-get install -y \
-    build-essential flex bison bc libssl-dev libelf-dev git rsync \
-    gcc-riscv64-linux-gnu"
-
-# Build on WSL's own ext4 filesystem, not the /mnt/c/... Windows mount --
-# a 90k-file kernel tree checked out via git or copied via rsync across
-# the 9p/drvfs boundary is dramatically slower there than natively.
-wsl -d Ubuntu -- bash -c "mkdir -p /root/build && \
-    rsync -a $DOOMV/tools/linux/linux/src/ /root/build/linux/"
-
-wsl -d Ubuntu -- bash -c "cd /root/build/linux && \
-    make ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- defconfig"
-
-# CONFIG_RISCV_SBI_V01=y (Stage 4): OpenSBI hardcodes
-# SBI_ECALL_VERSION_MAJOR/MINOR = 1.0 (tools/linux/opensbi/src/include/sbi/
-# sbi_ecall.h) -- it always reports SBI spec v1.0 via the BASE extension,
-# regardless of what it actually implements (it does implement SBI DBCN,
-# confirmed via lib/sbi/sbi_ecall_dbcn.c). Linux only tries DBCN when the
-# *reported* spec version is >= 2.0 (arch/riscv/kernel/sbi.c), so against
-# this OpenSBI version that path never activates -- both
-# drivers/tty/serial/earlycon-riscv-sbi.c and drivers/tty/hvc/
-# hvc_riscv_sbi.c fall through to legacy SBI v0.1 console_putchar
-# instead, which needs this config on (off by default in defconfig).
-# Without it, the kernel boots with a completely silent, unusable
-# console -- not a hang, just zero output the entire time.
-wsl -d Ubuntu -- bash -c "cd /root/build/linux && \
-    sed -i 's/# CONFIG_RISCV_SBI_V01 is not set/CONFIG_RISCV_SBI_V01=y/' .config && \
-    make ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- olddefconfig < /dev/null"
-
-# CONFIG_NONPORTABLE=y + CONFIG_HVC_RISCV_SBI=y: the bootargs in
-# tools/linux/dts/doomv.dts ask for `console=hvc0`, and hvc0 only exists if the
-# SBI console driver is built in. It is NOT reachable from defconfig:
-# drivers/tty/hvc/Kconfig gates it on `depends on RISCV_SBI && NONPORTABLE`,
-# and NONPORTABLE is off by default -- so the symbol is never even offered
-# and shows up *absent* from .config rather than as "is not set".
-# CONFIG_RISCV_SBI_V01 above is necessary but not sufficient: it only gets
-# you the earlycon (earlycon=sbi / SERIAL_EARLYCON_RISCV_SBI, already in
-# defconfig). Without hvc0 the bootconsole is never replaced, so the log
-# stops the moment the real console would take over and rdinit=/bin/sh has
-# no console at all. With it, the handover is visible in the boot log:
-#     printk: legacy console [hvc0] enabled
-#     printk: legacy bootconsole [sbi0] disabled
-# scripts/config is used rather than sed because NONPORTABLE has to be set
-# before HVC_RISCV_SBI can be selected at all.
-wsl -d Ubuntu -- bash -c "cd /root/build/linux && \
-    ./scripts/config --enable NONPORTABLE --enable HVC_RISCV_SBI && \
-    make ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- olddefconfig < /dev/null"
-
-# `Image` specifically, not the default `all` target -- `all` also
-# tries to build device trees for every vendor board the kernel
-# supports (SiFive, Microchip, Canaan, Allwinner, ...), several of
-# which fail under -jN with missing dt-bindings headers (a real
-# upstream dependency-ordering issue in parallel dtbs builds, unrelated
-# to anything in this project) -- none of which DoomV needs anyway,
-# since Stage 3 will author its own device tree from scratch.
-wsl -d Ubuntu -- bash -c "cd /root/build/linux && \
-    make ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- Image -j\$(nproc)"
-
-wsl -d Ubuntu -- bash -c "cp /root/build/linux/arch/riscv/boot/Image \
-    /root/build/linux/vmlinux $DOOMV/tools/linux/"
+python scripts/build.py linux
 ```
 
-Note: the rsync'd copy in `/root/build/linux` has a dangling `.git`
-gitlink (it's a relative-path pointer into the *Windows-side*
-superproject's `.git/modules/`, which doesn't resolve inside WSL's
-independent filesystem) -- cosmetic only, doesn't affect the build,
-just means `git` commands don't work in that copy.
+runs [`scripts/build_linux.sh`](../../../scripts/build_linux.sh) inside WSL.
+It fetches the pinned commit onto WSL's own filesystem, builds `Image` for
+`ARCH=riscv` (entry point `0xffffffff80000000`, the standard Sv39 high-half
+mapping), and copies it to `build/linux/Image` beside the firmware, the
+BusyBox archives and the compiled device trees.
 
+The configuration is `defconfig` with these options enabled on top, set with
+`scripts/config` and resolved with `olddefconfig`:
 
-## Where the kernel source lives
+| Option | Why |
+| --- | --- |
+| `RISCV_SBI_V01` | The console. See below. |
+| `NONPORTABLE`, `HVC_RISCV_SBI` | `hvc0`. See below. |
+| `BLK_DEV_INITRD`, `BINFMT_SCRIPT` | The BusyBox initramfs, and a shell script as init. |
+| `FB`, `FB_SIMPLE`, `FRAMEBUFFER_CONSOLE` | The graphical console. riscv `defconfig` builds the fbdev core but no framebuffer driver, so the `simple-framebuffer` node would bind to nothing and the console would be `colour dummy device 80x25`. |
+| `VIRTIO_INPUT`, `INPUT_EVDEV` | The keyboard and mouse. fbcon takes its keystrokes from an input device, not the serial port, so without these the window shows a login prompt nobody can type at; X reads `/dev/input/event*`. |
+| `MAGIC_SYSRQ` | `echo o > /proc/sysrq-trigger`, the only power-off available to an init that is not systemd -- Ubuntu's stage-2 build, for one. The kernel then calls SBI SRST, which reaches DoomV's `sifive,test0` device. |
 
-`$DOOMV` above is this repo's checkout as seen from inside WSL (e.g.
-`/mnt/z/Code/Dev/DoomV`) -- set it once per shell rather than hardcoding
-one machine's path.
+virtio-blk, virtio-9p, ext4 and the AIA interrupt-controller drivers are
+already in `defconfig`.
 
-Note that on Windows the `tools/linux/linux/src` submodule may not be checkoutable
-at all: the tree contains `drivers/gpu/drm/nouveau/nvkm/subdev/i2c/aux.c`,
-its `.h`, and `include/soc/arc/aux.h`, and `AUX` is a reserved DOS device
-name, so git's `core.protectNTFS` (on by default on Windows) refuses them:
+## Why `RISCV_SBI_V01`
+
+OpenSBI hardcodes `SBI_ECALL_VERSION_MAJOR/MINOR = 1.0`
+(`tools/linux/opensbi/src/include/sbi/sbi_ecall.h`): it always reports SBI
+spec v1.0 through the BASE extension, regardless of what it implements. It
+does implement SBI DBCN (`lib/sbi/sbi_ecall_dbcn.c`), but Linux only tries
+DBCN when the *reported* spec version is at least 2.0
+(`arch/riscv/kernel/sbi.c`). So against this OpenSBI that path never
+activates, and both `drivers/tty/serial/earlycon-riscv-sbi.c` and
+`drivers/tty/hvc/hvc_riscv_sbi.c` fall through to legacy SBI v0.1
+`console_putchar`, which needs this option (off in `defconfig`). Without it
+the kernel boots with a completely silent console -- not a hang, just no
+output the entire time.
+
+## Why `NONPORTABLE` and `HVC_RISCV_SBI`
+
+The bootargs in `tools/linux/dts/doomv.dts` ask for `console=hvc0`, and hvc0
+only exists if the SBI console driver is built in. It is not reachable from
+`defconfig`: `drivers/tty/hvc/Kconfig` gates it on
+`depends on RISCV_SBI && NONPORTABLE`, and `NONPORTABLE` is off by default,
+so the symbol is never even offered and is *absent* from `.config` rather
+than "is not set". `RISCV_SBI_V01` is necessary but not sufficient: it only
+gets the earlycon. Without hvc0 the bootconsole is never replaced, so the
+log stops the moment the real console would take over. With it, the
+handover is visible:
+
+```
+printk: legacy console [hvc0] enabled
+printk: legacy bootconsole [sbi0] disabled
+```
+
+`NONPORTABLE` has to be set before `HVC_RISCV_SBI` can be selected at all.
+
+## Why `Image` and not `all`
+
+The default `all` target also builds device trees for every vendor board the
+kernel supports (SiFive, Microchip, Canaan, Allwinner, ...), several of which
+fail under `-jN` with missing dt-bindings headers -- an upstream
+dependency-ordering issue in parallel dtbs builds, unrelated to this
+project. DoomV has its own device tree and needs none of them.
+
+## Why WSL, not MSYS2
+
+Configuring the kernel directly under MSYS2 fails immediately
+(`fixdep: read: No error`) -- an old, well-documented incompatibility
+between Kbuild's `fixdep` host tool and Cygwin/MSYS2-style POSIX emulation,
+never fixed upstream. WSL2 sidesteps it, since it is a real Linux kernel
+underneath.
+
+The source also stays on WSL's own ext4 filesystem rather than the Windows
+checkout. A 90k-file tree across the `/mnt/...` boundary is dramatically
+slower, and on Windows the `tools/linux/linux/src` submodule may not be
+checkoutable at all: the tree contains
+`drivers/gpu/drm/nouveau/nvkm/subdev/i2c/aux.c`, its `.h`, and
+`include/soc/arc/aux.h`, and `AUX` is a reserved DOS device name, so git's
+`core.protectNTFS` (on by default on Windows) refuses them:
 
 ```
 error: invalid path 'drivers/gpu/drm/nouveau/nvkm/subdev/i2c/aux.c'
 ```
 
-Simplest route is therefore to skip the Windows-side submodule entirely and
-clone the pinned commit directly inside WSL, then copy only `Image` and
-`vmlinux` back out. That also drops the rsync above -- which existed only
-because the source lived on the Windows side -- and with it the slow 9p
-crossing for a 90k-file tree. Note `.gitmodules` marks the submodule
-shallow but pins no branch, so a plain `--depth 1` clone fetches today's
-master tip, not v6.12; fetch the pinned SHA explicitly.
+`build_linux.sh` therefore fetches the pinned commit by SHA inside WSL and
+copies only `Image` back out. `.gitmodules` marks the submodule shallow but
+pins no branch, so a plain `--depth 1` clone would fetch today's master tip,
+not v6.12.

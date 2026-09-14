@@ -1,5 +1,10 @@
 # DoomV Restructure Plan
 
+> **Historical.** This is the plan for the original restructure of an RV32IMA
+> core into separate files. That layout was carried out and has since grown
+> well past it; see the [README](README.md#code-layout) and the
+> [documentation](docs/README.md) for the current machine.
+
 Splitting the current single-blob core into the layout below, plus a punch list
 of things this restructure surfaces that aren't decided yet.
 

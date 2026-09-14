@@ -3,8 +3,8 @@
 `src/` is a git submodule of [mirror/busybox](https://github.com/mirror/busybox),
 pinned to tag `1_36_1`.
 
-`initramfs.cpio` in this directory (gitignored build output, same as
-the other `tools/*` build artifacts) is an uncompressed cpio archive of
+`build/linux/initramfs.cpio` (built by `scripts/build_linux.sh`, which
+`python scripts/build.py linux` runs) is an uncompressed cpio archive of
 a statically-linked BusyBox, loaded by DoomV as a separate blob
 alongside the kernel `Image` and the DTB (see `src/doom_system.cpp`'s
 `init_linux_boot`). The kernel's `rdinit=/bin/sh` bootarg (set in
@@ -12,6 +12,11 @@ alongside the kernel `Image` and the DTB (see `src/doom_system.cpp`'s
 PID 1 -- no init script needed.
 
 ## Built via WSL, same toolchain as the kernel
+
+The supported build does all of this in `scripts/build_linux.sh`, which also
+makes `smoke.cpio`, the same archive plus a self-check init that
+`boot.py linux --smoke` runs. The steps below are the original manual
+procedure, kept for the reasoning in their comments.
 
 Native MSYS2 can't build this either (BusyBox links against a real
 libc via a `riscv64-linux-gnu-*` toolchain, same requirement as the
@@ -60,7 +65,8 @@ wsl -d Ubuntu -- bash -c "cp /root/build/initramfs.cpio \
     $DOOMV/tools/linux/rootfs/"
 ```
 
-No `/dev` entries are created in the archive -- the kernel's
+The manual procedure creates no `/dev` entries in the archive (the scripted
+build adds `/dev/console` and `/dev/null`) -- the kernel's
 `CONFIG_DEVTMPFS_MOUNT=y` (set in `arch/riscv/configs/defconfig`,
 confirmed by reading it) auto-populates `/dev` before `rdinit` runs,
 and the kernel opens the console and dup2()s it onto init's stdin/
@@ -73,10 +79,10 @@ the filesystem.
 `linux,initrd-start`/`linux,initrd-end` as absolute physical
 addresses (`RAM_BASE + 0x2300000` through that plus this file's exact
 byte length -- see `src/doom_system.cpp`'s `init_linux_boot` for where
-`0x2300000` comes from). If this file is rebuilt and its size changes,
-`linux,initrd-end` must be recomputed and the DTS recompiled
-(`dtc -I dts -O dtb -o doomv.dtb doomv.dts`) before booting -- there's
-no way to compute it from inside the DTB, so it isn't automatic.
+`0x2300000` comes from). The DTB cannot compute that length itself, so
+`scripts/prepare_dtb.py` rewrites `linux,initrd-end` from the archive's
+real size every time the scripts build; only a hand-built archive needs
+the DTS edited and recompiled.
 
 ## A partitioned disk image, for testing the shape a distribution has
 
