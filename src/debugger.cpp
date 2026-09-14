@@ -127,6 +127,7 @@ void Debugger::dump_log(const Registers &regs, Memory &mem, const char *path)
 	file << "stimecmp "; hex(regs.read_csr(0x14D), 16) << "\n";
 	file << "mtime ";    hex(mem.get_timer().get_mtime(), 16) << "\n";
 	file << "mtimecmp "; hex(mem.get_timer().get_mtimecmp(), 16) << "\n";
+	file << "steps ";    hex(mem.instruction_count(), 16) << "\n";
 	for (int i = 0; i < 32; i++) {
 		file << "x" << std::dec << i << " "; hex(regs.read_x(i), 16) << "\n";
 	}

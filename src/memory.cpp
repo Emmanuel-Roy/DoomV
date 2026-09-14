@@ -500,7 +500,6 @@ void Memory::step_instructions(uint32_t count)
 		ms_accum -= INSTR_PER_MS;
 		tick_counter++;
 	}
-	timer.tick(count);
 }
 
 // See memory.hpp for why this exists. The list mirrors the decode in the

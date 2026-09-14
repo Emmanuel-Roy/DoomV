@@ -46,9 +46,10 @@ Zicsr defines the access instructions, **not the existence of every CSR**. Each 
 Reset is M mode, virtualization false, with generic CSR storage zeroed. Trap entry records PC/cause/tval, saves interrupt enable into previous-enable state, records old privilege, disables the destination global interrupt enable and selects its direct vector. ECALL does not advance epc; the handler must advance it before returning when appropriate.
 
 The current SRET path selects `vsstatus` and `vsepc` during virtual execution,
-and checks `hstatus.VTSR` for a VS-mode intercept. WFI checks `mstatus.TW`
-before `hstatus.VTW`; a denied wait can therefore trap even though an allowed
-wait completes immediately.
+and checks `hstatus.VTSR` for a VS-mode intercept. WFI waits as Sail's does:
+M, S and VS wait for up to ten clock ticks, ending early when an interrupt is
+pending and enabled; `mstatus.TW` for S and `hstatus.VTW` for VS are checked
+only when the wait times out.
 
 Remaining source limitations include incomplete MRET/SRET caller-privilege
 checks and SRET's TSR handling. Unknown SYSTEM immediates can still advance
@@ -61,7 +62,7 @@ Implementation: [src/extensions/ext_zicsr.cpp](../../src/extensions/ext_zicsr.cp
 | Instruction | Operation and relevant details |
 |---|---|
 | `mret` | Restore privilege from MPP, interrupt-enable from MPIE and PC from mepc; restore H virtualization from MPV when applicable. |
-| `wfi` | Check TW below M mode, then VTW for VS mode. Denial raises illegal-instruction or virtual-instruction respectively. Otherwise advance PC and check interrupts again on a following step. |
+| `wfi` | U: illegal-instruction at once. VU: illegal with TW, otherwise virtual-instruction, at once. VS with TW: illegal at once. Otherwise wait (see `DoomSystem::run_wait`); on a timeout, S with TW raises illegal-instruction and VS with VTW virtual-instruction, and otherwise, or when an interrupt ends the wait, PC advances past the WFI. |
 
 ### CSR effects
 

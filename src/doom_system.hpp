@@ -221,6 +221,19 @@ private:
 	void exec_script_line(uint64_t now, const std::string &line);
 	void type_script_char(uint64_t now, char ch);
 
+	// One step without the clock, and the clock after it. step() is both;
+	// traced_step runs them apart, to see a step's CSR writes before its
+	// clock moves -- Sail logs a CSR write before its clock ticks.
+	void step_execute();
+	void end_step();
+	// Sail's clock: mtime advances once every INSNS_PER_TICK steps, and on
+	// every tick of a wait, which lasts at most MAX_WAIT_TICKS.
+	static constexpr uint32_t INSNS_PER_TICK = 2;   // rva23s64.json platform.instructions_per_tick
+	static constexpr uint32_t MAX_WAIT_TICKS = 10;  // rva23s64.json platform.max_time_to_wait
+	uint32_t tick_phase = 0;
+	void clock_tick();
+	void run_wait();
+
 	// lockstep.cpp
 	void traced_step();
 	void lockstep_end();

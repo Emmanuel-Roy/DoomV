@@ -3,8 +3,8 @@
 # breakpoint/crash.log methodology as the Stage 1 tests.
 #
 # M-mode arms mtimecmp a short, deliberately-imprecise distance ahead
-# (mtime ticks once per retired instruction -- see Timer::tick, called
-# from Memory::step_instructions), enables MTIE+mstatus.MIE, then spins
+# (mtime ticks once every two steps, as in Sail -- see
+# DoomSystem::clock_tick), enables MTIE+mstatus.MIE, then spins
 # forever. The interrupt should fire mid-spin regardless of exactly how
 # many setup instructions ran first. On the first trap: check mcause,
 # disarm mtimecmp to the far future, redirect mepc to a second bounded

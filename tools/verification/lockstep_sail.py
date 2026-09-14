@@ -40,6 +40,26 @@ def wsl(path: pathlib.Path) -> str:
     return "/mnt/" + s[0].lower() + s[2:]
 
 
+# Hand-written tests for what the riscv-tests leave alone -- the clock, the
+# counters and the waits. They check nothing themselves: the lock-step is the
+# check.
+LOCKSTEP_TESTS = ROOT / "tools" / "verification" / "tests" / "lockstep"
+LOCKSTEP_ELFS = ROOT / "build" / "lockstep-elf"
+
+
+def build_lockstep_tests() -> dict:
+    LOCKSTEP_ELFS.mkdir(parents=True, exist_ok=True)
+    built = {}
+    for source in sorted(LOCKSTEP_TESTS.glob("*.S")):
+        elf = LOCKSTEP_ELFS / source.stem
+        subprocess.run(["wsl", "-d", "Ubuntu", "-u", "root", "--", "riscv64-unknown-elf-gcc",
+                        "-march=rv64ima_zicsr", "-mabi=lp64", "-nostdlib", "-static",
+                        "-Wl,-N", "-Wl,-Ttext=0x80000000", "-Wl,--no-relax",
+                        "-o", wsl(elf), wsl(source)], check=True, env=run_suite._env())
+        built[elf.name] = elf
+    return built
+
+
 def one(elf: pathlib.Path, config: pathlib.Path, keep: bool, timeout: int):
     work = WORK / elf.name
     shutil.rmtree(work, ignore_errors=True)
@@ -84,11 +104,13 @@ def main():
     ap.add_argument("--timeout", type=int, default=300)
     args = ap.parse_args()
 
+    own = build_lockstep_tests()
     if args.tests:
-        elfs = [TESTS / t for t in args.tests]
+        elfs = [own.get(t, TESTS / t) for t in args.tests]
     else:
         elfs = sorted(p for p in TESTS.iterdir()
                       if re.match(r"rv64[a-z]+-[pv]-", p.name) and p.is_file() and not p.suffix)
+        elfs += list(own.values())
     WORK.mkdir(parents=True, exist_ok=True)
     config = SAIL_CONFIG
 

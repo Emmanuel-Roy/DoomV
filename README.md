@@ -90,18 +90,24 @@ layer that lets M-mode make them trap in S/U mode.
 store, and the address is aligned *down* to the 64-byte block, so
 `cbo.zero (base+8)` still zeroes from `base`.
 
-`Zawrs` retires immediately. The spec explicitly permits that, and the
-software contract is built around it: the surrounding loop always re-checks
-its condition, because a `wrs` may return for any reason or none. On a
-single-hart interpreter it is also the only implementation that terminates,
-since no other hart exists to break the reservation.
+The clock and the counters are Sail's, because the goal is to produce
+Sail's trace. `mtime` advances once every two steps -- a trap or an
+interrupt is a step, as an instruction is -- which is Sail's clock with its
+configuration's `instructions_per_tick` of 2, and it is still counted in
+instructions, so the timer is as deterministic as ever. `mcycle` counts
+those ticks and `minstret` counts instructions that complete; each stops
+under `mcountinhibit` and under the Smcntrpmf mode filters in `mcyclecfg`
+and `minstretcfg`, and a write to `minstret` is not itself counted.
+`cycle`, `time` and `instret` read them. `mhpmcounter3` through
+`mhpmcounter31` are writable and count no events, as in Sail.
 
-The counters are one number. `mtime` advances once per retired instruction
-(that is what makes this machine's timer deterministic), so `cycle`, `time`
-and `instret` all read the same counter — an interpreter that retires one
-instruction per step has `cycle == instret` by construction. `hpmcounter3`
-through `hpmcounter31` read as zero, which the spec permits and which is
-the honest answer for a machine that counts no events.
+`wfi`, `wrs.nto` and `wrs.sto` wait, as Sail's do: the clock ticks while
+the hart waits, for at most ten ticks, and the wait ends early when an
+interrupt is pending and enabled, or for a `wrs` when there is no
+reservation. A `wfi` that times out below M-mode traps if `mstatus.TW` (or
+in a guest `hstatus.VTW`) says so, and a `wfi` from U-mode is illegal at
+once. On a single hart nothing else can break a reservation, so a `wrs`
+always ends: the timeout is what ends it.
 
 Zfa is mostly not new arithmetic — it is arithmetic that differs from an
 existing instruction only in a corner, which is what makes it worth testing
@@ -673,7 +679,7 @@ options and dependency separation are in [`scripts/README.md`](scripts/README.md
 <a id="determinism"></a>
 **Determinism.** The same guest with the same inputs executes the same
 instructions in the same order on every run, whatever the host is doing.
-Guest time is the instruction count, not the wall clock, and every device
+Guest time is counted in instructions, not the wall clock, and every device
 request -- a disk read, a 9P call, delivering a key -- completes, writes
 guest memory and raises its interrupt on the CPU thread at the instruction
 that asked for it. Nothing the guest can observe is left to host timing.
@@ -759,7 +765,9 @@ traces each test, and DoomV lock-steps against the trace, strictly. Sail runs
 with the suites' `rva23s64.json` exactly as it is: the goal is to match Sail
 deterministically, so DoomV is the one that has to be that hart -- 63 guest
 external interrupt lines, vectored trap vectors, a writable `misa` -- and the
-reference is never adjusted to fit it.
+reference is never adjusted to fit it. The script also assembles and runs
+`tools/verification/tests/lockstep/*.S`, hand-written tests for what the
+riscv-tests leave alone: the clock, the counters, and `wfi` and `wrs` waits.
 
 ```sh
 python tools/verification/lockstep_sail.py                  # every rv64 test

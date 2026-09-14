@@ -613,7 +613,7 @@ void DoomSystem::traced_step()
 		console_drain();
 		const uint64_t first = ref.lines.empty() ? 0 : ref.lines.front().first;
 		std::cout << "lockstep: MISMATCH at reference line " << first << ", after " << lock->matched
-		          << " matching records (instruction " << memory.get_timer().get_mtime() << ")\n"
+		          << " matching records (instruction " << memory.instruction_count() << ")\n"
 		          << "  " << why << "\n  reference:\n";
 		for (size_t i = 0; i < ref.lines.size() && i < 16; i++) std::cout << "    " << ref.lines[i].second << "\n";
 		std::cout << "  DoomV:\n";
@@ -633,6 +633,20 @@ void DoomSystem::traced_step()
 		return core.read_csr_effective(regs, memory, c);
 	};
 
+	// The clock moves at the end of a step, and Sail's trace shows both sides
+	// of that: a CSR write is logged as it happens, before the tick, while the
+	// mip change the tick causes is logged by the next step's update_mip, at
+	// the end of this record. So a CSR this step wrote is compared, the first
+	// time the reference names it, with what it held when written; anything
+	// else with what it holds now, after the clock.
+	std::map<uint16_t, uint64_t> written_csr;
+	std::map<uint16_t, int> csr_seen;
+	const auto step_csr = [&](uint16_t c) -> uint64_t {
+		const auto it = written_csr.find(c);
+		if (it != written_csr.end() && csr_seen[c]++ == 0) return it->second;
+		return logged_csr(c);
+	};
+
 	// Whether a CSR's value is the reference's to decide. Never, in strict mode.
 	const auto from_ref_csr = [&](uint16_t c) { return !lockstep_strict && reference_decides_csr(c); };
 
@@ -642,7 +656,7 @@ void DoomSystem::traced_step()
 			if (from_ref_csr((uint16_t)f.idx)) continue;
 			uint64_t want = 0;
 			if (!parse_hex(f.value, want)) continue;
-			const uint64_t mine = logged_csr((uint16_t)f.idx);
+			const uint64_t mine = step_csr((uint16_t)f.idx);
 			if (mine != want) {
 				fail("after trap entry, CSR " + std::string(csr_label((uint16_t)f.idx)) + " (" + hex(f.idx, 3)
 				     + "): reference " + hex(want, 16) + ", DoomV " + hex(mine, 16));
@@ -657,8 +671,9 @@ void DoomSystem::traced_step()
 		for (uint16_t c : writes) {
 			if (reference_decides_csr(c) || !seen.insert(c).second) continue;
 			char buf[96];
+			const auto it = written_csr.find(c);
 			std::snprintf(buf, sizeof(buf), "CSR %s (0x%03X) <- 0x%016" PRIX64, csr_label(c), (unsigned)c,
-			              logged_csr(c));
+			              it != written_csr.end() ? it->second : logged_csr(c));
 			out.push_back(buf);
 		}
 	};
@@ -689,6 +704,8 @@ void DoomSystem::traced_step()
 		core.take_interrupt(regs, (int)ref.cause);
 		regs.csr_log = nullptr;
 		memory.step_instructions(1);
+		step_committed = false;
+		end_step();
 		actual.push_back("handling int#" + sail_trap_name(ref.cause, true) + " at priv "
 		                 + priv_name((int)regs.get_priv(), regs.get_virt())
 		                 + " | tval=0x0000000000000000 | tval2=0x0000000000000000 | tinst=0x0000000000000000");
@@ -714,7 +731,7 @@ void DoomSystem::traced_step()
 	const bool virt0 = regs.get_virt();
 	const uint64_t pc0 = regs.get_pc();
 	const uint64_t traps0 = core.trap_count;
-	const uint64_t step_no = memory.get_timer().get_mtime();
+	const uint64_t step_no = memory.instruction_count();
 
 	std::vector<AccessRecord> access;
 	std::vector<std::pair<uint64_t, uint8_t>> stored;
@@ -722,10 +739,12 @@ void DoomSystem::traced_step()
 	core.access_log = &access;
 	memory.store_log = &stored;
 	regs.csr_log = &csr_writes;
-	step();
+	step_execute();
 	core.access_log = nullptr;
 	memory.store_log = nullptr;
 	regs.csr_log = nullptr;
+	for (uint16_t c : csr_writes) written_csr[c] = logged_csr(c);
+	if (memory.instruction_count() != step_no) end_step();
 
 	const bool trapped = core.trap_count != traps0;
 	if (!step_committed && !trapped) {
@@ -932,7 +951,7 @@ void DoomSystem::traced_step()
 			}
 		} else if (f.cls == 'c') {
 			if (from_ref_csr((uint16_t)f.idx)) continue;
-			const uint64_t mine = logged_csr((uint16_t)f.idx);
+			const uint64_t mine = step_csr((uint16_t)f.idx);
 			if (mine != want) {
 				fail("CSR " + std::string(csr_label((uint16_t)f.idx)) + " (" + hex(f.idx, 3) + "): reference "
 				     + hex(want, 16) + ", DoomV " + hex(mine, 16));

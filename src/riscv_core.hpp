@@ -39,6 +39,15 @@ public:
 	// A fetch from an address that is not a legal instruction start for the
 	// extensions enabled right now: bit 1 set with C off.
 	void raise_misaligned_fetch(Registers &regs, uint64_t pc) { enter_trap(regs, 0, pc); }
+	// WFI and WRS ask for a wait here instead of completing, leaving pc at
+	// the instruction; DoomSystem::run_wait runs it.
+	enum class Wait : uint8_t { None, Wfi, WrsSto, WrsNto };
+	Wait wait_request = Wait::None;
+	// Sail's shouldWakeForInterrupt: an interrupt pending and enabled in mie,
+	// whatever the global enables say.
+	bool wake_for_interrupt(Registers &regs, Memory &mem);
+	bool reservation_held() const { return reservation_valid; }
+	void raise_virtual_instruction(Registers &regs, uint64_t tval) { enter_trap(regs, 22, tval); }
 	// Enter interrupt `bit`'s trap now, as check_and_take_interrupt would.
 	void take_interrupt(Registers &regs, int bit)
 	{

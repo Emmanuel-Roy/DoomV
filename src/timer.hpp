@@ -8,8 +8,8 @@
 // read32/write32 -- and the read64/write64 that already compose from
 // them -- both work without any extra plumbing.
 //
-// mtime ticks from instructions retired (see Memory::step_instructions),
-// not wall-clock host time -- deterministic, so a hand-written test can
+// mtime ticks once every two steps and on each tick of a wait, as Sail's
+// clock does (see DoomSystem::clock_tick), not wall-clock host time -- deterministic, so a hand-written test can
 // compute an exact fire time. Real wall-clock timing would make this as
 // unreproducible as the existing MMIO_TICK/tick_counter pacing hack,
 // which is explicitly not a real timer.

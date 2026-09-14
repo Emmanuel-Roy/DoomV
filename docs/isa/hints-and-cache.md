@@ -186,14 +186,14 @@ No new CSR; architectural `menvcfg.CBZE[7]` and lower/virtual counterparts contr
 
 ## Zawrs — wait on reservation set
 
-Both encodings use SYSTEM space and run through a dedicated helper. Immediate completion prevents a single-hart interpreter from waiting indefinitely for another hart.
+Both encodings use SYSTEM space and run through a dedicated helper. They wait as Sail's do with its configuration: the wait ends at once without a reservation, when an interrupt is pending and enabled, or after ten clock ticks. A single hart cannot break its own reservation, so the timeout is what ends it.
 
 Implementation: [src/extensions/ext_zawrs.cpp](../../src/extensions/ext_zawrs.cpp).
 
 | Instruction | Operation and relevant details |
 |---|---|
-| `wrs.nto` | Reservation-set wait without a specified timeout; DoomV returns immediately. |
-| `wrs.sto` | Reservation-set wait with short timeout; DoomV returns immediately. |
+| `wrs.nto` | Reservation-set wait. On a timeout below M mode, illegal-instruction with `mstatus.TW`, virtual-instruction with `hstatus.VTW` in a guest; otherwise completes. |
+| `wrs.sto` | Reservation-set wait with a short timeout; completes when the wait ends. |
 
 ### CSR effects
 

@@ -242,8 +242,8 @@ workable but tight, and `apt` is not. If the boot dies in the OOM killer,
 that pair is the thing to raise, and both must be changed together.
 
 **A guest-side timer is not a wall clock.** Guest time here is driven by
-retired instructions -- `mtime` advances once per instruction and
-`timebase-frequency` is 1e9 -- so one guest second is a billion instructions,
+instructions -- `mtime` advances once every two and `timebase-frequency` is
+5e8 -- so one guest second is a billion instructions,
 which is minutes of real time. A `sleep 60` inside the guest is a
 three-and-a-half *hour* wait, which is how the first version of the stage-2
 heartbeat produced no output at all. Anything scripted inside a guest that

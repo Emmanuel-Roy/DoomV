@@ -95,27 +95,21 @@
 	cpus {
 		#address-cells = <1>;
 		#size-cells = <0>;
-		// 1GHz, not the original placeholder 10MHz -- mtime advances one
-		// tick per *retired instruction* (Memory::step_instructions ->
-		// Timer::tick, see src/timer.hpp), so this value directly sets
-		// how many raw mtime units land between periodic ticks:
-		// timebase-frequency / CONFIG_HZ (=250, confirmed against the
-		// pinned kernel's actual .config). At 10MHz that's only 40,000
-		// mtime units (= 40,000 real instructions) per tick -- smaller
-		// than the real instruction cost of handling one generic-kernel
-		// periodic tick (RCU/scheduler/entropy processing), so every
-		// tick handler's own execution pushed mtime past the *next*
-		// tick's deadline before ever returning -- a genuine, permanent
-		// interrupt storm (confirmed via temporary instrumentation in
-		// check_and_take_interrupt: the S-timer interrupt re-fired from
-		// the exact same PC, immediately after local_irq_enable(),
-		// every single time). 1GHz gives 4,000,000 mtime units/tick --
-		// comfortable headroom -- and also shrinks the "apparent
-		// elapsed wall-clock time" by the point boot enables interrupts
-		// (mtime/timebase-frequency), reducing how large a first-tick
-		// catch-up burst the kernel's own tick-catchup logic has to
-		// process.
-		timebase-frequency = <1000000000>;
+		// 500MHz. mtime advances once every two steps -- Sail's clock,
+		// instructions_per_tick 2 (see DoomSystem::clock_tick in
+		// src/doom_system.cpp) -- so this is a billion instructions per
+		// guest second, as it was when mtime advanced every instruction at
+		// 1GHz. The rate matters: at CONFIG_HZ=250 (confirmed against the
+		// pinned kernel's .config) each periodic tick is 2,000,000 mtime
+		// units, four million instructions. The original 10MHz placeholder
+		// gave 40,000 -- less than the real cost of handling one
+		// generic-kernel tick (RCU, scheduler, entropy), so every tick
+		// handler pushed mtime past the next tick's deadline before
+		// returning: a permanent interrupt storm, the S-timer re-firing from
+		// the same PC straight after local_irq_enable(). The high rate also
+		// keeps the apparent elapsed time small when boot first enables
+		// interrupts, and with it the kernel's first tick catch-up burst.
+		timebase-frequency = <500000000>;
 
 		cpu0: cpu@0 {
 			device_type = "cpu";

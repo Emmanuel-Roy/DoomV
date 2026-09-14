@@ -80,6 +80,13 @@ public:
 	void write_csr(uint16_t addr, uint64_t value);
 	// While set, every write_csr appends its address (lockstep.cpp).
 	std::vector<uint16_t> *csr_log = nullptr;
+	// A counter's own increment: not a write, so not logged.
+	void bump_csr(uint16_t addr) { csr[addr]++; }
+	// Whether minstret counts the instruction now executing. Decided before
+	// it runs, from mcountinhibit.IR and minstretcfg, and cleared by a write
+	// to minstret, which then holds the value written: Sail's
+	// minstret_increment.
+	bool minstret_increment = false;
 
 	// fflags/frm are the two fields fcsr (CSR 0x003) packs together --
 	// dedicated storage instead of the generic csr[] array because fflags

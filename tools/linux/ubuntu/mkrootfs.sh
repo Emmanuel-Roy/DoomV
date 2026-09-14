@@ -178,8 +178,8 @@ echo "=== DOOMV-STAGE2-BEGIN ==="
   tail -n +1 -F /debootstrap/debootstrap.log ) &
 #
 # The sleep is one second, not sixty, and that is not a typo. Guest time on
-# this machine is driven by retired instructions -- mtime advances once per
-# instruction and timebase-frequency is 1e9 -- so one guest second is a
+# this machine is driven by instructions -- mtime advances once every two
+# and timebase-frequency is 5e8 -- so one guest second is a
 # billion instructions, which at ~4.75 MIPS is about three and a half wall
 # minutes. A `sleep 60` here is a three-and-a-half *hour* heartbeat, which
 # is how the first version of this produced no output at all.

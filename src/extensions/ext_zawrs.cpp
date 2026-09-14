@@ -6,16 +6,14 @@
 // period passes. They exist so a spinlock's wait loop can idle instead of
 // hammering the interconnect.
 //
-// Both are permitted to retire immediately. The spec is explicit that an
-// implementation may treat them as a no-op, and the software contract is
-// built around that: the surrounding loop always re-checks its condition
-// after the instruction returns, because a wrs may return for any reason
-// or none. So retiring at once is a correct implementation, not a stub --
-// the same argument WFI already relies on in ext_zicsr.cpp.
-//
-// On a single-hart interpreter it is also the only implementation that
-// terminates. There is no other hart that could invalidate the reservation,
-// so a wrs.nto that genuinely waited for one would hang forever.
+// They wait as Sail's do with its configuration, where neither is a no-op.
+// The wait ends at once if no reservation is held, when an interrupt is
+// pending and enabled, or after the same ten clock ticks a WFI waits at
+// most. A wrs.nto that times out below M-mode then traps -- illegal with
+// mstatus.TW set, a virtual instruction with hstatus.VTW in a guest -- and
+// otherwise both complete. DoomSystem::run_wait runs the wait. On a single
+// hart nothing else can invalidate the reservation, so the timeout is what
+// ends it.
 //
 // The encodings sit in SYSTEM funct3=000 alongside ECALL/EBREAK/xRET/WFI,
 // distinguished purely by their immediate (0x00D and 0x01D), which is why
@@ -29,6 +27,7 @@
 
 void RiscvCore::exec_ZAWRS(const DecodedInstruction &instr, Registers &regs, Memory &mem)
 {
+	(void)regs;
 	(void)mem;
-	regs.set_pc(regs.get_pc() + instr.length);
+	wait_request = ((instr.raw >> 20) & 0xFFF) == 0x01D ? Wait::WrsSto : Wait::WrsNto;
 }

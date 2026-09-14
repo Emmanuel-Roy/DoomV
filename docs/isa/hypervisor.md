@@ -21,7 +21,7 @@ execution therefore does not automatically take the explicit guest two-stage
 path. HLV/HSV also bypass the final `translate_or_trap` wrapper.
 
 At `c7d881b`, SRET selects guest status/PC while virtual and checks VTSR.
-WFI checks TW and VTW, and the CSR/SFENCE paths contain VTVM checks. These are
+WFI checks TW at once for VS and VU and VTW when a VS-mode wait times out, and the CSR/SFENCE paths contain VTVM checks. These are
 implemented intercepts, not merely writable control bits. They do not resolve
 the broader translation, interrupt-injection, guest-time and width-specific
 coverage limits. Hypervisor conformance still needs independent tests.

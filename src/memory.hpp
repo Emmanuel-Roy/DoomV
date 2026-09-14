@@ -285,6 +285,11 @@ public:
 
 	static constexpr uint32_t INSTR_PER_MS = 1200;
 	void step_instructions(uint32_t count);
+	// Steps taken so far, a trap or an interrupt counting as one: Sail's step
+	// number. Not guest time -- mtime is the clock, and it advances every
+	// second step (DoomSystem::clock_tick).
+	uint64_t instruction_count() const { return instr_count; }
+	void tick_clock() { timer.tick(1); }
 
 	const uint8_t *framebuffer() const { return fb.data(); }
 	const uint8_t *linux_framebuffer() const { return lfb.data(); }
@@ -360,7 +365,7 @@ private:
 	int key_queue_head;
 	int key_queue_tail;
 
-	uint32_t instr_count;   // raw executed-instruction count
+	uint64_t instr_count;   // steps taken -- see instruction_count()
 	uint32_t tick_counter;  // instr_count / INSTR_PER_MS -- what MMIO_TICK exposes
 	uint32_t ms_accum;      // instructions banked toward the next tick_counter++ (avoids a divide every instruction)
 	uint32_t fb_write_count;

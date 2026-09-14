@@ -17,8 +17,8 @@
 // take the interrupt, record where the program counter was. Without it a
 // profiler has to poll, which perturbs what it is measuring.
 //
-// This hart counts no events. hpmcounter3..31 are hardwired to zero (see
-// ext_zicntr.cpp), so nothing ever increments and no overflow can occur
+// This hart counts no events. mhpmcounter3..31 are writable, but nothing
+// increments them (see ext_zicntr.cpp), so no overflow can occur
 // spontaneously. That does not make the extension vacuous here: the
 // registers, their WARL behaviour, the interrupt plumbing and scountovf's
 // read-only view are all real and observable, and software can still drive
@@ -73,13 +73,15 @@ uint64_t read_scountovf(Registers &regs)
 }
 
 // The OF bit is writable (software clears it after handling an overflow),
-// as are the inhibit bits. The event selector itself is the low 58 bits,
-// which this hart keeps but never interprets -- there are no events to
-// select from.
+// as are the inhibit bits, VSINH and VUINH only with H. The event selector
+// is the low 32 bits, which this hart keeps but never interprets -- there
+// are no events to select from. Bits 57:32 read as zero, as in Sail, and
+// without Sscofpmf only the selector is there.
 uint64_t mhpmevent_wmask()
 {
+	if (!Extensions.SSCOFPMF) return 0xFFFFFFFFull;
 	return MHPMEVENT_OF | MHPMEVENT_MINH | MHPMEVENT_SINH | MHPMEVENT_UINH
-	     | MHPMEVENT_VSINH | MHPMEVENT_VUINH | 0x03FFFFFFFFFFFFFFull;
+	     | (Extensions.H ? (MHPMEVENT_VSINH | MHPMEVENT_VUINH) : 0) | 0xFFFFFFFFull;
 }
 
 // Whether any counter is currently signalling an overflow. Drives the LCOFI

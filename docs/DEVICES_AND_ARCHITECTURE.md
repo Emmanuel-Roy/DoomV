@@ -146,7 +146,7 @@ There is a small direct-mapped TLB ([mmu.hpp](../src/mmu.hpp)). It caches only s
 
 ## Timer and local interrupts
 
-[Timer](../src/timer.hpp) contains two 64-bit values: `mtime` and `mtimecmp`. Reset initializes both to zero, making the machine timer condition immediately true; interrupt enables are initially clear. `tick(count)` adds to mtime. No host wall-clock thread drives it.
+[Timer](../src/timer.hpp) contains two 64-bit values: `mtime` and `mtimecmp`. Reset initializes both to zero, making the machine timer condition immediately true; interrupt enables are initially clear. `tick(count)` adds to mtime. No host wall-clock thread drives it: `DoomSystem::clock_tick` adds one every second step and on each tick of a `wfi` or `wrs` wait, which is Sail's clock with `instructions_per_tick` 2 and `max_time_to_wait` 10.
 
 | Timer-relative offset | Interface | Behavior |
 |---|---|---|
@@ -158,7 +158,7 @@ There is a small direct-mapped TLB ([mmu.hpp](../src/mmu.hpp)). It caches only s
 
 The comparison is `mtime >= mtimecmp`. The timer is CLINT-compatible only in the implemented register subset: there is no live MMIO MSIP register, even though the DTS includes M-software interrupt metadata expected by firmware initialization. One hart avoids needing working cross-hart IPIs in the demonstrated boot path.
 
-Sstc is implemented in CSR logic: `menvcfg.STCE` enables comparing the same mtime against `stimecmp`, contributing STIP. It is not a third independent clock. The unprivileged cycle/time/instret reads also alias mtime; they are not separately measured performance counters.
+Sstc is implemented in CSR logic: `menvcfg.STCE` enables comparing the same mtime against `stimecmp`, contributing STIP. It is not a third independent clock. The unprivileged cycle/time/instret reads return mcycle, mtime and minstret: mcycle counts clock ticks and minstret completed instructions, each subject to mcountinhibit and the Smcntrpmf filters in mcyclecfg and minstretcfg.
 
 DOOM's tick register is different: `Memory::step_instructions` accumulates steps until 1,200 have elapsed, then increments a 32-bit millisecond-like count. Linux uses the DT timebase to interpret raw mtime instead. Neither interface measures host wall-clock milliseconds directly.
 
@@ -358,9 +358,10 @@ There are three separate quantities: host elapsed time, modeled timer ticks,
 and the frequency reported in the device tree. DoomV advances its timer with
 modeled execution; Linux uses the reported frequency to calculate deadlines.
 
-For a periodic rate of 250 Hz, a reported 1-GHz timebase gives
-`1,000,000,000 / 250 = 4,000,000` timer increments per interval. That says how
-the guest interprets a counter, not how fast the host computes instructions.
+For a periodic rate of 250 Hz, the reported 500-MHz timebase gives
+`500,000,000 / 250 = 2,000,000` timer increments per interval -- four million
+instructions, since mtime advances every second one. That says how the guest
+interprets a counter, not how fast the host computes instructions.
 
 If servicing a tick consumes more modeled increments than the interval,
 the next deadline can already be overdue when the handler returns. The core

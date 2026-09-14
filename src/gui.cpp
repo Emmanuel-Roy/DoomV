@@ -74,9 +74,9 @@ static const char *csr_name(uint16_t addr)
 	case 0x350: return "miselect"; // AIA indirect (Stage 2)
 	case 0x351: return "mireg";
 	case 0x35C: return "mtopei";
-	case 0xC00: return "cycle";   // Zicntr (phase 2) -- all three read the
-	case 0xC01: return "time";    // same retired-instruction counter here,
-	case 0xC02: return "instret"; // see ext_zicntr.cpp
+	case 0xC00: return "cycle";   // Zicntr: mcycle, mtime and minstret
+	case 0xC01: return "time";    // read unprivileged -- see
+	case 0xC02: return "instret"; // ext_zicntr.cpp
 	case 0xDB0: return "stopi";   // Ssaia top-interrupt
 	case 0xFB0: return "mtopi";   // Smaia top-interrupt
 	case 0xF11: return "mvendorid";

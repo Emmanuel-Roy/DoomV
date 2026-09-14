@@ -3,35 +3,25 @@
 
 namespace counters {
 
-// This machine has exactly one clock. mtime is incremented once per retired
-// instruction (Memory::step_instructions -> Timer::tick), which is what makes
-// the timer deterministic and a hand-written test able to compute an exact
-// fire time -- see timer.hpp. So the retired-instruction count, the cycle
-// count and the wall clock are all literally the same number here, and
-// cycle/time/instret return it.
+// The counters are Sail's, with its configuration. mtime is the clock: it
+// advances once every two steps (instructions_per_tick 2), and on each tick
+// of a wait -- see DoomSystem::clock_tick. mcycle counts those ticks unless
+// mcountinhibit.CY or mcyclecfg's filter for the current mode stops it.
+// minstret counts instructions that complete, unless mcountinhibit.IR or
+// minstretcfg's filter stopped it when the instruction began, or the
+// instruction wrote minstret itself. mcycle and minstret are writable, and
+// cycle and instret read them; time reads mtime.
 //
-// That is not a shortcut around three separate counters; it is what this
-// implementation's timing model actually is. An interpreter that retires
-// exactly one instruction per step has cycle == instret by construction,
-// and mtime is defined off the same step. The one property software relies
-// on -- that each is monotonically non-decreasing and advances as the
-// program runs -- holds.
-//
-// Zihpm's hpmcounter3..31 are hardwired to zero. The spec permits any of
-// them to be read-only zero, which is the honest answer for a machine that
-// counts no events: reporting a made-up number would be worse than
-// reporting none. They still have to be *readable* rather than illegal,
-// which is the part that matters for conformance.
+// Zihpm's mhpmcounter3..31 are writable storage that counts no events, as in
+// Sail: nothing increments them, but software may write and read them, and
+// hpmcounter3..31 read them back.
 uint64_t read_counter(Registers &regs, Memory &mem, uint16_t csr)
 {
-	(void)regs;
 	switch (csr) {
-	case CSR_CYCLE:
-	case CSR_TIME:
-	case CSR_INSTRET:
-		return mem.get_timer().get_mtime();
-	default:
-		return 0; // hpmcounter3..31
+	case CSR_CYCLE:   return regs.read_csr(0xB00);
+	case CSR_TIME:    return mem.get_timer().get_mtime();
+	case CSR_INSTRET: return regs.read_csr(0xB02);
+	default:          return regs.read_csr((uint16_t)(0xB00 + counter_index(csr)));
 	}
 }
 

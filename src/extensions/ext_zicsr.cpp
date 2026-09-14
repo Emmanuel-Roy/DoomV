@@ -782,6 +782,9 @@ bool RiscvCore::csr_access_permitted(Registers &regs, uint16_t csr, bool writing
 	// debug mode, so these are absent, as in the reference. tselect alone
 	// stays -- see its read in read_csr_effective.
 	if (csr >= 0x7A1 && csr <= 0x7B3) return false;
+	// mcycle is 0xB00 and minstret 0xB02. 0xB01 would be time's, and time has
+	// no machine counter CSR: absent, as in the reference.
+	if (csr == 0xB01) return false;
 	// fflags, frm and fcsr exist while F is enabled, and the vector CSRs while
 	// V is; with the extension turned off in misa, they are gone with it.
 	if (csr >= 0x001 && csr <= 0x003 && !Extensions.F) return false;
@@ -1101,9 +1104,8 @@ uint64_t RiscvCore::read_csr_effective(Registers &regs, Memory &mem, uint16_t cs
 	if (csr == CSR_STOPEI) return mem.get_imsic_s().topei_value();
 	if (csr == CSR_MTOPI) return compute_topi(regs, mem, /*s_level=*/false);
 	if (csr == CSR_STOPI) return compute_topi(regs, mem, /*s_level=*/true);
-	// cycle/time/instret/hpmcounter* (Zicntr, Zihpm). time was already
-	// here as an mtime alias; the other two read the same counter for the
-	// reason ext_zicntr.cpp explains.
+	// cycle/time/instret/hpmcounter* (Zicntr, Zihpm): mcycle, mtime,
+	// minstret and mhpmcounter3..31 read unprivileged -- see ext_zicntr.cpp.
 	// htimedelta is what lets a guest have its own timeline. A guest
 	// reading `time` gets the host's mtime plus this offset, so a
 	// hypervisor can migrate a guest, or start one long after boot,
@@ -1632,6 +1634,11 @@ bool RiscvCore::check_and_take_interrupt(Registers &regs, Memory &mem)
 	return true;
 }
 
+bool RiscvCore::wake_for_interrupt(Registers &regs, Memory &mem)
+{
+	return (compute_mip(regs, mem) & regs.read_csr(CSR_MIE)) != 0;
+}
+
 void RiscvCore::exec_32ZICSR(const DecodedInstruction &instr, Registers &regs, Memory &mem)
 {
 	uint64_t pc = regs.get_pc();
@@ -1840,46 +1847,34 @@ void RiscvCore::exec_32ZICSR(const DecodedInstruction &instr, Registers &regs, M
 			return;
 		}
 		case 0x105: { // WFI
-			// Treating the wait itself as a no-op is fine -- it is a hint,
-			// never a mandatory wait, and check_and_take_interrupt runs
-			// again before the next fetch regardless.
+			// Sail's WFI, with its configuration. M and S wait. U may not
+			// wait at all (wfi_available_to_user_mode is false), so it is
+			// an illegal instruction at once. VU never waits: illegal with
+			// mstatus.TW set, a virtual instruction without. VS with TW set
+			// is illegal at once, and otherwise waits.
 			//
-			// Whether it is *allowed* is a different question. mstatus.TW
-			// traps it from S-mode, and hstatus.VTW traps it from VS-mode,
-			// so that a hypervisor can decide what a guest halting means
-			// rather than having the guest silently continue.
-			//
-			// TW outranks VTW: when M-mode has closed WFI to everything
-			// below it, the guest gets an illegal instruction (cause 2) and
-			// the trap goes to M, not a virtual instruction handled by a
-			// hypervisor that is itself denied the instruction.
+			// TW for S, and hstatus.VTW for VS, are checked when the wait
+			// times out rather than here: a WFI that an interrupt ends in
+			// time completes whatever they say. DoomSystem::run_wait runs
+			// the wait.
 			constexpr uint64_t MSTATUS_TW = 1ull << 21;
-			if (regs.get_priv() != PrivMode::M
-			    && (regs.read_csr(CSR_MSTATUS) & MSTATUS_TW)) {
+			const bool tw = (regs.read_csr(CSR_MSTATUS) & MSTATUS_TW) != 0;
+			const PrivMode p = regs.get_priv();
+			const bool v = Extensions.H && regs.get_virt();
+			if (p == PrivMode::U && !v) {
 				raise_illegal_instruction(regs, instr.raw);
 				return;
 			}
-			// VU-mode never waits at all, and hstatus.VTW does not enter
-			// into it: with TW=0 a WFI from VU is a virtual instruction
-			// unconditionally. The reasoning is that a guest *user* process
-			// halting the hart is never something the guest kernel decided,
-			// so the trap has to go somewhere that can decide -- and the
-			// hypervisor is the nearest such place. (TW=1 already took the
-			// illegal-instruction path above, which outranks this.)
-			//
-			// This arm did not exist: a VU-mode WFI fell through to the
-			// no-op below and the guest carried on, which is the one
-			// outcome the architecture rules out for every setting of TW.
-			if (Extensions.H && regs.get_virt() && regs.get_priv() == PrivMode::U) {
-				enter_trap(regs, hyp::CAUSE_VIRTUAL_INSTRUCTION, instr.raw);
+			if (p == PrivMode::U) {
+				if (tw) raise_illegal_instruction(regs, instr.raw);
+				else enter_trap(regs, hyp::CAUSE_VIRTUAL_INSTRUCTION, instr.raw);
 				return;
 			}
-			if (Extensions.H && regs.get_virt() && regs.get_priv() == PrivMode::S
-			    && (regs.read_csr(hyp::CSR_HSTATUS_ADDR) & (1ull << 21))) { // VTW
-				enter_trap(regs, hyp::CAUSE_VIRTUAL_INSTRUCTION, instr.raw);
+			if (p == PrivMode::S && v && tw) {
+				raise_illegal_instruction(regs, instr.raw);
 				return;
 			}
-			regs.set_pc(pc + instr.length);
+			wait_request = Wait::Wfi;
 			return;
 		}
 		default:
@@ -2225,7 +2220,17 @@ void RiscvCore::exec_32ZICSR(const DecodedInstruction &instr, Registers &regs, M
 	else if (csr == CSR_MISA) write_misa(updated, pc + instr.length);
 	else if (csr == 0x100) write_sstatus(regs, updated);
 	else if (Extensions.H && csr == hyp::CSR_HSTATUS_ADDR) hyp::write_hstatus(regs, updated);
-	else if (Extensions.SSCOFPMF && sscofpmf::is_mhpmevent(csr))
+	// minstret written holds what was written: the instruction writing it is
+	// not also counted. A read (CSRRS/CSRRC with nothing to set or clear)
+	// comes through here too, and is counted.
+	else if (csr == 0xB02) { regs.write_csr(csr, updated); if (writes) regs.minstret_increment = false; }
+	// mcountinhibit: time cannot be inhibited, so TM is read-only zero.
+	else if (csr == 0x320) regs.write_csr(csr, updated & 0xFFFFFFFDull);
+	// mcyclecfg and minstretcfg (Smcntrpmf): the mode filters MINH, SINH and
+	// UINH, and VSINH and VUINH with H; everything else reads as zero.
+	else if (csr == 0x321 || csr == 0x322)
+		regs.write_csr(csr, updated & ((0x7ull << 60) | (Extensions.H ? (0x3ull << 58) : 0)));
+	else if (sscofpmf::is_mhpmevent(csr))
 		regs.write_csr(csr, updated & sscofpmf::mhpmevent_wmask());
 	else if (Extensions.SSSTATEEN && stateen::is_stateen_csr(csr)) stateen::write_stateen(regs, csr, updated);
 	else if (csr == CSR_SATP) write_satp(regs, updated);

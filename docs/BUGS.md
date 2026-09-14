@@ -331,6 +331,9 @@ of console output (`2667bf1`, re-verified in `936df17`).
 162. [misa never reported B](#bug162)
 163. [The trigger and debug CSRs were plain storage](#bug163)
 164. [Three ways DoomV was not the hart Sail describes](#bug164)
+165. [The clock was the instruction count](#bug165)
+166. [WFI and WRS never waited](#bug166)
+167. [The counter CSRs had no rules of their own](#bug167)
 
 <a id="part-vii"></a>
 ### Part VII — Cross-cutting
@@ -1100,7 +1103,8 @@ particular `CONFIG_HZ`, and the cost of the handler.
 **Resolution.** Raised to 1GHz, giving 4,000,000 raw units per tick and
 comfortable headroom, **with the reasoning documented inline** so the next
 person to touch the constant understands the constraint rather than just
-the number.
+the number. (Now 500MHz, with `mtime` advancing every second instruction:
+the same four million instructions per tick. See [Bug 165](#bug165).)
 
 **Evidence.** `fda9255`. After the fix, boot reached real incrementing
 kernel timestamps for the first time: `[0.000045] Timer interrupt in S-mode
@@ -7038,3 +7042,57 @@ written, as does a fetch from one, and `mepc`, `sepc` and `vsepc` read and
 return aligned to four bytes. S and U stay set: DoomV cannot run without its
 supervisor or user mode. `lockstep_sail.py` runs Sail with `rva23s64.json`
 unmodified.
+
+<a id="bug165"></a>
+### 165. The clock was the instruction count
+
+With Sail's configuration used unmodified, one difference was left that the
+riscv-tests never reach: time. DoomV's `mtime` advanced once per step, and
+`cycle`, `time` and `instret` all read it -- one number, which a comment
+defended as the honest model of an interpreter. It is a legal model, and it
+is not Sail's. Sail's harness ticks its clock every `instructions_per_tick`
+steps, 2 in its configuration; each tick advances `mtime` and, unless
+`mcountinhibit.CY` or `mcyclecfg`'s filter for the current mode stops it,
+`mcycle`. `minstret` is a register of its own, counting instructions that
+complete, decided from `mcountinhibit.IR` and `minstretcfg` before each one
+runs, and skipped for an instruction that writes `minstret` itself.
+`mcycle` and `minstret` were plain storage nothing ever advanced.
+
+None of this shows in a signature or a `tohost` verdict, because no suite
+here reads a counter and checks the number. The lock-step would have, one
+counter read at a time, and `tools/verification/tests/lockstep/clock.S` now
+does it on purpose. Its first run found one slip in the new code as well:
+a read of `minstret` passes through the CSR write path with nothing to
+write, and it was suppressing the increment as a write does.
+
+The step count that `mtime` had doubled as -- for `-stopat`, input
+checkpoints, 9P timestamps and lock-step's step numbers -- is now its own
+counter, the one Sail prints. To keep Linux's timing in instructions
+unchanged, `doomv.dts` reports a 500MHz timebase: a billion instructions per
+guest second, as before.
+
+<a id="bug166"></a>
+### 166. WFI and WRS never waited
+
+`wfi`, `wrs.nto` and `wrs.sto` completed at once, which the spec permits.
+Sail's configuration makes none of them a no-op, and its harness waits: the
+clock ticks while the hart waits, for at most `max_time_to_wait` (10) ticks,
+and the wait ends early when an interrupt is pending and enabled in `mie` --
+whatever the global enables say -- or, for a `wrs`, when no reservation is
+held. Time passes differently, so a timer fires at a different instruction.
+The permission checks moved with it: `mstatus.TW` for S-mode and
+`hstatus.VTW` for VS-mode are checked when the wait times out, not when the
+instruction runs, so a `wfi` an interrupt ends in time completes whatever
+they say, and a `wfi` from U-mode is illegal at once, since the
+configuration does not let U-mode wait.
+
+<a id="bug167"></a>
+### 167. The counter CSRs had no rules of their own
+
+Every counter-related CSR fell through to generic storage: `mcountinhibit`
+kept a TM bit that cannot exist, `mcyclecfg` and `minstretcfg` kept any value,
+`0xB01` -- between `mcycle` and `minstret`, and no register at all -- read
+and wrote like one, and `hpmcounter3`..`31` read zero whatever
+`mhpmcounter3`..`31` held. `mhpmevent` kept bits 57:32, which Sail's
+legalization clears. Each now follows Sail's rules, the lock-step test
+reading back every write.

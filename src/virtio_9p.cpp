@@ -1240,7 +1240,7 @@ void Virtio9p::process_queue(Memory &mem, Aplic &aplic)
 {
 	if (!avail_addr || !used_addr || !desc_addr) return;
 	// Every request in this notify is served at the instruction that sent it.
-	guest_ns = mem.get_timer().get_mtime();
+	guest_ns = mem.instruction_count();
 	const uint32_t qsz = queue_num ? queue_num : QUEUE_MAX;
 	const uint16_t avail_idx = mem.read16(avail_addr + 2);
 	bool completed = false;

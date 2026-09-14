@@ -62,8 +62,8 @@ if ! grep -aq "$MARKER" "$LOG"; then
 fi
 
 # The guest's own timestamp on the marker line is retired instructions in
-# disguise: mtime advances once per instruction on this machine (see the
-# counters note in README.md), so the kernel's printk clock is a cycle count
+# disguise: mtime advances once every two steps on this machine (see the
+# counters note in README.md), so the kernel's printk clock is a step count
 # with a fixed scale. Dividing it by the wall time gives the emulated rate
 # without needing the emulator to report one.
 guest=$(grep -a "$MARKER" "$LOG" | head -1 | sed -n 's/^\[ *\([0-9.]*\)\].*/\1/p')
@@ -71,9 +71,9 @@ wall=$(echo "$end $start" | awk '{printf "%.2f", $1 - $2}')
 echo "marker:      $MARKER"
 echo "guest time:  ${guest}s"
 echo "wall time:   ${wall}s"
-# timebase-frequency is 1e9 in tools/linux/dts/doomv.dts and Timer::step does
-# `mtime += retired`, so one guest nanosecond is one retired instruction and
-# the kernel's printk timestamp converts straight into an instruction count.
+# timebase-frequency is 5e8 in tools/linux/dts/doomv.dts and mtime advances
+# every second step, so one guest nanosecond is one step and the kernel's
+# printk timestamp converts straight into an instruction count.
 awk -v g="$guest" -v w="$wall" 'BEGIN {
 	if (g > 0 && w > 0) {
 		insns = g * 1e9

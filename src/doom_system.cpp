@@ -207,12 +207,102 @@ uint8_t DoomSystem::translate_key(uint32_t sdl_keysym) const
 	}
 }
 
+// Smcntrpmf: whether mcyclecfg or minstretcfg stops its counter in the mode
+// the hart is in. Sail's counter_priv_filter_bit.
+static bool filtered_here(const Registers &regs, uint16_t cfg)
+{
+	const bool virt = Extensions.H && regs.get_virt();
+	int bit;
+	switch (regs.get_priv()) {
+	case PrivMode::M: bit = 62; break;
+	case PrivMode::S: bit = virt ? 59 : 61; break;
+	default:          bit = virt ? 58 : 60; break;
+	}
+	return ((regs.read_csr(cfg) >> bit) & 1) != 0;
+}
+
+static bool minstret_counts(const Registers &regs)
+{
+	return !(regs.read_csr(0x320) & 4) && !filtered_here(regs, 0x322);
+}
+
 void DoomSystem::step()
+{
+	const uint64_t before = memory.instruction_count();
+	step_execute();
+	if (memory.instruction_count() != before) end_step();
+}
+
+// A tick of Sail's clock: mtime, and mcycle unless it is inhibited or
+// filtered out in the current mode.
+void DoomSystem::clock_tick()
+{
+	if (!(regs.read_csr(0x320) & 1) && !filtered_here(regs, 0x321)) regs.bump_csr(0xB00);
+	memory.tick_clock();
+}
+
+// After a step: minstret if the instruction completed and counts, and the
+// clock every INSNS_PER_TICK steps.
+void DoomSystem::end_step()
+{
+	if (step_committed && regs.minstret_increment) regs.bump_csr(0xB02);
+	if (++tick_phase == INSNS_PER_TICK) {
+		tick_phase = 0;
+		clock_tick();
+	}
+}
+
+// A WFI or WRS waits as Sail's simulator waits. Entering the wait takes no
+// step but ticks the clock; each further round checks whether the wait is
+// over and otherwise ticks, for at most MAX_WAIT_TICKS ticks. It is over when
+// an interrupt is pending and enabled, when a WRS has no reservation, or when
+// it times out, where a WFI below M or a wrs.nto may trap instead of
+// completing. Only then is it a step, the WFI's own, with pc moving past it.
+// The ticks run whatever the host does, so a wait is as deterministic as any
+// other instruction.
+void DoomSystem::run_wait()
+{
+	const RiscvCore::Wait kind = core.wait_request;
+	core.wait_request = RiscvCore::Wait::None;
+
+	constexpr uint64_t TW = 1ull << 21, VTW = 1ull << 21;
+	uint32_t remaining = MAX_WAIT_TICKS;
+	clock_tick();
+	int trap = 0;   // 2 illegal, 22 virtual instruction
+	for (;;) {
+		const bool timed_out = remaining == 0;
+		regs.minstret_increment = minstret_counts(regs);
+		if (core.wake_for_interrupt(regs, memory)) break;
+		if (kind != RiscvCore::Wait::Wfi && !core.reservation_held()) break;
+		if (timed_out) {
+			const PrivMode p = regs.get_priv();
+			const bool v = Extensions.H && regs.get_virt();
+			const bool tw = (regs.read_csr(0x300) & TW) != 0;
+			const bool vtw = v && (regs.read_csr(0x600) & VTW) != 0;
+			if (kind == RiscvCore::Wait::Wfi) {
+				if (p == PrivMode::S && v) trap = vtw ? 22 : 0;
+				else if (p != PrivMode::M) trap = tw ? 2 : 0;
+			} else if (kind == RiscvCore::Wait::WrsNto && p != PrivMode::M) {
+				trap = tw ? 2 : (vtw ? 22 : 0);
+			}
+			break;
+		}
+		if (--remaining > 0) clock_tick();
+	}
+
+	if (trap == 2) core.raise_illegal_instruction(regs, step_insn);
+	else if (trap == 22) core.raise_virtual_instruction(regs, step_insn);
+	else regs.set_pc(regs.get_pc() + step_insn_len);
+	if (trap) step_committed = false;
+}
+
+void DoomSystem::step_execute()
 {
 	if (debugger.halted) return;
 	const uint64_t traps_before = core.trap_count;
 	step_committed = false;
 	step_decoded = false;
+	regs.minstret_increment = minstret_counts(regs);
 
 	// In lenient lock-step the reference decides when an interrupt is taken
 	// (see traced_step), so the machine's own devices never interrupt by
@@ -279,6 +369,7 @@ void DoomSystem::step()
 	// Committed: it ran to completion -- not illegal, and no trap taken while
 	// it executed, such as a page fault or an ecall.
 	step_committed = !result.illegal && core.trap_count == traps_before;
+	if (core.wait_request != RiscvCore::Wait::None) run_wait();
 	regs.record_history(pc, recorded_instr, result.decoded);
 
 	// A test that signals completion through HTIF stops here, with its
@@ -556,10 +647,10 @@ void DoomSystem::commit_pointer(uint64_t now, int x, int y)
 
 void DoomSystem::stop_at_limit()
 {
-	// Exact, not approximate: every path through step() advances mtime by
-	// one, trap or instruction, so the first check to see stop_at is the one
+	// Exact, not approximate: every step, trap or instruction, advances the
+	// step count by one, so the first check to see stop_at is the one
 	// straight after that instruction.
-	const uint64_t n = memory.get_timer().get_mtime();
+	const uint64_t n = memory.instruction_count();
 	stop_at = 0;
 	debugger.halted = true;
 	console_drain();
@@ -574,6 +665,9 @@ void DoomSystem::resume_from_halt()
 	if (pending_illegal) {
 		pending_illegal = false;
 		core.raise_illegal_instruction(regs, pending_illegal_tval);
+		memory.step_instructions(1);
+		step_committed = false;
+		end_step();
 		// pc is now the trap handler, so there is no breakpoint to skip.
 		debugger.halted = false;
 		return;
@@ -610,7 +704,7 @@ void DoomSystem::cpu_loop()
 			// the one thing that made two runs of the same guest differ.
 			// Every 4096 instructions is about 2.5kHz at the interpreter's
 			// speed, so a mouse still feels attached.
-			const uint64_t now = memory.get_timer().get_mtime();
+			const uint64_t now = memory.instruction_count();
 			if ((now & (INPUT_PERIOD - 1)) == 0) service_input(now);
 			if (stop_at && now >= stop_at) {
 				stop_at_limit();
