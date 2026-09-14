@@ -151,6 +151,7 @@ private:
 		uint32_t raw_instr = 0;
 		DecodedInstruction decoded{};
 		bool enabled = false;
+		uint32_t epoch = 0;   // ExtensionsEpoch the entry was decoded under
 	};
 	static constexpr uint32_t CACHE_BITS = 17;
 	static constexpr uint32_t CACHE_SIZE = 1u << CACHE_BITS;

@@ -365,11 +365,17 @@ DispatchResult Decoder::decode_and_dispatch(uint64_t pc, uint32_t raw_word)
 
 	DecodedInstruction instr;
 	bool enabled;
-	if (entry.valid && entry.addr == pc && entry.raw_instr == tag) {
+	if (entry.valid && entry.addr == pc && entry.raw_instr == tag && entry.epoch == ExtensionsEpoch) {
 		instr = entry.decoded;
 		enabled = entry.enabled;
 	} else {
-		if (is_compressed) {
+		if (!Extensions.C && (raw_word & 0x3) != 0x3) {
+			// A 16-bit encoding while C is off: fetched as two bytes, as
+			// ever, and illegal, since nothing decodes it.
+			instr = DecodedInstruction{};
+			instr.ext = Extension::ILLEGAL;
+			instr.length = 2;
+		} else if (is_compressed) {
 			instr = decode_compressed((uint16_t)tag);
 		} else {
 			Extension ext = classify(raw_word);
@@ -411,7 +417,7 @@ DispatchResult Decoder::decode_and_dispatch(uint64_t pc, uint32_t raw_word)
 		       || (instr.ext == Extension::SVINVAL && Extensions.SVINVAL)
 		       || (instr.ext == Extension::H && Extensions.H);
 
-		entry = {true, pc, tag, instr, enabled};
+		entry = {true, pc, tag, instr, enabled, ExtensionsEpoch};
 	}
 
 

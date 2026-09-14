@@ -177,7 +177,9 @@ change than making privilege boundaries real.
 Every extension is a runtime toggle, not a compile-time one — pass
 `-march=rv64imafdc_zicsr_zifencei` (the default), add a `v` for vector
 support, or trim it down to something like `rv32ima` if you want to see it
-fail in more interesting ways. `fence.i` is implemented as a genuine no-op
+fail in more interesting ways. `-march` sets what the hart supports; `misa`
+is writable within that, as in Sail, so a guest can clear a letter to turn
+the extension off and set it again to turn it back on. `fence.i` is implemented as a genuine no-op
 rather than being unsupported: there's no instruction cache here to
 invalidate, since every fetch reads straight out of live guest memory, so
 the correct emulation of "make sure instruction fetches see recent stores"
@@ -359,6 +361,7 @@ riscv_doom.exe -opensbi=<f> -kernel=<f> -dtb=<f> -initrd=<f> [options]   # Linux
 | `-replay=<path>` | Deliver a `-record` log's input at exactly those instructions, and ignore the window, stdin and `-input`. Reproduces a recorded run instruction for instruction. |
 | `-trace=<path>` | Write a trace of every instruction, register and CSR write, store and trap, in Sail's trace format. |
 | `-lockstep=<path>` | Run against a reference trace -- Sail's, or an RTL simulation's -- and halt at the first record that does not match. See [Lock-stepping](#lockstep). |
+| `-lockstep-strict` | With `-lockstep`, compare everything, counters, time and interrupt timing included, and take nothing from the reference. How DoomV is held to Sail. |
 
 `-ng` is what makes the conformance suites practical. With a window open a
 finished test never exits on its own and has to be killed from outside, so
@@ -740,20 +743,23 @@ it; every store, by physical address and value; and that DoomV wrote nothing
 the reference did not. For a trap or an interrupt: the same cause, epc and
 tval, and the same values in every CSR trap entry writes.
 
-Not compared, because an implementation's own clock and devices decide them:
-reads of the counters and the time, of pending-interrupt state (`mip`, `sip`,
-the `topi`/`topei` registers), and loads from anything that is not RAM. DoomV
-takes those values from the reference and carries on. Interrupts too: DoomV
-takes one exactly where the reference did, and never on its own, checking
-that it was enabled there. A log in Spike's `--log-commits` format is also
-read, for a reference that only produces that.
+With `-lockstep-strict` that is everything: reads of the counters and the
+time, pending-interrupt state, and interrupts, which DoomV has to take by
+itself at the instruction the reference took them. Without it, lock-step is
+lenient about what an implementation's own clock and devices decide, so an
+RTL design with a different timer can still be stepped: those reads (`mip`,
+`sip`, the `topi`/`topei` registers, the counters and the time), and loads
+from anything that is not RAM, are taken from the reference, and interrupts
+are taken exactly where the reference took them, never on DoomV's own. A log
+in Spike's `--log-commits` format is also read, for a reference that only
+produces that.
 
 `tools/verification/lockstep_sail.py` does this for the riscv-tests: Sail
-traces each test, and DoomV lock-steps against the trace. The Sail
-configuration it uses is the suites' own with the hart parameters DoomV
-actually has -- no guest external interrupt lines, direct trap vectors only,
-a read-only `misa` -- because a lock-step compares every CSR write, and a reference describing a
-different hart differs in ways that are configuration rather than error.
+traces each test, and DoomV lock-steps against the trace, strictly. Sail runs
+with the suites' `rva23s64.json` exactly as it is: the goal is to match Sail
+deterministically, so DoomV is the one that has to be that hart -- 63 guest
+external interrupt lines, vectored trap vectors, a writable `misa` -- and the
+reference is never adjusted to fit it.
 
 ```sh
 python tools/verification/lockstep_sail.py                  # every rv64 test

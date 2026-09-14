@@ -36,6 +36,9 @@ public:
 	// and delegation half of check_and_take_interrupt. In lock-step the
 	// pending half belongs to the reference.
 	bool interrupt_enabled(Registers &regs, int bit);
+	// A fetch from an address that is not a legal instruction start for the
+	// extensions enabled right now: bit 1 set with C off.
+	void raise_misaligned_fetch(Registers &regs, uint64_t pc) { enter_trap(regs, 0, pc); }
 	// Enter interrupt `bit`'s trap now, as check_and_take_interrupt would.
 	void take_interrupt(Registers &regs, int bit)
 	{

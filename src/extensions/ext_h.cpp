@@ -85,9 +85,10 @@ constexpr uint64_t HSTATUS_VSXL_64 = 2ull << 32;
 //   VSBE  -- selects big-endian VS-mode. This hart is little-endian only,
 //            and a writable VSBE would promise an endianness it cannot
 //            actually switch to.
-//   VGEIN -- selects which guest external interrupt is visible. GEILEN is
-//            zero here: there is no guest external interrupt controller at
-//            all, so any nonzero VGEIN would name something absent.
+//   VGEIN -- selects which guest external interrupt is visible. It is
+//            writable: GEILEN is 63, as in the reference configuration,
+//            and VGEIN may hold anything from 0 to GEILEN -- every six-bit
+//            value. See hstatus_wmask.
 //
 // HUPMM is present, but conditionally: it is the hypervisor's half of
 // pointer masking (Ssnpm), selecting the PMLEN applied to the addresses
@@ -100,7 +101,9 @@ constexpr uint64_t HSTATUS_WMASK_BASE = HSTATUS_GVA | HSTATUS_SPV | HSTATUS_SPVP
                                       | HSTATUS_VTSR;
 inline uint64_t hstatus_wmask()
 {
-	return HSTATUS_WMASK_BASE | (Extensions.SSNPM ? HSTATUS_HUPMM : 0);
+	// VGEIN is WLRL, holding 0 up to GEILEN. With GEILEN 63 every six-bit
+	// value is legal, so the whole field is writable.
+	return HSTATUS_WMASK_BASE | HSTATUS_VGEIN | (Extensions.SSNPM ? HSTATUS_HUPMM : 0);
 }
 
 // mstatus's virtualisation fields, both above bit 32 and so RV64-only.

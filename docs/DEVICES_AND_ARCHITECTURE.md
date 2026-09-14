@@ -208,7 +208,7 @@ The physical page is the **message injection doorbell**. A 32-bit write to offse
 
 `topei_value` searches increasing IDs for a pending AND enabled candidate passing threshold, provided eidelivery is true. It returns `(id << 16) | id`. This is the current priority representation, not an implementation of arbitrary priority programming. `claim` clears the current top candidate's pending bit. Pending messages can remain stored while disabled and become deliverable when enabled later.
 
-The M file drives the machine external cause; the S file drives the supervisor external cause. H support in the CPU does not add guest IMSIC files: GEILEN remains zero in the modeled hypervisor state.
+The M file drives the machine external cause; the S file drives the supervisor external cause. H support in the CPU does not add guest IMSIC files. GEILEN is 63, matching the Sail configuration DoomV is held to, so `hgeie` holds 63 enables and `mideleg` bit 12 is read-only one, but no device raises a guest external interrupt and `hgeip` reads zero.
 
 ## Interrupt delivery through CSRs
 
@@ -227,7 +227,7 @@ An interrupt has several gates. A device condition or pending identity first con
 
 `mtopi/stopi` identify the top pending enabled **local cause**. `mtopei/stopei` identify the top **external message** inside an interrupt file. Reading the latter is a peek. A CSR instruction that actually writes claims the external interrupt; `csrr` must not accidentally claim it by writing back an unchanged value.
 
-Trap vectors are direct-only: mtvec/stvec/vstvec low MODE bits are cleared on writes. The handler receives saved PC and cause state, not a C++ callback from the device. It must clear/rearm the underlying condition; otherwise the next eligible step can take the interrupt again.
+Trap vectors support direct and vectored mode: in vectored mode (MODE 1) of mtvec/stvec/vstvec an interrupt goes to base + 4 × cause and an exception to the base; a write of a reserved MODE keeps the previous mode. The handler receives saved PC and cause state, not a C++ callback from the device. It must clear/rearm the underlying condition; otherwise the next eligible step can take the interrupt again.
 
 Sscofpmf has an overflow-state helper, but effective `compute_mip` in this snapshot does not connect it to LCOFI. Likewise the H CSR storage is not a complete virtual interrupt-injection implementation. See the [ISA limitations](ISA_EXTENSIONS.md).
 
@@ -287,7 +287,7 @@ The tick register supplies instruction-scaled timing. The debug register prints 
 
 The [Debugger](../src/debugger.cpp) is a host inspection facility. It has PC breakpoints, halt state, crash dumps and signature extraction. It does **not** implement RISC-V Debug Module registers, DMI/JTAG transport, architectural debug CSRs or the GDB remote serial protocol.
 
-`-trace=<path>` writes a trace of every instruction and trap in Sail's trace format, and `-lockstep=<path>` runs the machine against a reference trace -- Sail's, the golden reference -- halting with a report and `crash.log` at the first record that differs; see [lockstep.cpp](../src/lockstep.cpp) for what is compared and what is taken from the reference, and `tools/verification/lockstep_sail.py` for the riscv-tests run against Sail. `-break=<hex_pc>` adds a breakpoint. `-sig=<begin>:<end>` selects a physical range written to `signature.log` on halt, one 32-bit word as eight hex digits per line. Dumps are used by differential harnesses to compare guest-produced result data; they are not automatically instruction-by-instruction lockstep with RTL or another simulator.
+`-trace=<path>` writes a trace of every instruction and trap in Sail's trace format, and `-lockstep=<path>` runs the machine against a reference trace -- Sail's, the golden reference -- halting with a report and `crash.log` at the first record that differs; `-lockstep-strict` compares everything and takes nothing from the reference; see [lockstep.cpp](../src/lockstep.cpp) for what is compared in each mode, and `tools/verification/lockstep_sail.py` for the riscv-tests run strictly against Sail with its unmodified configuration. `-break=<hex_pc>` adds a breakpoint. `-sig=<begin>:<end>` selects a physical range written to `signature.log` on halt, one 32-bit word as eight hex digits per line. Dumps are used by differential harnesses to compare guest-produced result data; they are not automatically instruction-by-instruction lockstep with RTL or another simulator.
 
 `crash.log` includes PC, privilege, selected raw privileged CSRs, timer values, integer/FP/vector registers and a 4,096-entry instruction history. Raw `mip` shadow in a dump is not necessarily the current effective pending value. The live GUI CSR panel calls effective reads, so that difference is intentional in current paths.
 

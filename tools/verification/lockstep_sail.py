@@ -13,7 +13,6 @@ instruction and field where DoomV and the reference parted ways.
 """
 import argparse
 import concurrent.futures
-import json
 import pathlib
 import re
 import shutil
@@ -31,53 +30,9 @@ SAIL_FLAGS = ["--trace-instr", "--trace-gpr", "--trace-fpr", "--trace-vreg", "--
               "--trace-mem", "--trace-exception", "--trace-interrupt"]
 
 
-# The hart Sail models has to be the hart DoomV is. The suites' Sail config
-# was generated for signature comparison, where a few hart parameters never
-# show; lock-stepping compares every CSR write, so they have to agree. Each
-# entry here is a parameter the suites' config sets differently from DoomV.
-HART = {
-    # Guest external interrupt lines. DoomV has none: hgeie and hgeip read as
-    # zero, and mideleg's SGEI bit is not read-only one.
-    "geilen": 0,
-}
-
-# The same, for settings that are only meaningful at one place in the config.
-HART_AT = {
-    # DoomV's trap vectors are direct only. A write asking for vectored mode
-    # keeps the old mode and the new base, which is what Sail does for a mode
-    # the hart does not support.
-    ("base", "mtvec", "vectored", "supported"): False,
-    ("base", "stvec", "vectored", "supported"): False,
-    ("base", "vstvec", "vectored", "supported"): False,
-    # DoomV's misa is read-only: its extensions are chosen on the command line,
-    # not switched off at run time by writing misa.
-    ("base", "writable_misa"): False,
-}
-
-
-def matched_config() -> pathlib.Path:
-    cfg = json.loads((ROOT / "tools" / "verification" / "simulators" / "sail" / "rva23s64.json").read_text())
-
-    def apply(node):
-        if isinstance(node, dict):
-            for key in node:
-                if key in HART:
-                    node[key] = HART[key]
-                else:
-                    apply(node[key])
-        elif isinstance(node, list):
-            for item in node:
-                apply(item)
-
-    apply(cfg)
-    for path, value in HART_AT.items():
-        node = cfg
-        for key in path[:-1]:
-            node = node[key]
-        node[path[-1]] = value
-    out = WORK / "sail-doomv.json"
-    out.write_text(json.dumps(cfg, indent=2))
-    return out
+# Sail runs with the suites' configuration exactly as it is. DoomV is the one
+# that has to be that hart: the reference is not adjusted to fit it.
+SAIL_CONFIG = ROOT / "tools" / "verification" / "simulators" / "sail" / "rva23s64.json"
 
 
 def wsl(path: pathlib.Path) -> str:
@@ -101,7 +56,7 @@ def one(elf: pathlib.Path, config: pathlib.Path, keep: bool, timeout: int):
     syms = run_suite.elf_symbols(elf)
     cmd = [str(ROOT / "riscv_doom.exe"), "-ng", str(ROOT / "tools" / "doom" / "doombuild" / "DOOM1.WAD"), str(elf),
            "-march=" + run_suite.SUITE_MARCH, "-tohost={:x}".format(syms["tohost"]),
-           "-lockstep=" + str(trace), "-stopat=100000000"]
+           "-lockstep=" + str(trace), "-lockstep-strict", "-stopat=100000000"]
     try:
         r = subprocess.run(cmd, cwd=work, capture_output=True, text=True, timeout=timeout)
         out = (r.stdout or "") + (r.stderr or "")
@@ -135,7 +90,7 @@ def main():
         elfs = sorted(p for p in TESTS.iterdir()
                       if re.match(r"rv64[a-z]+-[pv]-", p.name) and p.is_file() and not p.suffix)
     WORK.mkdir(parents=True, exist_ok=True)
-    config = matched_config()
+    config = SAIL_CONFIG
 
     results = {"pass": [], "fail": [], "skip": []}
     with concurrent.futures.ThreadPoolExecutor(args.jobs) as pool:

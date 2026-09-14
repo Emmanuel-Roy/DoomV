@@ -63,10 +63,10 @@ Implementation: [src/extensions/ext_h.cpp](../../src/extensions/ext_h.cpp), [src
 | `hvip` | `0x645` | Architectural virtual interrupt injection; no comprehensive connection to compute_mip. |
 | `htinst` | `0x64A` | Architectural transformed faulting instruction role; no full transformed-instruction implementation. |
 | `hgatp` | `0x680` | Second-stage translation root; Bare or Sv39x4. Sv39x4 has a 16-KiB root and 11-bit top index. |
-| `hgeip` | `0xE12` | Guest external-interrupt pending role; GEILEN=0, no guest-file delivery. |
+| `hgeip` | `0xE12` | Guest external-interrupt pending bits; GEILEN=63 as in Sail's configuration, but no guest-file delivery, so it reads zero. |
 | `vsstatus` | `0x200` | Guest supervisor status; S-name CSR instructions redirect here when virtual. |
 | `vsie` | `0x204` | Guest interrupt-enable state; S-name CSR instructions redirect here when virtual. |
-| `vstvec` | `0x205` | Guest direct-mode trap vector; S-name CSR instructions redirect here when virtual. |
+| `vstvec` | `0x205` | Guest trap vector, direct or vectored; S-name CSR instructions redirect here when virtual. |
 | `vsscratch` | `0x240` | Guest supervisor scratch; S-name CSR instructions redirect here when virtual. |
 | `vsepc` | `0x241` | Guest saved trap PC; S-name CSR instructions redirect here when virtual. |
 | `vscause` | `0x242` | Guest trap cause; S-name CSR instructions redirect here when virtual. |

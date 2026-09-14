@@ -35,13 +35,19 @@
 // trap, with the same cause, epc and tval, and that the CSRs trap entry
 // writes -- mstatus, mcause, mepc, mtval and the rest -- hold the same values.
 //
-// Not compared, because an implementation's own clock and devices decide
-// them rather than the instruction set: reads of the counters and the time,
-// of pending-interrupt state (mip, sip, the topi and topei registers, hgeip,
-// seed), and loads from anything that is not RAM. DoomV takes those values
-// from the reference and carries on. Interrupts likewise: in lock-step DoomV
-// takes one exactly where the reference did, and never on its own, checking
-// that it was enabled there -- which is architectural.
+// -lockstep-strict compares everything, and is how DoomV is held to Sail:
+// run with Sail's own configuration, unmodified, DoomV has to produce Sail's
+// trace exactly -- counter and time reads, pending-interrupt state, and
+// interrupts DoomV takes by itself at the instruction Sail took them.
+//
+// Without it, lock-step is lenient about what an implementation's own clock
+// and devices decide rather than the instruction set, so that an RTL design
+// with a different timer can still be stepped: reads of the counters and the
+// time, of pending-interrupt state (mip, sip, the topi and topei registers,
+// hgeip, seed), and loads from anything that is not RAM are taken from the
+// reference, and interrupts are taken exactly where the reference took them,
+// never on DoomV's own, checking that they were enabled there. The summary
+// counts how many values were taken; in strict mode it is always zero.
 
 #include "doom_system.hpp"
 #include "extensions.hpp"
@@ -562,7 +568,8 @@ void DoomSystem::lockstep_end()
 	} else {
 		std::cout << "lockstep: the reference ended after " << lock->matched
 		          << " records, all matching (" << lock->overrides
-		          << " values taken from the reference)" << std::endl;
+		          << " values taken from the reference"
+		          << (lockstep_strict ? ", strict" : "") << ")" << std::endl;
 	}
 	debugger.halted = true;
 	run_finished = true;
@@ -573,7 +580,8 @@ void DoomSystem::lockstep_report()
 	if (!lock || lock->done || lockstep_failed) return;
 	console_drain();
 	std::cout << "lockstep: " << lock->matched << " records matched before the run ended ("
-	          << lock->overrides << " values taken from the reference)" << std::endl;
+	          << lock->overrides << " values taken from the reference"
+	          << (lockstep_strict ? ", strict" : "") << ")" << std::endl;
 }
 
 void DoomSystem::traced_step()
@@ -625,10 +633,13 @@ void DoomSystem::traced_step()
 		return core.read_csr_effective(regs, memory, c);
 	};
 
+	// Whether a CSR's value is the reference's to decide. Never, in strict mode.
+	const auto from_ref_csr = [&](uint16_t c) { return !lockstep_strict && reference_decides_csr(c); };
+
 	// CSR values after a trap entry, against the reference's.
 	const auto check_trap_csrs = [&](const std::vector<RefField> &fields) -> bool {
 		for (const RefField &f : fields) {
-			if (reference_decides_csr((uint16_t)f.idx)) continue;
+			if (from_ref_csr((uint16_t)f.idx)) continue;
 			uint64_t want = 0;
 			if (!parse_hex(f.value, want)) continue;
 			const uint64_t mine = logged_csr((uint16_t)f.idx);
@@ -658,7 +669,10 @@ void DoomSystem::traced_step()
 	};
 
 	// ---- an interrupt the reference took -------------------------------------
-	if (have_ref && ref.kind == RefRecord::Interrupt) {
+	// Lenient: the reference times it, so take it here. Strict: DoomV's own
+	// interrupt logic has to take it at this step, which the trap comparison
+	// below checks.
+	if (have_ref && ref.kind == RefRecord::Interrupt && !lockstep_strict) {
 		const uint64_t pc = regs.get_pc();
 		if (!ref.has_epc || pc != ref.epc) {
 			actual.push_back("(at " + hex(pc, 16) + ", no interrupt)");
@@ -805,6 +819,23 @@ void DoomSystem::traced_step()
 		return true;
 	};
 
+	// ---- the reference took an interrupt, and DoomV must have too (strict) -------
+	if (ref.kind == RefRecord::Interrupt) {
+		if (!interrupt_taken) {
+			fail("the reference took " + sail_trap_name(ref.cause, true) + " here and DoomV did not");
+			return;
+		}
+		const uint64_t cause = core.last_trap_cause & ~INTERRUPT_BIT;
+		if (cause != ref.cause) {
+			fail("different interrupt: the reference took " + sail_trap_name(ref.cause, true));
+			return;
+		}
+		if (ref.has_epc && core.last_trap_epc != ref.epc) { fail("same interrupt, different epc"); return; }
+		if (!check_trap_csrs(ref.trap_fields)) return;
+		lock->matched++;
+		return;
+	}
+
 	// ---- the reference trapped ---------------------------------------------------
 	if (ref.kind == RefRecord::Exception) {
 		if (step_committed) {
@@ -839,12 +870,14 @@ void DoomSystem::traced_step()
 	// Whether this instruction's result is the reference's to decide: a read of
 	// a counter, the time or interrupt state, or a load from a device.
 	bool from_reference = false;
+	if (!lockstep_strict) {
 	const uint32_t opcode = step_insn & 0x7F, funct3 = (step_insn >> 12) & 7;
 	if (step_insn_len == 4 && opcode == 0x73 && funct3 != 0 && funct3 != 4
 	    && reference_decides_csr((uint16_t)((step_insn >> 20) & 0xFFF)))
 		from_reference = true;
 	for (const AccessRecord &a : access)
 		if (!a.store && !memory.is_ram(a.paddr, a.size)) from_reference = true;
+	}
 
 	std::set<unsigned> ref_x, ref_f;
 	for (const RefField &f : ref.fields) {
@@ -898,7 +931,7 @@ void DoomSystem::traced_step()
 				return;
 			}
 		} else if (f.cls == 'c') {
-			if (reference_decides_csr((uint16_t)f.idx)) continue;
+			if (from_ref_csr((uint16_t)f.idx)) continue;
 			const uint64_t mine = logged_csr((uint16_t)f.idx);
 			if (mine != want) {
 				fail("CSR " + std::string(csr_label((uint16_t)f.idx)) + " (" + hex(f.idx, 3) + "): reference "

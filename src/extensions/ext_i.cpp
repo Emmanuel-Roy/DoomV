@@ -202,7 +202,13 @@ void RiscvCore::exec_32I(const DecodedInstruction &instr, Registers &regs, Memor
 		regs.write_x(instr.rd, pc + imm_u);
 		break;
 
+	// A jump or taken branch to an address with bit 1 set is only legal while
+	// compressed instructions are enabled. With C off -- misa is writable --
+	// it traps at the jump, naming the target, before the link register is
+	// written: Sail's jump_to, which checks first and writes rd only on
+	// success.
 	case 0b1101111: // JAL
+		if (!Extensions.C && ((pc + imm_u) & 2)) { enter_trap(regs, 0, pc + imm_u); return; }
 		regs.write_x(instr.rd, next_pc);
 		next_pc = pc + imm_u;
 		break;
@@ -210,6 +216,7 @@ void RiscvCore::exec_32I(const DecodedInstruction &instr, Registers &regs, Memor
 	case 0b1100111: // JALR
 		{
 			uint64_t target = (rs1_val + imm_u) & ~1ull;
+			if (!Extensions.C && (target & 2)) { enter_trap(regs, 0, target); return; }
 			regs.write_x(instr.rd, next_pc);
 			next_pc = target;
 			// Arm the landing-pad expectation, unless this jump is a
@@ -230,6 +237,7 @@ void RiscvCore::exec_32I(const DecodedInstruction &instr, Registers &regs, Memor
 		case 0b110: taken = (rs1_val < rs2_val); break;  // BLTU
 		case 0b111: taken = (rs1_val >= rs2_val); break; // BGEU
 		}
+		if (taken && !Extensions.C && ((pc + imm_u) & 2)) { enter_trap(regs, 0, pc + imm_u); return; }
 		if (taken) next_pc = pc + imm_u;
 		break;
 	}

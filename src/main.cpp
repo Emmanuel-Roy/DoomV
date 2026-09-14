@@ -32,6 +32,7 @@ int main(int argc, char *argv[])
 	uint64_t stop_at = 0;
 	std::string record_path, replay_path;
 	std::string trace_path, lockstep_path;
+	bool lockstep_strict = false;
 	for (int i = 1; i < argc; i++) {
 		std::string arg = argv[i];
 		if (arg.rfind("-march=", 0) == 0) {
@@ -93,6 +94,8 @@ int main(int argc, char *argv[])
 		} else if (arg.rfind("-trace=", 0) == 0) {
 			// A commit log of every instruction and trap, in Spike's format.
 			trace_path = arg.substr(7);
+		} else if (arg == "-lockstep-strict") {
+			lockstep_strict = true;
 		} else if (arg.rfind("-lockstep=", 0) == 0) {
 			// Run against a reference commit log; halt at the first mismatch.
 			lockstep_path = arg.substr(10);
@@ -150,6 +153,7 @@ int main(int argc, char *argv[])
 		return -1;
 	}
 
+	SupportedExtensions = Extensions;
 	DoomSystem system;
 	// Before init: init is what opens the window.
 	if (headless) system.set_headless();
@@ -195,6 +199,7 @@ int main(int argc, char *argv[])
 		std::cout << "cannot write commit log: " << trace_path << "\n";
 		return -1;
 	}
+	if (lockstep_strict) system.set_lockstep_strict();
 	if (!lockstep_path.empty() && !system.set_lockstep(lockstep_path.c_str())) {
 		std::cout << "cannot read reference commit log: " << lockstep_path << "\n";
 		return -1;

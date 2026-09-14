@@ -71,6 +71,11 @@ public:
 	// record that does not match. See lockstep.cpp.
 	bool set_trace(const char *path);
 	bool set_lockstep(const char *path);
+	// Strict: nothing is taken from the reference. Interrupts are DoomV's own
+	// and must land where the reference's did; time, counter, interrupt-state
+	// and device reads are compared like everything else. This is the mode
+	// that says DoomV matches the reference deterministically.
+	void set_lockstep_strict() { lockstep_strict = true; }
 	void set_canvas_dump(const char *path) { gui.set_canvas_dump(path); }
 
 	// Attach a raw image as the virtio-blk backing store. Returns false if
@@ -223,6 +228,7 @@ private:
 	bool tracing = false;          // -trace or -lockstep: steps go through traced_step
 	bool lockstep_active = false;
 	bool lockstep_failed = false;
+	bool lockstep_strict = false;
 	std::FILE *trace_file = nullptr;
 	struct LockstepState;
 	LockstepState *lock = nullptr;

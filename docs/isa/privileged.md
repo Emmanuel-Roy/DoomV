@@ -72,7 +72,7 @@ Implementation: [src/extensions/ext_zicsr.cpp](../../src/extensions/ext_zicsr.cp
 | `medeleg` | `0x302` | Exception delegation from below M to S/HS; M-origin traps stay in M. |
 | `mideleg` | `0x303` | Interrupt delegation; also masks the S-mode interrupt aliases. |
 | `mie` | `0x304` | Per-cause interrupt enables. |
-| `mtvec` | `0x305` | Trap base; MODE bits cleared on writes, so direct mode only. |
+| `mtvec` | `0x305` | Trap base and mode: direct (0) or vectored (1), where interrupts go to base + 4 × cause; a reserved mode is not stored. |
 | `mscratch` | `0x340` | Firmware scratch storage, e.g. pointer used when swapping a register on trap entry. |
 | `mepc` | `0x341` | PC saved on M-mode trap, consumed by MRET. |
 | `mcause` | `0x342` | Cause number plus interrupt indicator for M trap. |
@@ -104,7 +104,7 @@ Implementation: [src/mmu.cpp](../../src/mmu.cpp), [src/extensions/ext_zicsr.cpp]
 |---|---|---|
 | `sstatus` | `0x100` | Masked mstatus view. Current mask contains SIE/SPIE/SPP/SUM/MXR, not the full architectural FS/VS/SD view. |
 | `sie` | `0x104` | mie intersected with mideleg; writes update delegated enables only. |
-| `stvec` | `0x105` | Direct-mode S/HS trap base. |
+| `stvec` | `0x105` | S/HS trap base and mode, direct or vectored. |
 | `scounteren` | `0x106` | U-mode counter access gate. |
 | `senvcfg` | `0x10A` | Supervisor environment storage; PMM used for U-mode pointer masking. |
 | `sscratch` | `0x140` | Supervisor scratch register for software trap entry/context bookkeeping. |

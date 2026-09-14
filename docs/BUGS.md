@@ -330,7 +330,7 @@ of console output (`2667bf1`, re-verified in `936df17`).
 161. [Writing fcsr did not make FS dirty](#bug161)
 162. [misa never reported B](#bug162)
 163. [The trigger and debug CSRs were plain storage](#bug163)
-164. [Not a bug: three ways the reference described a different hart](#bug164)
+164. [Three ways DoomV was not the hart Sail describes](#bug164)
 
 <a id="part-vii"></a>
 ### Part VII — Cross-cutting
@@ -7006,25 +7006,35 @@ no triggers: software writes an index, sees something else come back, and
 stops looking. DoomV does the same.
 
 <a id="bug164"></a>
-### 164. Not a bug: three ways the reference described a different hart
+### 164. Three ways DoomV was not the hart Sail describes
 
-Three of the mismatches were not DoomV being wrong but Sail's
-configuration describing a slightly different machine, and a lock-step that
-compares every CSR write finds every such difference.
+Three of the mismatches were differences between DoomV's hart and the one
+Sail's configuration describes, and a lock-step that compares every CSR write
+finds every such difference.
 
 `mideleg` reads `0x1444` in Sail and `0x444` in DoomV. Bit 12 is read-only one
 when the hart has guest external interrupt lines, and Sail's configuration
-sets `geilen` to 63 where DoomV has none at all -- `hgeie` and `hgeip` read as
-zero here. And `mtvec` keeps a vectored mode in Sail and drops it in DoomV,
-because Sail's configuration offers vectored trap vectors and DoomV
-implements direct ones only. And `rv64mi-p-ma_fetch` clears `misa.C` to test
-misaligned fetches without compressed instructions: Sail's configuration makes
-`misa` writable, so the bit clears, and DoomV's `misa` is read-only -- its
-extensions are chosen on the command line, not switched off by a CSR write.
-All three are legal choices for the hart to make.
+sets `geilen` to 63 where DoomV had none at all -- `hgeie` read as zero. And
+`mtvec` kept a vectored mode in Sail and dropped it in DoomV, because Sail's
+configuration offers vectored trap vectors and DoomV implemented direct ones
+only. And `rv64mi-p-ma_fetch` clears `misa.C` to test misaligned fetches
+without compressed instructions: Sail's configuration makes `misa` writable,
+so the bit clears, and DoomV's `misa` was read-only.
 
-Neither changes a signature, which is how the configuration came to disagree
-with the hart without anything saying so. `lockstep_sail.py` runs Sail with a
-copy of the suites' configuration that states DoomV's actual parameters. The
-suites' own `rva23s64.json` still says `geilen: 63`; aligning it would mean
-regenerating the arch-test reference signatures.
+All three are legal choices for a hart, and none changes a signature, which
+is how DoomV came to differ from the configuration without anything saying
+so. The first answer was to run Sail with a copy of its configuration stating
+DoomV's parameters. That is backwards: Sail is the golden reference, and the
+goal is to match it deterministically, so DoomV became Sail's hart instead.
+It now has 63 guest external interrupt lines (`hgeie` writable, `hgeip` zero,
+since nothing drives them, `hstatus.VGEIN` writable, `mideleg` bit 12
+read-only one); vectored `mtvec`, `stvec` and `vstvec`, with a reserved mode
+keeping the old one; and a writable `misa` following Sail's `legalize_misa`
+-- clearing a letter turns that extension off, a write clearing C is ignored
+while the next instruction starts at an address only C makes legal, D needs
+F, V needs F and D, and B is Zba, Zbb and Zbs together. With C off, a jump or
+taken branch to an address with bit 1 set traps before the link register is
+written, as does a fetch from one, and `mepc`, `sepc` and `vsepc` read and
+return aligned to four bytes. S and U stay set: DoomV cannot run without its
+supervisor or user mode. `lockstep_sail.py` runs Sail with `rva23s64.json`
+unmodified.

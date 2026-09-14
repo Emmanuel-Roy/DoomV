@@ -1,4 +1,5 @@
 #include "doom_system.hpp"
+#include "extensions.hpp"
 #include <iostream>
 #include <SDL2/SDL.h>
 #include <algorithm>
@@ -213,9 +214,10 @@ void DoomSystem::step()
 	step_committed = false;
 	step_decoded = false;
 
-	// In lock-step the reference decides when an interrupt is taken (see
-	// traced_step), so the machine's own devices never interrupt by themselves.
-	if (!lockstep_active && core.check_and_take_interrupt(regs, memory)) {
+	// In lenient lock-step the reference decides when an interrupt is taken
+	// (see traced_step), so the machine's own devices never interrupt by
+	// themselves. Strict lock-step takes them as ever, and checks the timing.
+	if (!(lockstep_active && !lockstep_strict) && core.check_and_take_interrupt(regs, memory)) {
 		// pc has already been redirected into the trap handler -- this
 		// "step" was the interrupt itself, not whatever instruction was
 		// about to execute at the old pc.
@@ -243,6 +245,13 @@ void DoomSystem::step()
 	//
 	// The length is in the low two bits of the first halfword, so the
 	// second fetch only happens when there really is a second halfword.
+	// With C off, only a 4-byte-aligned pc is an instruction start.
+	if (!Extensions.C && (pc & 2)) {
+		core.raise_misaligned_fetch(regs, pc);
+		memory.step_instructions(1);
+		return;
+	}
+
 	uint64_t fetch_paddr;
 	if (!core.translate_or_trap(regs, memory, pc, AccessType::Fetch, fetch_paddr, 2)) {
 		// A page fault redirected pc into the trap handler already --

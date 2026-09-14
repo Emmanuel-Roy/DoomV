@@ -137,6 +137,13 @@ struct ExtensionConfig {
 // that -- reads happen constantly (every decode), writes happen at most
 // once per run.
 inline ExtensionConfig Extensions;
+// What the hart supports, as -march chose it. Extensions is what is enabled
+// right now: misa is writable, and clearing a letter turns its extension off
+// until it is set again, so Extensions follows misa and this does not.
+inline ExtensionConfig SupportedExtensions;
+// Bumped whenever Extensions changes at run time, so anything that cached a
+// decision made under the old set -- the decode cache -- knows to redo it.
+inline uint32_t ExtensionsEpoch = 0;
 
 // Parses a GCC/toolchain-style march string ("rv64imafdc_zicsr",
 // "rv32ima", ...): resets every extension to off, sets XLEN64 from the

@@ -183,6 +183,8 @@ constexpr uint16_t CSR_HIP  = 0x644;
 constexpr uint16_t CSR_HVIP = 0x645;
 constexpr uint16_t CSR_HGEIP = 0xE12;
 constexpr uint16_t CSR_HGEIE = 0x607;
+// GEILEN 63: guest external interrupts 1..63. Bit 0 is never one.
+constexpr uint64_t HGEI_MASK = ~1ull;
 constexpr uint16_t CSR_HSTATUS_N = 0x600;
 constexpr uint16_t CSR_VSSTATUS_N = 0x200;
 
@@ -436,8 +438,7 @@ constexpr uint64_t SSTATUS_MASK = SSTATUS_SPELP | MSTATUS_SIE | MSTATUS_SPIE | M
 constexpr uint64_t SSTATUS_WMASK = SSTATUS_MASK & ~(SSTATUS_UXL | SSTATUS_SD);
 
 // misa isn't plain csr[] storage -- it's computed fresh from Extensions on
-// every read (WARL/hardwired: a write still lands in the generic array via
-// the fallthrough below, but nothing ever reads that stored value back).
+// every read. A write changes Extensions itself, through write_misa above.
 // This exists specifically because OpenSBI's sbi_init() calls
 // misa_extension('S') to decide whether a hart is even eligible to become
 // the coldboot hart for a next_mode==PRV_S jump -- with misa reading 0
@@ -446,6 +447,51 @@ constexpr uint64_t SSTATUS_WMASK = SSTATUS_MASK & ~(SSTATUS_UXL | SSTATUS_SD);
 // init_warmboot's wait_for_coldboot(). S/U are set unconditionally (unlike
 // I/M/A/C/F/D/V below): privilege modes have had no -march= toggle since
 // Stage 1 (see registers.hpp's PrivMode), DoomV always supports them.
+// misa is writable, as in Sail's configuration: clearing a letter turns that
+// extension off, and setting it again turns it back on, within what -march
+// made the hart support. The rules are Sail's legalize_misa:
+//
+//   * The whole write is ignored if it clears C while the next instruction
+//     would start at an address only C makes legal.
+//   * D needs F, and V needs F and D. A letter whose prerequisite is being
+//     cleared is cleared with it.
+//   * B is Zba, Zbb and Zbs together, and turns all three.
+//
+// S and U stay set: DoomV has no way to run without its supervisor or user
+// mode, and Sail's own model notes writable S and U are not supported.
+static void write_misa(uint64_t value, uint64_t next_pc)
+{
+	const auto has = [&](char c) { return ((value >> (c - 'A')) & 1) != 0; };
+	const ExtensionConfig &s = SupportedExtensions;
+	if (s.C && !has('C') && (next_pc & 2)) return;
+
+	const bool f = s.F && has('F');
+	const bool d = s.D && has('D') && has('F');
+	Extensions.A = s.A && has('A');
+	Extensions.C = s.C && has('C');
+	Extensions.M = s.M && has('M');
+	Extensions.F = f;
+	Extensions.D = d;
+	Extensions.V = s.V && has('V') && has('F') && has('D');
+	Extensions.H = s.H && has('H');
+	if (s.ZBA && s.ZBB && s.ZBS) Extensions.ZBA = Extensions.ZBB = Extensions.ZBS = has('B');
+	// The extensions that exist only on top of F, and on top of C.
+	Extensions.ZFA = s.ZFA && f;
+	Extensions.ZFH = s.ZFH && f;
+	Extensions.ZFHMIN = s.ZFHMIN && f;
+	Extensions.ZCMOP = s.ZCMOP && Extensions.C;
+	ExtensionsEpoch++;
+	mmu_tlb_flush();
+}
+
+// The address an xepc names as an instruction start: bit 0 is never one,
+// and bit 1 is not either while C is off. Sail's align_pc, applied when the
+// register is read and when an xRET returns through it.
+static uint64_t align_pc(uint64_t v)
+{
+	return Extensions.C ? (v & ~1ull) : (v & ~3ull);
+}
+
 uint64_t compute_misa()
 {
 	uint64_t v = 0;
@@ -736,6 +782,10 @@ bool RiscvCore::csr_access_permitted(Registers &regs, uint16_t csr, bool writing
 	// debug mode, so these are absent, as in the reference. tselect alone
 	// stays -- see its read in read_csr_effective.
 	if (csr >= 0x7A1 && csr <= 0x7B3) return false;
+	// fflags, frm and fcsr exist while F is enabled, and the vector CSRs while
+	// V is; with the extension turned off in misa, they are gone with it.
+	if (csr >= 0x001 && csr <= 0x003 && !Extensions.F) return false;
+	if (((csr >= 0x008 && csr <= 0x00F) || (csr >= 0xC20 && csr <= 0xC22)) && !Extensions.V) return false;
 
 	// csr[9:8] normally encodes the lowest privilege that may access the
 	// register -- 0 for U, 1 for S, 3 for M. The value 2 is not a
@@ -910,15 +960,16 @@ void write_hvip(Registers &regs, uint64_t value)
 // bit and then wait forever for an interrupt that is no longer routed
 // anywhere.
 //
-// Bit 12 (SGEIP) is *not* in this set, because GEILEN is zero on this hart
-// -- there is no guest external interrupt controller, so the interrupt it
-// delegates does not exist. That is a configuration property, not a gap:
-// hgeie and hgeip read as zero for the same reason, and software that
-// probes them discovers GEILEN=0 and stops asking.
+// Bit 12 (SGEIP) is in the set too. The spec makes it read-only one when
+// GEILEN is nonzero, and GEILEN is 63 here, matching the configuration of the
+// Sail model DoomV is held to. It used to be zero, with SGEIP writable, which
+// is also a legal hart -- but not the one the reference is.
 uint64_t mideleg_fixed_ones()
 {
 	if (!Extensions.H) return 0;
-	return MIP_VSSIP | MIP_VSTIP | MIP_VSEIP;
+	// SGEIP too, now that the hart has guest external interrupt lines: the
+	// spec makes bit 12 read-only one whenever GEILEN is nonzero.
+	return MIP_VSSIP | MIP_VSTIP | MIP_VSEIP | MIP_SGEIP;
 }
 
 
@@ -1011,6 +1062,7 @@ uint64_t RiscvCore::read_csr_effective(Registers &regs, Memory &mem, uint16_t cs
 	if (pmp::is_pmpaddr(csr)) return pmp::read_addr(regs, csr);
 	if (csr == 0x100) return read_sstatus(regs);
 	if (csr == CSR_MISA) return compute_misa();
+	if (csr == CSR_MEPC || csr == CSR_SEPC || csr == 0x241) return align_pc(regs.read_csr(csr));
 	if (Extensions.H && csr == hyp::CSR_HSTATUS_ADDR) return hyp::read_hstatus(regs);
 	if (Extensions.H && csr == 0x60A) return regs.read_csr(0x60A) & henvcfg_mask(regs);
 	// senvcfg's SSE is the guest supervisor's control over shadow stacks
@@ -1027,9 +1079,12 @@ uint64_t RiscvCore::read_csr_effective(Registers &regs, Memory &mem, uint16_t cs
 	// trigger index and, when it does not read back, stops looking. It is
 	// what Sail does, and the only trigger CSR Sail has.
 	if (csr == 0x7A0) return ~regs.read_csr(0x7A0);
-	// GEILEN is zero: no guest external interrupt file exists, so both
-	// registers that describe one read as zero however they were written.
-	if (Extensions.H && (csr == CSR_HGEIE || csr == CSR_HGEIP)) return 0;
+	// GEILEN is 63, as in the reference's configuration: hgeie holds an
+	// enable for each guest external interrupt, bits 1 to 63 (bit 0 is not
+	// an interrupt number), and hgeip reports which are pending. No device
+	// here raises one, so hgeip reads zero.
+	if (Extensions.H && csr == CSR_HGEIE) return regs.read_csr(CSR_HGEIE) & HGEI_MASK;
+	if (Extensions.H && csr == CSR_HGEIP) return 0;
 	if (Extensions.ZKR && csr == CSR_SEED) return read_seed(mem);
 	if (Extensions.H && csr == CSR_VSSTATUS_N) return read_vsstatus(regs);
 	if (Extensions.H && csr == 0x204) return read_vsie(regs);
@@ -1276,6 +1331,16 @@ void RiscvCore::raise_software_check(Registers &regs, uint64_t tval)
 	enter_trap(regs, 18, tval);
 }
 
+// Where a trap lands. In direct mode (0) every trap goes to the base; in
+// vectored mode (1) an interrupt goes to base + 4 * cause, so each has its own
+// entry, and an exception still goes to the base.
+static uint64_t trap_vector(uint64_t tvec, uint64_t cause, bool is_interrupt)
+{
+	const uint64_t base = tvec & ~0x3ull;
+	if ((tvec & 0x3) == 1 && is_interrupt) return base + ((cause & 0x7FFFFFFFFFFFFFFFull) << 2);
+	return base;
+}
+
 void RiscvCore::enter_trap(Registers &regs, uint64_t cause, uint64_t tval, bool is_interrupt)
 {
 	uint64_t pc = regs.get_pc();
@@ -1359,7 +1424,7 @@ void RiscvCore::enter_trap(Registers &regs, uint64_t cause, uint64_t tval, bool 
 
 		// The hart stays virtual: this trap never left the guest.
 		regs.set_priv(PrivMode::S);
-		regs.set_pc(regs.read_csr(0x205) & ~0x3ull); // vstvec
+		regs.set_pc(trap_vector(regs.read_csr(0x205), vs_cause, is_interrupt)); // vstvec
 		return;
 	}
 
@@ -1430,10 +1495,7 @@ void RiscvCore::enter_trap(Registers &regs, uint64_t cause, uint64_t tval, bool 
 			regs.set_virt(false);
 		}
 		regs.set_priv(PrivMode::S);
-		// Direct mode only (stvec[1:0] ignored) -- vectored mode's
-		// cause-indexed offset isn't implemented; every trap, interrupt or
-		// not, goes to the same base address.
-		regs.set_pc(regs.read_csr(CSR_STVEC) & ~0x3ull);
+		regs.set_pc(trap_vector(regs.read_csr(CSR_STVEC), cause, is_interrupt));
 		return;
 	}
 
@@ -1482,10 +1544,7 @@ void RiscvCore::enter_trap(Registers &regs, uint64_t cause, uint64_t tval, bool 
 	}
 	if (Extensions.H) regs.set_virt(false); // M-mode is never virtual
 	regs.set_priv(PrivMode::M);
-	// Direct mode only (mtvec[1:0] ignored) -- vectored mode's cause-indexed
-	// offset for interrupts isn't implemented; every trap goes to the same
-	// base address regardless of mode or cause.
-	regs.set_pc(regs.read_csr(CSR_MTVEC) & ~0x3ull);
+	regs.set_pc(trap_vector(regs.read_csr(CSR_MTVEC), cause, is_interrupt));
 }
 
 bool RiscvCore::interrupt_enabled(Registers &regs, int bit)
@@ -1754,7 +1813,7 @@ void RiscvCore::exec_32ZICSR(const DecodedInstruction &instr, Registers &regs, M
 			// next instruction for a check it is not subject to.
 			if (Extensions.ZICFILP)
 				regs.elp = saved_elp && cfilp::enabled(regs);
-			regs.set_pc(regs.read_csr(epc_csr));
+			regs.set_pc(align_pc(regs.read_csr(epc_csr)));
 			return;
 		}
 		case 0x302: { // MRET
@@ -1777,7 +1836,7 @@ void RiscvCore::exec_32ZICSR(const DecodedInstruction &instr, Registers &regs, M
 			regs.set_priv(target);
 			if (Extensions.ZICFILP)
 				regs.elp = saved_elp && cfilp::enabled(regs);
-			regs.set_pc(regs.read_csr(CSR_MEPC));
+			regs.set_pc(align_pc(regs.read_csr(CSR_MEPC)));
 			return;
 		}
 		case 0x105: { // WFI
@@ -1987,18 +2046,24 @@ void RiscvCore::exec_32ZICSR(const DecodedInstruction &instr, Registers &regs, M
 	case 0b11: if (instr.rs1 != 0) updated = old & ~operand; break; // CSRRC/CSRRCI
 	}
 
-	// stvec/mtvec MODE (bits 1:0) is WARL, and this hart implements only
-	// direct mode -- every trap goes to the base address regardless of
-	// cause. Storing a mode it does not implement would let software read
-	// back a vectored setting that is not honoured, so it is clamped on
-	// write rather than merely ignored on use.
+	// stvec/mtvec MODE (bits 1:0) is WARL. This hart implements direct mode
+	// (0) and vectored mode (1) -- see trap_vector. A reserved mode must not
+	// read back, so the write keeps the mode the register had.
 	//
 	// vstvec is in this list because it *is* stvec as far as a guest is
 	// concerned: the same field with the same rule, reached through the
 	// same name. Keying the clamp on the S-mode number alone missed it,
 	// since VS redirection has already rewritten the number by this point
 	// -- the guest's write arrives here as 0x205, not 0x105.
-	if (csr == CSR_STVEC || csr == CSR_MTVEC || csr == 0x205) updated &= ~0x3ull;
+	//
+	// That changed: the hart DoomV is held to -- Sail's RVA23S64
+	// configuration -- supports vectored mode on all three, where an
+	// interrupt goes to base + 4 * cause. Modes 0 and 1 are kept. Modes 2 and
+	// 3 are reserved, and the write keeps the mode the register already had
+	// with the new base, which is Sail's Xtvec_Ignore.
+	if (csr == CSR_STVEC || csr == CSR_MTVEC || csr == 0x205) {
+		if ((updated & 0x3) >= 2) updated = (updated & ~0x3ull) | (old & 0x3);
+	}
 
 	// mepc, sepc and vsepc hold instruction addresses, and no instruction
 	// starts on an odd byte: bit 0 is read-only zero. With C the alignment
@@ -2157,6 +2222,7 @@ void RiscvCore::exec_32ZICSR(const DecodedInstruction &instr, Registers &regs, M
 	if (pmp::is_pmpcfg(csr)) pmp::write_cfg(regs, csr, updated);
 	else if (pmp::is_pmpaddr(csr)) pmp::write_addr(regs, csr, updated);
 	else if (csr == CSR_MSTATUS) regs.write_csr(CSR_MSTATUS, legalize_mstatus(updated));
+	else if (csr == CSR_MISA) write_misa(updated, pc + instr.length);
 	else if (csr == 0x100) write_sstatus(regs, updated);
 	else if (Extensions.H && csr == hyp::CSR_HSTATUS_ADDR) hyp::write_hstatus(regs, updated);
 	else if (Extensions.SSCOFPMF && sscofpmf::is_mhpmevent(csr))
@@ -2175,7 +2241,8 @@ void RiscvCore::exec_32ZICSR(const DecodedInstruction &instr, Registers &regs, M
 	else if (Extensions.H && csr == hyp::CSR_HGATP_ADDR) write_hgatp_warl(regs, updated);
 	else if (csr == CSR_MIDELEG)
 		regs.write_csr(CSR_MIDELEG, updated | mideleg_fixed_ones());
-	else if (Extensions.H && (csr == CSR_HGEIE || csr == CSR_HGEIP)) { /* GEILEN=0 */ }
+	else if (Extensions.H && csr == CSR_HGEIE) regs.write_csr(CSR_HGEIE, updated & HGEI_MASK);
+	else if (Extensions.H && csr == CSR_HGEIP) { /* read-only */ }
 	else if (Extensions.H && csr == CSR_VSSTATUS_N) write_vsstatus(regs, updated);
 	else if (Extensions.H && csr == 0x204) write_vsie(regs, updated);
 	else if (Extensions.H && csr == 0x244) write_vsip(regs, updated);
