@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# Refuse a push whose commits have not passed the gate.
+#
+# Enable with:  git config core.hooksPath .githooks
+# (or python scripts/install_hooks.py, which does the same thing)
+#
+# Runs scripts/ci.py -- the build, strict lock-step against Sail, and every
+# suite in verify.py. About thirteen minutes. That is the cost of the rule
+# "nothing reaches origin that has not passed every arch test".
+#
+# This is the whole gate, rather than a local echo of a CI one. The suite
+# cannot run on a hosted runner without being rebuilt around it: the reference
+# signatures come from the Sail model and the tests are built by the RISC-V
+# cross-toolchain, both of which live in WSL, and the Linux and Ubuntu suites
+# need images measured in gigabytes. The machine pushing the change is the
+# machine that already has all of it.
+#
+# Deleting a branch and pushing nothing are not changes to test, so they are
+# allowed straight through.
+#
+# To push anyway -- a docs-only typo, or a change already tested -- use
+#   git push --no-verify
+# which is git's own escape hatch and skips this entirely.
+set -uo pipefail
+
+# Read the refs being pushed; a deletion has an all-zero local sha.
+have_work=0
+while read -r _local_ref local_sha _remote_ref _remote_sha; do
+    case "$local_sha" in
+        *[!0]*) have_work=1 ;;
+    esac
+done
+if [ "$have_work" -eq 0 ]; then
+    exit 0
+fi
+
+root="$(git rev-parse --show-toplevel)"
+echo "pre-push: running the gate (scripts/ci.py); git push --no-verify skips it"
+if ! python "$root/scripts/ci.py"; then
+    echo >&2
+    echo "pre-push: GATE FAILED -- push refused." >&2
+    echo "pre-push: fix it, or use 'git push --no-verify' if you are sure." >&2
+    exit 1
+fi
