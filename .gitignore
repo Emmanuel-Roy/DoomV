@@ -110,3 +110,8 @@ fb*.png
 # tracked; the images are the user's data, and large.
 /drives/*
 !/drives/README.md
+
+# The shared folder's contents are whatever the user puts there; only its
+# README is part of the repository.
+/shared/*
+!/shared/README.md

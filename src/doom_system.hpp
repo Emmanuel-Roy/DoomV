@@ -62,6 +62,9 @@ public:
 	// the root is not attached twice. Prints what it attached; a missing
 	// directory is not an error, since the folder is optional.
 	void attach_drives(const std::string &dir, const std::string &skip);
+	// Serve `dir` to the guest as the shared folder, mount tag "shared". A
+	// directory that does not exist is skipped quietly, like drives/.
+	void attach_shared(const std::string &dir);
 
 	bool headless = false;
 	// Set by the CPU thread once a run has stopped *and* its crash log and

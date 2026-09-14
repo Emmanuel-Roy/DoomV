@@ -25,6 +25,8 @@ python scripts/boot.py ubuntu --login
 
 # Make a storage drive; every *.img in drives/ is attached to Linux at boot.
 python scripts/mkdrive.py data 1G
+# shared/ needs no setup: it is served to Linux live. In the guest:
+#   mount -t 9p -o trans=virtio,version=9p2000.L shared /mnt/shared
 
 # Run every regression suite, or name the suites to run.
 python scripts/verify.py

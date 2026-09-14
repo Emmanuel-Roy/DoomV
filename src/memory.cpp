@@ -138,6 +138,11 @@ uint8_t Memory::read8(uint64_t addr)
 		return kbd_dev.read8(addr - VIRTIO_KBD_BASE);
 	if (addr >= VIRTIO_MOUSE_BASE && addr < VIRTIO_MOUSE_BASE + VIRTIO_SIZE)
 		return mouse_dev.read8(addr - VIRTIO_MOUSE_BASE);
+	// virtio-9p's config space holds the mount tag, read a byte at a time,
+	// and its length, read as a 16-bit load -- which read16 builds from two
+	// of these.
+	if (addr >= VIRTIO_SHARE_BASE && addr < VIRTIO_SHARE_BASE + VIRTIO_SIZE)
+		return share.read8(addr - VIRTIO_SHARE_BASE);
 	return 0;
 }
 
@@ -195,6 +200,8 @@ uint32_t Memory::read32(uint64_t addr)
 		const uint64_t off = addr - VIRTIO_DRIVE_BASE;
 		return drives[off / VIRTIO_SIZE].read32(off % VIRTIO_SIZE);
 	}
+	if (addr >= VIRTIO_SHARE_BASE && addr < VIRTIO_SHARE_BASE + VIRTIO_SIZE)
+		return share.read32(addr - VIRTIO_SHARE_BASE);
 	if (addr >= VIRTIO_KBD_BASE && addr < VIRTIO_KBD_BASE + VIRTIO_SIZE) return kbd_dev.read32(addr - VIRTIO_KBD_BASE);
 	if (addr >= VIRTIO_MOUSE_BASE && addr < VIRTIO_MOUSE_BASE + VIRTIO_SIZE) return mouse_dev.read32(addr - VIRTIO_MOUSE_BASE);
 	if (addr >= IMSIC_M_BASE && addr < IMSIC_M_BASE + IMSIC_SIZE) return 0; // seteipnum_le reads as zero, per spec
@@ -341,6 +348,10 @@ void Memory::write32(uint64_t addr, uint32_t val)
 		drives[off / VIRTIO_SIZE].write32(off % VIRTIO_SIZE, val, *this, aplic);
 		return;
 	}
+	if (addr >= VIRTIO_SHARE_BASE && addr < VIRTIO_SHARE_BASE + VIRTIO_SIZE) {
+		share.write32(addr - VIRTIO_SHARE_BASE, val, *this, aplic);
+		return;
+	}
 	if (addr >= VIRTIO_BASE && addr < VIRTIO_BASE + VIRTIO_SIZE) {
 		disk.write32(addr - VIRTIO_BASE, val, *this, aplic);
 		return;
@@ -479,6 +490,7 @@ bool Memory::is_backed(uint64_t addr, unsigned size) const
 	if (in(VIRTIO_KBD_BASE, VIRTIO_SIZE)) return true;
 	if (in(VIRTIO_MOUSE_BASE, VIRTIO_SIZE)) return true;
 	if (in(VIRTIO_DRIVE_BASE, NUM_DRIVES * VIRTIO_SIZE)) return true;
+	if (in(VIRTIO_SHARE_BASE, VIRTIO_SIZE)) return true;
 	if (in(UART_BASE, UART_SIZE)) return true;
 	if (in(CLINT_BASE, CLINT_SIZE)) return true;
 	if (in(APLIC_BASE, APLIC_SIZE)) return true;

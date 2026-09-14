@@ -26,6 +26,8 @@ int main(int argc, char *argv[])
 	// to the working directory, which is the repository root for every
 	// script in scripts/. Empty turns the scan off.
 	std::string drives_dir = "drives";
+	// The host folder the guest can mount directly. Same conventions.
+	std::string shared_dir = "shared";
 	bool headless = false;
 	for (int i = 1; i < argc; i++) {
 		std::string arg = argv[i];
@@ -77,6 +79,10 @@ int main(int argc, char *argv[])
 			// to exercise the input devices without a window -- see
 			// DoomSystem::replay_input_script.
 			input_script = arg.substr(7);
+		} else if (arg.rfind("-shared=", 0) == 0) {
+			// A host folder served to the guest over virtio-9p, mount tag
+			// "shared". -shared= with nothing turns it off.
+			shared_dir = arg.substr(8);
 		} else if (arg.rfind("-drives=", 0) == 0) {
 			// A folder of raw *.img files to attach as extra virtio disks,
 			// after the root disk. -drives= with nothing turns it off.
@@ -119,7 +125,7 @@ int main(int argc, char *argv[])
 	// block device. The other three are still mandatory -- there is no
 	// booting without firmware, a kernel and a device tree.
 	if (linux_boot && (opensbi_path.empty() || kernel_path.empty() || dtb_path.empty())) {
-		std::cout << "Usage: " << argv[0] << " -opensbi=<path> -kernel=<path> -dtb=<path> -initrd=<path> [-march=...] [-break=<hex_pc>] [-ng] [-disk=<img>] [-drives=<dir>] [-fbdump=<ppm>] [-expect=<text>]\n";
+		std::cout << "Usage: " << argv[0] << " -opensbi=<path> -kernel=<path> -dtb=<path> -initrd=<path> [-march=...] [-break=<hex_pc>] [-ng] [-disk=<img>] [-drives=<dir>] [-shared=<dir>] [-fbdump=<ppm>] [-expect=<text>]\n";
 		return -1;
 	}
 
@@ -129,6 +135,7 @@ int main(int argc, char *argv[])
 	// Storage drives only mean something to a guest with a device tree that
 	// declares their slots, which is a Linux boot.
 	if (linux_boot && !drives_dir.empty()) system.attach_drives(drives_dir, disk_path);
+	if (linux_boot && !shared_dir.empty()) system.attach_shared(shared_dir);
 	if (!disk_path.empty() && !system.attach_disk(disk_path)) {
 		std::cout << "cannot open disk image: " << disk_path << "\n";
 		return -1;

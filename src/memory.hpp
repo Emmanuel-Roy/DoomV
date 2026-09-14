@@ -5,6 +5,7 @@
 #include "uart.hpp"
 #include "virtio_blk.hpp"
 #include "virtio_input.hpp"
+#include "virtio_9p.hpp"
 #include <cstdint>
 #include <mutex>
 #include <vector>
@@ -187,6 +188,13 @@ public:
 	static constexpr int NUM_DRIVES = 8;
 	static constexpr uint64_t VIRTIO_DRIVE_BASE = 0x10102000;
 	static constexpr uint32_t DRIVE_IRQ_BASE = 4;
+
+	// The shared folder: a virtio-9p device serving a host directory that
+	// the guest mounts directly (see Virtio9p). One slot after the drives,
+	// APLIC source Virtio9p::IRQ.
+	static constexpr uint64_t VIRTIO_SHARE_BASE = 0x1010A000;
+	static_assert(VIRTIO_SHARE_BASE == VIRTIO_DRIVE_BASE + NUM_DRIVES * VIRTIO_SIZE,
+	              "the shared folder's slot follows the last drive slot");
 	static_assert(VIRTIO_KBD_BASE >= MMIO_FB + FB_SIZE,
 	              "input devices must not sit inside DOOM's framebuffer aperture");
 
@@ -297,6 +305,7 @@ public:
 	Uart &get_uart() { return uart; }
 	VirtioBlk &get_disk() { return disk; }
 	VirtioBlk &get_drive(int i) { return drives[i]; }
+	Virtio9p &get_share() { return share; }
 
 private:
 	// RAM and WAD are contiguous (RAM_BASE..RAM_BASE+RAM_SIZE == WAD_BASE),
@@ -338,6 +347,7 @@ private:
 		VirtioBlk(DRIVE_IRQ_BASE + 4), VirtioBlk(DRIVE_IRQ_BASE + 5),
 		VirtioBlk(DRIVE_IRQ_BASE + 6), VirtioBlk(DRIVE_IRQ_BASE + 7),
 	};
+	Virtio9p share;
 
 	// Declaration order matters here: aplic's constructor takes a
 	// reference to imsic_s, so imsic_s must finish constructing first --

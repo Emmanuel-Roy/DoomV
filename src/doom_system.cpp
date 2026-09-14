@@ -42,6 +42,18 @@ static std::string full_path(const std::string &path)
 	return path;
 }
 
+void DoomSystem::attach_shared(const std::string &dir)
+{
+	DIR *d = opendir(dir.c_str());
+	if (!d) return;
+	closedir(d);
+	Virtio9p &share = memory.get_share();
+	if (share.open(dir, "shared"))
+		std::cout << "shared: " << share.host_root() << " -> mount tag \"shared\"\n" << std::flush;
+	else
+		std::cout << "shared: cannot serve " << dir << ", leaving the slot empty\n" << std::flush;
+}
+
 void DoomSystem::attach_drives(const std::string &dir, const std::string &skip)
 {
 	// opendir rather than std::filesystem: this compiler's MinGW runtime

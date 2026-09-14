@@ -290,6 +290,7 @@ src/
   uart.*                 8250-compatible serial, which is the SBI console
   virtio_blk.*           virtio-blk over MMIO: the root disk and the storage drives
   virtio_input.*         virtio-input over MMIO: the keyboard and the mouse
+  virtio_9p.*            virtio-9p over MMIO: a 9P2000.L file server for the shared folder
   timer.* aplic.* imsic.*  CLINT timer and the AIA interrupt controllers
   mmu.* pmp.*            Sv39/48/57 translation with a TLB, and the PMP
 ```
@@ -330,6 +331,7 @@ riscv_doom.exe -opensbi=<f> -kernel=<f> -dtb=<f> -initrd=<f> [options]   # Linux
 | `-initrd=<path>` | Initramfs cpio archive. Omit it when booting from `-disk=` -- with an initramfs present the kernel runs that and never mounts the disk. |
 | `-disk=<path>` | Raw disk image for the virtio-blk device. A whole-device filesystem or a partitioned image both work; the kernel finds the partition table itself. |
 | `-drives=<dir>` | Folder of `*.img` storage drives to attach after the root disk on a Linux boot, in name order. Defaults to `drives`; `-drives=` turns it off. See [Storage drives](#drives). |
+| `-shared=<dir>` | Host folder served live to a Linux guest over virtio-9p, mount tag `shared`. Defaults to `shared`; `-shared=` turns it off. See [Shared folder](#shared). |
 | `-fbdump=<path>` | Write the Linux framebuffer to this file as a binary PPM, with a non-black pixel count on stdout. Written when the run stops and periodically while it runs. |
 | `-expect=<text>` | Hold the headless stdin feed until the guest's console prints this string. |
 | `-input=<path>` | Replay a script of keyboard and mouse events into the guest. The only way to exercise the input devices without a window and a person -- see [Input](#input). |
@@ -469,6 +471,29 @@ so adding a drive is dropping a file in the folder -- no device tree change.
 A read-only image file is attached read-only and the guest is told, so a
 mount comes up read-only rather than failing on its first write. Details and
 limits in [drives/README.md](drives/README.md).
+
+<a id="shared"></a>
+### Shared folder
+
+`shared/` is shared live with a Linux guest: a file saved there from Windows
+is visible in the guest immediately, and the other way round, with both
+running. Inside the guest:
+
+```sh
+mkdir -p /mnt/shared
+mount -t 9p -o trans=virtio,version=9p2000.L shared /mnt/shared
+```
+
+It is a virtio-9p device -- the mechanism QEMU's shared folders use -- with a
+9P2000.L file server in the emulator answering the guest's v9fs requests
+against the real directory. The kernel already has the client built in, so
+nothing needed rebuilding. Windows has no owners, modes, symlinks or
+case-sensitive names, so the guest sees an approximation: everything is
+root's and writable, the read-only attribute clears the write bits, names
+Windows cannot hold are refused rather than altered, and symlinks fail with
+"Operation not supported". Links inside the folder that point outside it are
+refused too. For a real Linux filesystem, use a drive instead. Details in
+[shared/README.md](shared/README.md).
 
 ### The display
 

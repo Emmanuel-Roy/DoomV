@@ -405,5 +405,16 @@
 			interrupt-parent = <&aplic>;
 			interrupts = <11 4>;
 		};
+
+		// The shared folder: a virtio-9p device serving the host's shared/
+		// directory, mount tag "shared". Empty -- device ID 0 -- when there
+		// is no folder to serve. In the guest:
+		//   mount -t 9p -o trans=virtio,version=9p2000.L shared /mnt/shared
+		virtio_mmio@1010a000 {
+			compatible = "virtio,mmio";
+			reg = <0x0 0x1010a000 0x0 0x1000>;
+			interrupt-parent = <&aplic>;
+			interrupts = <12 4>;
+		};
 	};
 };
