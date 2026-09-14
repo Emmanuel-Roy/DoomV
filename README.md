@@ -9,7 +9,7 @@ plus the extensions below, and H), with the handful of devices a
 distribution needs on top: AIA interrupt controllers, a framebuffer, virtio
 disks, a virtio keyboard and mouse, and a 9P folder shared with Windows.
 
-<img width="1919" height="1079" alt="image" src="https://github.com/user-attachments/assets/92adbcb6-cfe2-464e-8a09-8b817151a260" />
+<img width="1920" height="1080" alt="DOOM E1M1 running on DoomV, with the register file and trace log beside it" src="docs/images/doomv-hero.png" />
 
 ## Why
 
