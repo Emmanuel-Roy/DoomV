@@ -187,7 +187,9 @@ uint32_t Memory::read32(uint64_t addr)
 	}
 	if (addr == MMIO_MOUSE_BTN) {
 		std::lock_guard<std::mutex> lock(mouse_mutex);
-		return mouse_buttons;
+		const uint32_t v = mouse_buttons | mouse_clicked;
+		mouse_clicked = 0;
+		return v;
 	}
 	// WAD_BASE fits in 32 bits and the guest is happy with a 32-bit
 	// pointer for it, so one word each.
@@ -488,8 +490,12 @@ void Memory::push_mouse_button(int doom_bit, bool pressed)
 {
 	if (doom_bit < 0 || doom_bit > 2) return;
 	std::lock_guard<std::mutex> lock(mouse_mutex);
-	if (pressed) mouse_buttons |= (1u << doom_bit);
-	else         mouse_buttons &= ~(1u << doom_bit);
+	if (pressed) {
+		mouse_buttons |= (1u << doom_bit);
+		mouse_clicked |= (1u << doom_bit);
+	} else {
+		mouse_buttons &= ~(1u << doom_bit);
+	}
 }
 
 void Memory::step_instructions(uint32_t count)

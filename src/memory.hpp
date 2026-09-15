@@ -34,10 +34,14 @@ public:
 	// MMIO_MOUSE_MOVE: dx in bits 31-16, dy in 15-0, both signed 16-bit.
 	//                  Reading is destructive -- it returns the movement
 	//                  since the last read and zeroes the accumulator.
-	// MMIO_MOUSE_BTN:  bit 0 left, bit 1 right, bit 2 middle, held state.
-	//                  Reading does not clear it; a held button is a state
-	//                  and not an event. The bit order is DOOM's own (see
-	//                  d_event.h's ev_mouse), which is not evdev's.
+	// MMIO_MOUSE_BTN:  bit 0 left, bit 1 right, bit 2 middle: held, or
+	//                  pressed since the last read. A held button is a
+	//                  state, not an event, and reading does not clear it --
+	//                  but a click whose press and release both land between
+	//                  two frames would never be seen as a state at all, so
+	//                  a press also latches its bit until the next read.
+	//                  The bit order is DOOM's own (see d_event.h's
+	//                  ev_mouse), which is not evdev's.
 	static constexpr uint64_t MMIO_MOUSE_MOVE = 0x1000000C;
 	static constexpr uint64_t MMIO_MOUSE_BTN  = 0x10000010;
 
@@ -357,6 +361,7 @@ private:
 	std::mutex mouse_mutex;
 	int mouse_dx = 0, mouse_dy = 0;
 	uint32_t mouse_buttons = 0;
+	uint32_t mouse_clicked = 0;   // pressed since the last MMIO_MOUSE_BTN read
 
 	// Bytes actually loaded, for MMIO_WAD_SIZE.
 	uint32_t wad_len = 0;

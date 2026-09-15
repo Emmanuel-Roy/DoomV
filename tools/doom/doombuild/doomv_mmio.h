@@ -22,7 +22,9 @@
 // the previous read and zeroes the accumulator. dx is bits 31-16, dy bits
 // 15-0, both signed 16-bit. MMIO_MOUSE_BTN is the held button state and is
 // not cleared by reading -- bit 0 left, bit 1 right, bit 2 middle, which is
-// DOOM's own ev_mouse ordering rather than any hardware's.
+// DOOM's own ev_mouse ordering rather than any hardware's. A press also
+// reads as held once even if the button was released before this frame,
+// so a quick click is one frame pressed and the next released.
 #define MMIO_MOUSE_MOVE 0x1000000Cu
 #define MMIO_MOUSE_BTN  0x10000010u
 

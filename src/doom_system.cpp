@@ -1599,6 +1599,13 @@ void DoomSystem::run()
 				move_pointer(ev.x, ev.y);
 				break;
 			case RawInputEvent::Kind::MouseButton: {
+				// A press happens where the pointer is. Without this it
+				// happens wherever the last reported motion left the guest's
+				// cursor -- which is not here after a click that brought
+				// the window to the front, or anything else that moved the
+				// host pointer without a motion event over the display --
+				// and a context menu opens somewhere else.
+				if (ev.pressed) move_pointer(ev.x, ev.y);
 				uint16_t code = 0;
 				if (ev.button == SDL_BUTTON_LEFT)   code = VirtioInput::BTN_LEFT;
 				if (ev.button == SDL_BUTTON_RIGHT)  code = VirtioInput::BTN_RIGHT;
