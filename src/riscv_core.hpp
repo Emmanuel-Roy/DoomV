@@ -47,6 +47,18 @@ public:
 	// whatever the global enables say.
 	bool wake_for_interrupt(Registers &regs, Memory &mem);
 	bool reservation_held() const { return reservation_valid; }
+
+	// Pages that loads and stores inside one page can reach directly -- see
+	// load_virtual. One cache for loads and one for stores, because a page
+	// can be readable and not writable, and a store is what sets D.
+	struct DataPage {
+		uint64_t vpage = ~0ull;
+		uint64_t key = ~0ull;
+		uint8_t *host = nullptr;
+	};
+	static constexpr unsigned DATA_CACHE_SIZE = 256;
+	DataPage load_cache[DATA_CACHE_SIZE];
+	DataPage store_cache[DATA_CACHE_SIZE];
 	void raise_virtual_instruction(Registers &regs, uint64_t tval) { enter_trap(regs, 22, tval); }
 	// Enter interrupt `bit`'s trap now, as check_and_take_interrupt would.
 	void take_interrupt(Registers &regs, int bit)

@@ -30,8 +30,12 @@ public:
 
 	Registers();
 
-	uint64_t read_x(int i) const;
-	void write_x(int i, uint64_t value);
+	// The accessors every instruction calls several times, defined here so
+	// they inline: the build has no link-time optimization to do it across
+	// files (see the Makefile), and as calls they were several per cent of
+	// the run on their own.
+	uint64_t read_x(int i) const { return x[i]; }
+	void write_x(int i, uint64_t value) { if (i != 0) x[i] = value; }
 
 	// FP registers, unlike x0, have no hardwired-zero special case -- all
 	// 32 are ordinary read/write storage. Always 64 bits wide (NaN-boxed
@@ -53,14 +57,14 @@ public:
 	const uint8_t *read_v(int i) const;
 	uint8_t *write_v(int i);
 
-	uint64_t get_pc() const;
-	void set_pc(uint64_t value);
+	uint64_t get_pc() const { return pc; }
+	void set_pc(uint64_t value) { pc = value; }
 
 	// Current privilege level. Defaults to M -- every prior version of
 	// this project ran exclusively in M-mode, so M is the only backward-
 	// compatible reset state. Nothing outside trap-entry/xRET (ext_zicsr.cpp)
 	// and the MMU should ever need to write this.
-	PrivMode get_priv() const;
+	PrivMode get_priv() const { return priv; }
 	void set_priv(PrivMode mode);
 
 	// Bumped by every CSR write and every change of privilege or V. Caches of
@@ -82,7 +86,7 @@ public:
 	bool get_virt() const { return virt; }
 	void set_virt(bool v) { virt = v; state_gen++; }
 
-	uint64_t read_csr(uint16_t addr) const;
+	uint64_t read_csr(uint16_t addr) const { return csr[addr]; }
 	void write_csr(uint16_t addr, uint64_t value);
 	// While set, every write_csr appends its address (lockstep.cpp).
 	std::vector<uint16_t> *csr_log = nullptr;

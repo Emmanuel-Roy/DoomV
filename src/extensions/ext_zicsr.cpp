@@ -16,6 +16,8 @@
 #include "extensions.hpp"
 #include "timer.hpp"
 #include "pmp.hpp"
+#include "mmu.hpp"
+#include <cstring>
 #include "ext_xstate.hpp"
 #include "imsic.hpp"
 
@@ -1141,12 +1143,57 @@ uint64_t RiscvCore::read_csr_effective(Registers &regs, Memory &mem, uint16_t cs
 // The translation is redone per byte rather than cached per page because
 // the page a byte falls in is the only thing that decides its physical
 // address, and recomputing it is cheap next to getting it wrong.
+// Loads and stores that stay inside one page, from a cached page of RAM.
+//
+// The same arrangement as DoomSystem's fetch cache. A page is remembered once
+// an access to it has gone through translate_or_trap and succeeded, and only
+// if every access of that kind inside the page would get the same answer: it
+// is RAM from end to end, there is no second translation stage and no MPRV,
+// and one PMP entry decides the whole page. The entry holds where the page
+// is, never its contents. Any CSR write or change of privilege or V
+// (regs.state_gen, which covers satp, mstatus's SUM, MXR and MPRV, the PMP
+// CSRs and the pointer-masking controls), any TLB flush and any change to the
+// extensions makes it stale.
+//
+// Stores keep the side effects a store has beyond storing: a page holding the
+// tohost register is never cached, and nothing is served from the caches while
+// lock-step is logging accesses or stores.
+static uint64_t data_cache_key(const Registers &regs)
+{
+	return regs.state_gen + mmu_tlb_generation() + ExtensionsEpoch;
+}
+
+static void remember_data_page(Registers &regs, Memory &mem, RiscvCore::DataPage &e,
+                               uint64_t vpage, uint64_t key, uint64_t paddr, int access)
+{
+	const uint64_t ppage = paddr & ~0xFFFull;
+	if (!Memory::in_ram(ppage, 0x1000)) return;
+	if (Extensions.H && regs.get_virt()) return;
+	if (regs.read_csr(CSR_MSTATUS) & MSTATUS_MPRV) return;
+	if (Extensions.SMPMP && !pmp::page_permits(regs, ppage, access, (uint8_t)regs.get_priv())) return;
+	if (access == pmp::ACC_STORE && mem.tohost_addr
+	    && ((mem.tohost_addr >> 12) == (ppage >> 12) || ((mem.tohost_addr + 7) >> 12) == (ppage >> 12)))
+		return;
+	e.vpage = vpage;
+	e.key = key;
+	e.host = mem.ram_data_mut() + (ppage - Memory::RAM_BASE);
+}
+
 bool RiscvCore::load_virtual(Registers &regs, Memory &mem, uint64_t vaddr,
                              unsigned size, uint64_t &out)
 {
 	// The wide path first: one translation, one memory read, which is what
 	// every aligned access takes.
 	if (((vaddr + size - 1) >> 12) == (vaddr >> 12)) {
+		const uint64_t vpage = vaddr >> 12;
+		const uint64_t key = data_cache_key(regs);
+		DataPage &e = load_cache[vpage & (DATA_CACHE_SIZE - 1)];
+		if (e.vpage == vpage && e.key == key && !access_log) {
+			uint64_t v = 0;
+			std::memcpy(&v, e.host + (vaddr & 0xFFF), size);
+			out = v;
+			return true;
+		}
 		uint64_t paddr;
 		if (!translate_or_trap(regs, mem, vaddr, AccessType::Load, paddr, size))
 			return false;
@@ -1156,6 +1203,7 @@ bool RiscvCore::load_virtual(Registers &regs, Memory &mem, uint64_t vaddr,
 		case 4:  out = mem.read32(paddr); break;
 		default: out = mem.read64(paddr); break;
 		}
+		remember_data_page(regs, mem, e, vpage, key, paddr, pmp::ACC_LOAD);
 		return true;
 	}
 
@@ -1180,6 +1228,13 @@ bool RiscvCore::store_virtual(Registers &regs, Memory &mem, uint64_t vaddr,
                               unsigned size, uint64_t value)
 {
 	if (((vaddr + size - 1) >> 12) == (vaddr >> 12)) {
+		const uint64_t vpage = vaddr >> 12;
+		const uint64_t key = data_cache_key(regs);
+		DataPage &e = store_cache[vpage & (DATA_CACHE_SIZE - 1)];
+		if (e.vpage == vpage && e.key == key && !access_log && !mem.store_log) {
+			std::memcpy(e.host + (vaddr & 0xFFF), &value, size);
+			return true;
+		}
 		uint64_t paddr;
 		if (!translate_or_trap(regs, mem, vaddr, AccessType::Store, paddr, size))
 			return false;
@@ -1192,6 +1247,7 @@ bool RiscvCore::store_virtual(Registers &regs, Memory &mem, uint64_t vaddr,
 		case 4:  mem.write32(paddr, (uint32_t)value); break;
 		default: mem.write64(paddr, value);           break;
 		}
+		remember_data_page(regs, mem, e, vpage, key, paddr, pmp::ACC_STORE);
 		return true;
 	}
 

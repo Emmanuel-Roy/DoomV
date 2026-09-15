@@ -307,9 +307,10 @@ measures and profiles it: `bench.py` runs a Linux boot or DOOM's demo to an
 exact step count and records the run, with a sampling histogram of where the
 host's time goes, and requires the run to end in the same `crash.log` as the
 baseline -- the proof that an optimization changed speed and nothing else.
-Caching the interrupt check and the instruction fetch took the Linux boot from
-10.5 to 29.6 MIPS and DOOM from 16.6 to 37.9; `performance/pgo.py` builds with
-profile-guided optimization for 36.3 and 50.3.
+Caching the interrupt check, the instruction fetch and memory accesses took the
+Linux boot from 10.5 to 46.9 MIPS and DOOM from 16.6 to 60.0;
+`performance/pgo.py` builds with profile-guided optimization on top of that,
+for 59.7 and 82.2.
 
 ## Code layout
 

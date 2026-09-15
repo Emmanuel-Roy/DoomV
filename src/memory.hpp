@@ -217,6 +217,7 @@ public:
 	// RAM's bytes, for a caller that has already established an address is
 	// RAM (DoomSystem's fetch cache). RAM_BASE is index 0.
 	const uint8_t *ram_data() const { return ram.data(); }
+	uint8_t *ram_data_mut() { return ram.data(); }
 	static bool in_ram(uint64_t addr, uint64_t size)
 	{
 		return addr >= RAM_BASE && size <= RAM_SIZE + WAD_SIZE && addr - RAM_BASE <= RAM_SIZE + WAD_SIZE - size;

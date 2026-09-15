@@ -381,12 +381,9 @@ DispatchResult Decoder::decode_and_dispatch(uint64_t pc, uint32_t raw_word)
 	// unrelated addresses into one cache line half the time.
 	CacheEntry &entry = cache[(pc >> 1) & CACHE_MASK];
 
-	DecodedInstruction instr;
-	bool enabled;
-	if (entry.valid && entry.addr == pc && entry.raw_instr == tag && entry.epoch == ExtensionsEpoch) {
-		instr = entry.decoded;
-		enabled = entry.enabled;
-	} else {
+	if (!(entry.valid && entry.addr == pc && entry.raw_instr == tag && entry.epoch == ExtensionsEpoch)) {
+		DecodedInstruction instr;
+		bool enabled;
 		if (!Extensions.C && (raw_word & 0x3) != 0x3) {
 			// A 16-bit encoding while C is off: fetched as two bytes, as
 			// ever, and illegal, since nothing decodes it.
@@ -437,6 +434,11 @@ DispatchResult Decoder::decode_and_dispatch(uint64_t pc, uint32_t raw_word)
 
 		entry = {true, pc, tag, instr, enabled, ExtensionsEpoch};
 	}
+	// The instruction is used from the cache entry itself, not copied out of
+	// it. Nothing between here and the return decodes, so the entry cannot
+	// change underneath it.
+	const DecodedInstruction &instr = entry.decoded;
+	const bool enabled = entry.enabled;
 
 
 	// Zicfilp: with the expectation armed, the only instruction that may
@@ -461,12 +463,12 @@ DispatchResult Decoder::decode_and_dispatch(uint64_t pc, uint32_t raw_word)
 			// tval 2 names the landing-pad check specifically, which is
 			// what tells a handler this was Zicfilp and not Zicfiss.
 			core.raise_software_check(regs, 2);
-			return {false, instr};
+			return {false, &instr};
 		}
 	}
 
 	if (!enabled) {
-		return {true, instr};
+		return {true, &instr};
 	}
 
 	// mstatus.VS is runtime state, not a build-time toggle, so this check
@@ -474,11 +476,11 @@ DispatchResult Decoder::decode_and_dispatch(uint64_t pc, uint32_t raw_word)
 	// (address, encoding) and would otherwise freeze whatever the vector
 	// unit's enable happened to be the first time this address ran.
 	if (instr.ext == Extension::V && !vcommon::vector_unit_enabled(regs)) {
-		return {true, instr};
+		return {true, &instr};
 	}
 	if ((instr.ext == Extension::F || instr.ext == Extension::D || instr.ext == Extension::ZFA
 	     || instr.ext == Extension::ZFHMIN) && !vcommon::fp_unit_enabled(regs)) {
-		return {true, instr};
+		return {true, &instr};
 	}
 
 	switch (instr.ext) {
@@ -564,8 +566,8 @@ DispatchResult Decoder::decode_and_dispatch(uint64_t pc, uint32_t raw_word)
 		core.exec_V(instr, regs, mem);
 		break;
 	default:
-		return {true, instr};
+		return {true, &instr};
 	}
 
-	return {false, instr};
+	return {false, &instr};
 }

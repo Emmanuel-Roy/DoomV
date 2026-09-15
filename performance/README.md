@@ -83,11 +83,19 @@ permission-checking the instruction fetch.
 | **B**: fetch cache, PMP over enabled entries only, RAM-first `write32` | 27.2 | 34.5 | identical |
 | **C**: the cache checks inline | 29.6 | 37.9 | identical |
 | **C + PGO** | 36.3 | 50.3 | identical |
+| **D**: data-access caches, inline register accessors, decode by reference, batched run loop | 46.9 | 60.0 | identical |
+| **D + PGO** | 59.7 | 82.2 | identical |
 
-That is 3.4x on the Linux boot and 3.0x on DOOM. `pgo.py --bench`, rerun from
-scratch, measured 34.8 and 50.2 against a baseline that ran at 9.9 and 16.4
-that time -- the same factors. The exact runs are in [`RUNS.md`](RUNS.md), and
-the histograms beside them.
+That is 4.4x on the Linux boot and 3.6x on DOOM from the plain build, and 5.6x
+and 4.9x with `pgo.py`. The baseline reads between 9.9 and 10.7 MIPS from run
+to run, so each row was measured against its own reference run rather than
+against a remembered number; the factors above use those pairs. The exact runs
+are in [`RUNS.md`](RUNS.md), and the histograms beside them.
+
+After D the interpreter spends its time on the instructions themselves: about
+75-80% in `step_execute`, `fetch16`, `decode_and_dispatch` and `exec_32I`
+together, with translation and PMP down to ~7% of a Linux boot and loads and
+stores to ~7%.
 
 ### A: the interrupt check
 
@@ -119,6 +127,33 @@ RAM each time, so self-modifying code is fetched as written. Any CSR write,
 privilege change, TLB flush or extension change drops it. PMP checks loop over
 the enabled entries only, and `write32` tests RAM before the device windows.
 
+### D: loads, stores, decode and the loop
+
+* **Data-access caches.** `load_virtual` and `store_virtual`, for an access
+  inside one page, keep the same kind of cache the fetch does -- one for loads
+  and one for stores, since a page can be readable and not writable and a
+  store is what sets D. A page is remembered after a successful access through
+  the full path, only when it is RAM end to end with no second stage, no MPRV,
+  and one PMP entry for the whole page, and it goes stale on the same events.
+  A store keeps its side effects: the page holding `tohost` is never cached,
+  and nothing is served from the caches while lock-step is logging accesses.
+* **Register accessors inline.** `read_x`, `write_x`, `get_pc`, `set_pc`,
+  `get_priv` and `read_csr` were defined in `registers.cpp`, so every
+  instruction made several real calls; without LTO nothing could inline them.
+* **Decode by reference.** `decode_and_dispatch` used to copy the decoded
+  instruction out of its cache and then into its result, every step. It works
+  from the cache entry and returns a pointer to it.
+* **Batched run loop.** `cpu_loop` checked the input checkpoint and `-stopat`
+  after every step. Every step that runs advances the count by exactly one, so
+  the steps up to the next of those run as a plain loop and the checks happen
+  once at its end, at the same counts. Lock-step keeps the step-by-step loop.
+
+Besides the two workloads, an input script's run (DOOM, a right click in the
+menu, 1,500M steps) and a 600M-step Linux boot were compared with the
+previous build: identical. The input script's run was also done twice with the
+same build -- identical again, which is the check for a dependence on host
+timing or thread interleaving rather than on the old behaviour.
+
 ### Compiler flags
 
 * **`-flto` was rejected.** With this toolchain (MinGW GCC 8.1) the LTO plugin
@@ -131,6 +166,35 @@ the enabled entries only, and `write32` tests RAM before the device windows.
   `GCOV_PREFIX` redirects it; and `-fprofile-use` needs the Windows path too.
 * `-march=native` was not used: it would tie the binary to the build machine,
   and FMA contraction can change floating-point results between hosts.
+
+## What is left
+
+Nothing here is measured -- these are the candidates the histograms point at
+now that fetch, loads and stores are cached.
+
+* **A newer compiler.** This is GCC 8.1, from 2018. A current GCC would very
+  likely generate better code by itself, and would probably make `-flto` work,
+  which inlines across files for free -- worth more here than usual, because
+  the hot path crosses `doom_system.cpp`, `riscv_decoder.cpp`, `ext_*.cpp`,
+  `mmu.cpp` and `pmp.cpp` on every instruction. It is a toolchain change
+  rather than a code change: SDL2, the `-static-lib*` linking and the build
+  scripts all need checking.
+* **Per-page pre-decode.** Decode a code page into a table of handlers once,
+  and execute from it, still one instruction at a time with the same event
+  checks between. The largest remaining gain and the most work to get right,
+  since the table has to be invalidated exactly where the decode cache is.
+* **Dispatch through a handler pointer** in the decode cache entry, instead of
+  a switch on the extension.
+* **The cost of a step itself.** `step_execute` is the largest single entry in
+  the histogram, and it is now mostly bookkeeping: the trap-count snapshot, the
+  committed/decoded flags, the history write, the clock and `minstret`.
+
+A JIT is deliberately not on this list. It could still be exact -- per-
+instruction state, single-instruction blocks under lock-step -- but every
+translated block would have to reproduce each instruction's effects and
+interrupt timing, and that is a much larger surface to keep honest than the
+caches above, each of which is a cache of an answer the interpreter still
+computes the slow way whenever anything relevant changes.
 
 ## Checking a change
 

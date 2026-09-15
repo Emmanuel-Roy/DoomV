@@ -15,15 +15,9 @@ Registers::Registers()
 	for (int i = 0; i < HISTORY_SIZE; i++) history[i] = {0, 0};
 }
 
-uint64_t Registers::read_x(int i) const
-{
-	return x[i];
-}
 
-void Registers::write_x(int i, uint64_t value)
-{
-	if (i != 0) x[i] = value;
-}
+
+
 
 double Registers::read_f(int i) const
 {
@@ -45,20 +39,11 @@ uint8_t *Registers::write_v(int i)
 	return v[i];
 }
 
-uint64_t Registers::get_pc() const
-{
-	return pc;
-}
 
-void Registers::set_pc(uint64_t value)
-{
-	pc = value;
-}
 
-PrivMode Registers::get_priv() const
-{
-	return priv;
-}
+
+
+
 
 void Registers::set_priv(PrivMode mode)
 {
@@ -66,10 +51,7 @@ void Registers::set_priv(PrivMode mode)
 	state_gen++;
 }
 
-uint64_t Registers::read_csr(uint16_t addr) const
-{
-	return csr[addr];
-}
+
 
 void Registers::write_csr(uint16_t addr, uint64_t value)
 {

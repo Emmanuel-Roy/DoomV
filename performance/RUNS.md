@@ -33,3 +33,13 @@ and nothing else.
 | 20260915-135253 | doom 1000M | PGO build | eaa9628+ | 50.17 | 19.9 | `3d73dac132f3` |  |
 | 20260915-135638 | linux 300M | final: PGO build | eaa9628+ | 31.97 | 9.4 | `f1e71792e77d` | [histogram](runs/20260915-135638-linux-final-pgo-build/histogram.txt) |
 | 20260915-135648 | doom 1000M | final: PGO build | eaa9628+ | 46.46 | 21.5 | `3d73dac132f3` | [histogram](runs/20260915-135648-doom-final-pgo-build/histogram.txt) |
+| 20260915-175233 | linux 300M | D: data caches, inline accessors, decode by reference, batched run loop (reference) | b544ac6+ | 10.56 | 28.4 | `f1e71792e77d` |  |
+| 20260915-175302 | linux 300M | D: data caches, inline accessors, decode by reference, batched run loop | b544ac6+ | 46.93 | 6.4 | `f1e71792e77d` |  |
+| 20260915-175308 | doom 1000M | D: data caches, inline accessors, decode by reference, batched run loop (reference) | b544ac6+ | 16.75 | 59.7 | `3d73dac132f3` |  |
+| 20260915-175408 | doom 1000M | D: data caches, inline accessors, decode by reference, batched run loop | b544ac6+ | 60.04 | 16.7 | `3d73dac132f3` |  |
+| 20260915-175539 | linux 300M | D profile | b544ac6+ | 48.64 | 6.2 | `f1e71792e77d` | [histogram](runs/20260915-175539-linux-d-profile/histogram.txt) |
+| 20260915-175545 | doom 1000M | D profile | b544ac6+ | 59.45 | 16.8 | `3d73dac132f3` | [histogram](runs/20260915-175545-doom-d-profile/histogram.txt) |
+| 20260915-181300 | linux 300M | PGO build (reference) | b544ac6+ | 10.71 | 28.0 | `f1e71792e77d` |  |
+| 20260915-181328 | linux 300M | PGO build | b544ac6+ | 59.72 | 5.0 | `f1e71792e77d` |  |
+| 20260915-181333 | doom 1000M | PGO build (reference) | b544ac6+ | 16.84 | 59.4 | `3d73dac132f3` |  |
+| 20260915-181433 | doom 1000M | PGO build | b544ac6+ | 82.17 | 12.2 | `3d73dac132f3` |  |

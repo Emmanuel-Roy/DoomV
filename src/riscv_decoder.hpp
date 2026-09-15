@@ -65,8 +65,10 @@ class RiscvCore;
 
 struct DispatchResult {
 	bool illegal;
-	DecodedInstruction decoded; // full decode, not just the mnemonic -- the caller (DoomSystem::step, for
-	                             // history/trace-log recording) needs the operand fields too, to render more than a bare mnemonic.
+	// The decode, in the decoder's cache: valid until the next
+	// decode_and_dispatch. A pointer rather than a copy, because this is
+	// returned for every instruction.
+	const DecodedInstruction *decoded;
 };
 
 class Decoder {

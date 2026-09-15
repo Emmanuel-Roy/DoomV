@@ -449,9 +449,9 @@ void DoomSystem::step_execute()
 	// A compressed instruction's raw fetch also contains the next
 	// instruction's bytes in its upper half -- mask those off so the
 	// trace log/crash dump show just the actual 16-bit encoding.
-	uint32_t recorded_instr = (result.decoded.length == 2) ? (instr & 0xFFFF) : instr;
+	uint32_t recorded_instr = (result.decoded->length == 2) ? (instr & 0xFFFF) : instr;
 	step_insn = recorded_instr;
-	step_insn_len = result.decoded.length;
+	step_insn_len = result.decoded->length;
 	// Committed: it ran to completion -- not illegal, and no trap taken while
 	// it executed, such as a page fault or an ecall.
 	step_committed = !result.illegal && core.trap_count == traps_before;
@@ -784,17 +784,37 @@ void DoomSystem::cpu_loop()
 		// overhead, since that overhead doesn't scale with burst size --
 		// this raises total instructions/sec even though it lowers how
 		// often the dashboard updates.
-		for (int i = 0; i < 200000; i++) {
-			if (debugger.halted) break;
-			if (tracing) traced_step();
-			else step();
-			// Input is committed at instruction counts, never at a point
-			// in a burst: the burst boundaries depend on halts and resumes,
-			// and an input delivered at "whenever the host got to it" is
-			// the one thing that made two runs of the same guest differ.
-			// Every 4096 instructions is about 2.5kHz at the interpreter's
-			// speed, so a mouse still feels attached.
+		// Input is committed at instruction counts, never at a point in a
+		// burst: the burst boundaries depend on halts and resumes, and an
+		// input delivered at "whenever the host got to it" is the one thing
+		// that made two runs of the same guest differ. Every 4096
+		// instructions is about 2.5kHz at the interpreter's speed, so a mouse
+		// still feels attached.
+		//
+		// Every step that runs advances the count by exactly one, so the
+		// steps up to the next input checkpoint or the -stopat limit can run
+		// as a plain loop, with the checks made once at its end -- at the
+		// same counts as checking after every step, which is what they used
+		// to do. Lock-step keeps the step-by-step loop: a traced step can
+		// decline to run while the reference record waits.
+		int budget = 200000;
+		while (budget > 0 && !debugger.halted) {
+			const uint64_t before = memory.instruction_count();
+			if (tracing) {
+				traced_step();
+				budget--;
+			} else {
+				uint64_t n = INPUT_PERIOD - (before & (INPUT_PERIOD - 1));
+				if (stop_at) n = std::min<uint64_t>(n, stop_at > before ? stop_at - before : 1);
+				n = std::min<uint64_t>(n, (uint64_t)budget);
+				for (uint64_t k = 0; k < n && !debugger.halted; k++) step();
+				budget -= (int)n;
+			}
 			const uint64_t now = memory.instruction_count();
+			if (now == before) {
+				if (tracing) continue;
+				break;
+			}
 			if ((now & (INPUT_PERIOD - 1)) == 0) service_input(now);
 			if (stop_at && now >= stop_at) {
 				stop_at_limit();
