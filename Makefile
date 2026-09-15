@@ -1,6 +1,11 @@
 # Compiler settings
 CXX = g++
 CC = gcc
+# No -flto. It was tried for performance (see performance/README.md): with
+# this toolchain's GCC 8.1 the LTO plugin warns "No symbol for section
+# 'Extensions'" -- the C++17 inline variable in extensions.hpp -- and the
+# linked emulator dies of heap corruption before printing anything. The same
+# sources without it run correctly.
 CXXFLAGS = -std=c++2a -O3 -pthread -frounding-math -static-libgcc -static-libstdc++ -Wl,-Bstatic,--whole-archive -lwinpthread -Wl,--no-whole-archive,-Bdynamic
 
 # Include and Library paths

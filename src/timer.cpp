@@ -30,8 +30,8 @@ void Timer::write32(uint64_t offset, uint32_t val)
 	// mtime itself is read-only here -- nothing in this project needs to
 	// step it backward/forward by hand, only mtimecmp is ever armed.
 	switch (offset) {
-	case MTIMECMP_OFF:     mtimecmp = (mtimecmp & 0xFFFFFFFF00000000ull) | val; break;
-	case MTIMECMP_OFF + 4: mtimecmp = (mtimecmp & 0x00000000FFFFFFFFull) | ((uint64_t)val << 32); break;
+	case MTIMECMP_OFF:     mtimecmp = (mtimecmp & 0xFFFFFFFF00000000ull) | val; cmp_gen++; break;
+	case MTIMECMP_OFF + 4: mtimecmp = (mtimecmp & 0x00000000FFFFFFFFull) | ((uint64_t)val << 32); cmp_gen++; break;
 	default: break;
 	}
 }

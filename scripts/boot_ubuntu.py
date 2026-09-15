@@ -44,7 +44,7 @@ LOGIN_PROMPT = "doomv login:"
 # makes the check an assertion rather than a guess -- see LOGIN_MARKER.
 #
 # Waits are generous because they have to be: authenticating means crypt(),
-# which is not quick at ~6.6 MIPS, and anything typed during it is echoed by
+# which is not quick at emulated speed, and anything typed during it is echoed by
 # the tty before login has finished. A script's `sleep` counts instructions
 # (10,000 per "millisecond"), not host time, so these waits are the same
 # amount of guest work on every run however fast the host is.
@@ -72,6 +72,36 @@ sleep 45000
 # shell. Watching for "the script finished typing" instead would pass just as
 # happily on a rejected password, which is the one outcome worth catching.
 LOGIN_MARKER = "DOOMV-LOGIN-OK"
+
+
+# What a window boot types at the login prompt: the first half of
+# LOGIN_SCRIPT, with the same instruction-counted waits, and nothing after the
+# password -- the shell is the person's from there.
+AUTOLOGIN_SCRIPT = """\
+sleep 20000
+type root
+key 28 1
+key 28 0
+sleep 30000
+type doomv
+key 28 1
+key 28 0
+"""
+
+
+def autologin_args():
+    """Emulator arguments that log in as root once the login prompt is up.
+
+    Done from the host rather than by configuring getty's --autologin in the
+    image: the image is built over hours and is not something a boot script
+    should edit, and a headless boot or a --desktop session -- which starts
+    as root on its own -- is left exactly as it was. The typing is the
+    emulated keyboard's, on tty1, and waits for the serial getty's prompt.
+    """
+    script = BUILD / "logs/ubuntu-autologin.script"
+    script.parent.mkdir(parents=True, exist_ok=True)
+    script.write_text(AUTOLOGIN_SCRIPT, newline="\n")
+    return (f"-expect={LOGIN_PROMPT}", f"-input={script}")
 
 
 def ubuntu_command(image: Path, headless=False, extra=(), dtb="ubuntu.dtb"):
@@ -261,6 +291,8 @@ def main():
                         help="no window; the kernel log goes to this console")
     parser.add_argument("--login", action="store_true",
                         help="headless: log in through the emulated keyboard and exit")
+    parser.add_argument("--no-autologin", action="store_true",
+                        help="in the window, stop at the login prompt instead of logging in as root")
     parser.add_argument("--timeout", type=float, default=1800,
                         help="--login timeout in seconds (a systemd boot here is minutes)")
     parser.add_argument("--desktop", choices=DESKTOPS,
@@ -295,12 +327,17 @@ def main():
             print("Ctrl+Alt+G grabs the mouse.")
             run(ubuntu_command(image, headless=args.headless, dtb=f"ubuntu-{args.desktop}.dtb"))
         else:
+            extra = ()
             if not args.headless:
-                print("Ubuntu opens in the emulator window. Log in as root / doomv at the")
-                print("framebuffer console; Ctrl+Alt+F makes it full-window, Ctrl+Alt+G grabs")
-                print("the mouse. Close the window to exit.")
+                print("Ubuntu opens in the emulator window. Ctrl+Alt+F makes it full-window,")
+                print("Ctrl+Alt+G grabs the mouse. Close the window to exit.")
+                if args.no_autologin:
+                    print("Log in as root / doomv at the framebuffer console.")
+                else:
+                    print("It logs in as root by itself once the login prompt appears.")
+                    extra = autologin_args()
             print("A systemd boot takes minutes at this speed -- see the README's note on MIPS.")
-            run(ubuntu_command(image, headless=args.headless))
+            run(ubuntu_command(image, headless=args.headless, extra=extra))
     return 0
 
 

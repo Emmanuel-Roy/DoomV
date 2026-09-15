@@ -12,7 +12,7 @@ Registers::Registers()
 	std::memset(csr_counts, 0, sizeof(csr_counts));
 	for (int i = 0; i < 32; i++) { x[i] = 0; f[i] = 0.0; std::memset(v[i], 0, VLEN_BYTES); }
 	for (int i = 0; i < 4096; i++) csr[i] = 0;
-	for (int i = 0; i < HISTORY_SIZE; i++) history[i] = {0, 0, DecodedInstruction{}};
+	for (int i = 0; i < HISTORY_SIZE; i++) history[i] = {0, 0};
 }
 
 uint64_t Registers::read_x(int i) const
@@ -63,6 +63,7 @@ PrivMode Registers::get_priv() const
 void Registers::set_priv(PrivMode mode)
 {
 	priv = mode;
+	state_gen++;
 }
 
 uint64_t Registers::read_csr(uint16_t addr) const
@@ -73,6 +74,7 @@ uint64_t Registers::read_csr(uint16_t addr) const
 void Registers::write_csr(uint16_t addr, uint64_t value)
 {
 	csr[addr] = value;
+	state_gen++;
 	if (csr_log) csr_log->push_back(addr);
 }
 
@@ -156,21 +158,7 @@ void Registers::or_vxsat(uint8_t flag)
 	vxsat |= (flag & 0x1);
 }
 
-void Registers::record_history(uint64_t pc_val, uint32_t instr, const DecodedInstruction &decoded)
-{
-	history[history_ptr] = {pc_val, instr, decoded};
-	history_ptr = (history_ptr + 1) % HISTORY_SIZE;
-}
 
-const HistoryEntry &Registers::history_at(int index) const
-{
-	return history[index];
-}
-
-int Registers::history_pos() const
-{
-	return history_ptr;
-}
 
 void Registers::record_csr_access(uint16_t addr)
 {

@@ -311,11 +311,11 @@ The image is built in two stages by [mkrootfs.sh](../tools/linux/ubuntu/mkrootfs
 
 | Boot | Kernel command-line addition | Reaches |
 |---|---|---|
-| `boot.py ubuntu` | none | A login prompt on tty0 |
+| `boot.py ubuntu` | none | In the window, a root shell on tty1: the boot script types the login once getty asks. Headless, or with `--no-autologin`, the login prompt |
 | `boot.py ubuntu --desktop openbox`, `xfce` or `x` | `doomv.desktop=<kind>` | `doomv-desktop.service` starts Xorg on the framebuffer |
 | `boot.py ubuntu --install-desktops` | `init=/doomv-desktop-install` | Installs the X packages from a local repository, then powers off |
 
-X uses the fbdev driver on the `simple-framebuffer` aperture, and libinput reads the keyboard and mouse from `/dev/input/event0` and `event1`, configured statically. Guest time advances with instructions, not the wall clock, so these boots take real time. At about 6.6 MIPS, X paints after roughly 14 minutes for Openbox or bare X and 29 for XFCE. See the [Ubuntu guide](../tools/linux/ubuntu/README.md).
+X uses the fbdev driver on the `simple-framebuffer` aperture, and libinput reads the keyboard and mouse from `/dev/input/event0` and `event1`, configured statically. Guest time advances with instructions, not the wall clock, so these boots take real time. Measured at about 6.6 MIPS, before the work in [performance/](../performance/README.md), X painted after roughly 14 minutes for Openbox or bare X and 29 for XFCE; expect less now. See the [Ubuntu guide](../tools/linux/ubuntu/README.md).
 
 ## What Linux adds beyond DOOM
 

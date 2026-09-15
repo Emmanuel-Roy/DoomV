@@ -1,4 +1,6 @@
 #include "doom_system.hpp"
+#include "pmp.hpp"
+#include "mmu.hpp"
 #include "extensions.hpp"
 #include <iostream>
 #include <SDL2/SDL.h>
@@ -221,9 +223,45 @@ static bool filtered_here(const Registers &regs, uint16_t cfg)
 	return ((regs.read_csr(cfg) >> bit) & 1) != 0;
 }
 
-static bool minstret_counts(const Registers &regs)
+// Called only when the key has changed; the comparison itself is inline at
+// the call sites, since it runs on every step.
+void DoomSystem::refresh_counter_enables()
 {
-	return !(regs.read_csr(0x320) & 4) && !filtered_here(regs, 0x322);
+	counter_key = regs.state_gen + ExtensionsEpoch;
+	counts_instret = !(regs.read_csr(0x320) & 4) && !filtered_here(regs, 0x322);
+	counts_cycle = !(regs.read_csr(0x320) & 1) && !filtered_here(regs, 0x321);
+}
+
+// Interrupt checks are skipped while nothing that decides them has changed.
+//
+// check_and_take_interrupt is a function of the CSRs (mip's software-set
+// bits, mie, mideleg, hideleg, mstatus, vsstatus, hvip, hgeie, hgeip,
+// hstatus, menvcfg, henvcfg, stimecmp, vstimecmp, htimedelta), the privilege
+// and V, the IMSIC files, mtimecmp, the enabled extensions -- and mtime. Each
+// of the others bumps a generation when it changes, and mtime only grows, so
+// a check that found nothing stays true until one of those generations moves
+// or mtime reaches the next compare value above it. Until then the check
+// would come out the same, and taking the interrupt at the same step as
+// before is exactly what lock-step needs.
+bool DoomSystem::interrupt_may_be_due()
+{
+	Timer &timer = memory.get_timer();
+	const uint64_t key = regs.state_gen + memory.get_imsic_m().generation()
+	                   + memory.get_imsic_s().generation() + timer.cmp_generation() + ExtensionsEpoch;
+	const uint64_t now = timer.get_mtime();
+	if (key == irq_key && now < irq_deadline) return false;
+
+	uint64_t next = ~0ull;
+	const auto consider = [&](uint64_t at) { if (at > now && at < next) next = at; };
+	consider(timer.get_mtimecmp());
+	consider(regs.read_csr(0x14D));          // stimecmp
+	// vstimecmp is compared with mtime plus htimedelta, which can wrap; with
+	// an offset in play, look again at every tick rather than solve for it.
+	if (regs.read_csr(0x605) == 0) consider(regs.read_csr(0x24D));
+	else consider(now + 1);
+	irq_key = key;
+	irq_deadline = next;
+	return true;
 }
 
 void DoomSystem::step()
@@ -237,7 +275,8 @@ void DoomSystem::step()
 // filtered out in the current mode.
 void DoomSystem::clock_tick()
 {
-	if (!(regs.read_csr(0x320) & 1) && !filtered_here(regs, 0x321)) regs.bump_csr(0xB00);
+	if (regs.state_gen + ExtensionsEpoch != counter_key) refresh_counter_enables();
+	if (counts_cycle) regs.bump_csr(0xB00);
 	memory.tick_clock();
 }
 
@@ -271,7 +310,8 @@ void DoomSystem::run_wait()
 	int trap = 0;   // 2 illegal, 22 virtual instruction
 	for (;;) {
 		const bool timed_out = remaining == 0;
-		regs.minstret_increment = minstret_counts(regs);
+		if (regs.state_gen + ExtensionsEpoch != counter_key) refresh_counter_enables();
+		regs.minstret_increment = counts_instret;
 		if (core.wake_for_interrupt(regs, memory)) break;
 		if (kind != RiscvCore::Wait::Wfi && !core.reservation_held()) break;
 		if (timed_out) {
@@ -296,18 +336,65 @@ void DoomSystem::run_wait()
 	if (trap) step_committed = false;
 }
 
+// One halfword of an instruction fetch: translate_or_trap and read16, as
+// the fetch has always been, or the same answer from a cached page.
+//
+// A page is cached once a fetch from it has succeeded through the full path
+// and the page is one the architecture would answer identically for every
+// fetch inside it: no second translation stage, RAM from end to end, and --
+// with PMP -- one entry deciding the whole page (pmp::page_permits). The
+// entry holds the translation and the permission, never the bytes: those are
+// read from RAM on every fetch, so code that is written to is fetched as
+// written. It is dropped by anything that could change the answer: a CSR
+// write, a change of privilege or V (both regs.state_gen, which covers satp,
+// the PMP CSRs and mstatus), a TLB flush (sfence.vma, and everything that
+// flushes the TLB for its own reasons), or a change to the extensions.
+bool DoomSystem::fetch16(uint64_t vaddr, uint16_t &out)
+{
+	const uint64_t key = regs.state_gen + mmu_tlb_generation() + ExtensionsEpoch;
+	const uint64_t vpage = vaddr >> 12;
+	const unsigned offset = (unsigned)(vaddr & 0xFFF);
+	FetchPage &e = fetch_cache[vpage & (FETCH_CACHE_SIZE - 1)];
+	if (e.vpage == vpage && e.key == key && offset <= 0xFFE) {
+		std::memcpy(&out, e.host + offset, sizeof(out));
+		return true;
+	}
+
+	uint64_t paddr;
+	if (!core.translate_or_trap(regs, memory, vaddr, AccessType::Fetch, paddr, 2)) return false;
+	out = memory.read16(paddr);
+
+	const uint64_t ppage = paddr & ~0xFFFull;
+	if (offset <= 0xFFE && !(Extensions.H && regs.get_virt()) && Memory::in_ram(ppage, 0x1000)
+	    && (!Extensions.SMPMP
+	        || pmp::page_permits(regs, ppage, pmp::ACC_FETCH, (uint8_t)regs.get_priv()))) {
+		e.vpage = vpage;
+		e.key = key;
+		e.host = memory.ram_data() + (ppage - Memory::RAM_BASE);
+	}
+	return true;
+}
+
 void DoomSystem::step_execute()
 {
 	if (debugger.halted) return;
 	const uint64_t traps_before = core.trap_count;
 	step_committed = false;
 	step_decoded = false;
-	regs.minstret_increment = minstret_counts(regs);
+	if (regs.state_gen + ExtensionsEpoch != counter_key) refresh_counter_enables();
+	regs.minstret_increment = counts_instret;
 
 	// In lenient lock-step the reference decides when an interrupt is taken
 	// (see traced_step), so the machine's own devices never interrupt by
 	// themselves. Strict lock-step takes them as ever, and checks the timing.
-	if (!(lockstep_active && !lockstep_strict) && core.check_and_take_interrupt(regs, memory)) {
+	// The same test interrupt_may_be_due opens with, inline: on most steps
+	// it is all there is.
+	const bool irq_unchanged = regs.state_gen + memory.get_imsic_m().generation()
+	                           + memory.get_imsic_s().generation()
+	                           + memory.get_timer().cmp_generation() + ExtensionsEpoch == irq_key
+	                        && memory.get_timer().get_mtime() < irq_deadline;
+	if (!(lockstep_active && !lockstep_strict) && !irq_unchanged && interrupt_may_be_due()
+	    && core.check_and_take_interrupt(regs, memory)) {
 		// pc has already been redirected into the trap handler -- this
 		// "step" was the interrupt itself, not whatever instruction was
 		// about to execute at the old pc.
@@ -316,7 +403,7 @@ void DoomSystem::step_execute()
 	}
 
 	uint64_t pc = regs.get_pc();
-	if (debugger.should_halt(pc, false)) {
+	if (debugger.may_halt() && debugger.should_halt(pc, false)) {
 		console_drain();
 		debugger.dump_log(regs, memory, "crash.log");
 		if (has_sig_range) debugger.dump_signature(memory, sig_begin, sig_end, sig_path.c_str());
@@ -342,21 +429,20 @@ void DoomSystem::step_execute()
 		return;
 	}
 
-	uint64_t fetch_paddr;
-	if (!core.translate_or_trap(regs, memory, pc, AccessType::Fetch, fetch_paddr, 2)) {
+	uint16_t half;
+	if (!fetch16(pc, half)) {
 		// A page fault redirected pc into the trap handler already --
 		// nothing more to do for this step.
 		memory.step_instructions(1);
 		return;
 	}
-	uint32_t instr = memory.read16(fetch_paddr);
+	uint32_t instr = half;
 	if ((instr & 0x3) == 0x3) {
-		uint64_t hi_paddr;
-		if (!core.translate_or_trap(regs, memory, pc + 2, AccessType::Fetch, hi_paddr, 2)) {
+		if (!fetch16(pc + 2, half)) {
 			memory.step_instructions(1);
 			return;
 		}
-		instr |= (uint32_t)memory.read16(hi_paddr) << 16;
+		instr |= (uint32_t)half << 16;
 	}
 	step_decoded = true;
 	DispatchResult result = decoder.decode_and_dispatch(pc, instr);
@@ -370,7 +456,7 @@ void DoomSystem::step_execute()
 	// it executed, such as a page fault or an ecall.
 	step_committed = !result.illegal && core.trap_count == traps_before;
 	if (core.wait_request != RiscvCore::Wait::None) run_wait();
-	regs.record_history(pc, recorded_instr, result.decoded);
+	regs.record_history(pc, recorded_instr);
 
 	// A test that signals completion through HTIF stops here, with its
 	// signature dumped exactly as a breakpoint would. This is what lets a
@@ -397,7 +483,7 @@ void DoomSystem::step_execute()
 		return;
 	}
 
-	if (debugger.should_halt(pc, result.illegal)) {
+	if (debugger.may_halt() && debugger.should_halt(pc, result.illegal)) {
 		if (result.illegal) {
 			// Remember what to raise on resume. recorded_instr is the
 			// encoding as actually fetched (masked to 16 bits for a
@@ -493,11 +579,15 @@ void DoomSystem::publish_snapshot()
 	snap.pc = regs.get_pc();
 	snap.halted = debugger.halted;
 
+	const auto entry = [&](int index) {
+		const Registers::HistoryRecord &h = regs.history_at(index);
+		return HistoryEntry{ h.pc, h.instr, decoder.describe(h.instr) };
+	};
 	int active_idx = (regs.history_pos() + Registers::HISTORY_SIZE - 1) % Registers::HISTORY_SIZE;
-	snap.active = regs.history_at(active_idx);
+	snap.active = entry(active_idx);
 	for (int i = 0; i < 13; i++) {
 		int pos = (regs.history_pos() + i) % Registers::HISTORY_SIZE;
-		snap.trace[i] = regs.history_at(pos);
+		snap.trace[i] = entry(pos);
 	}
 
 	uint16_t top[Snapshot::CSR_PANEL_SIZE];

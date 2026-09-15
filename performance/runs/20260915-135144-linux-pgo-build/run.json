@@ -1,0 +1,15 @@
+{
+  "time": "20260915-135144",
+  "label": "PGO build",
+  "workload": "linux",
+  "steps": 300000000,
+  "seconds": 8.623,
+  "mips": 34.792,
+  "crash_log_sha256": "f1e71792e77dc0252c20c00aaef01f6728c43c7f5a1b04e2d6b7f72d3ad12edf",
+  "exe": "Z:\\Code\\Dev\\DoomV\\riscv_doom.exe",
+  "exe_sha256": "c6302764fc0387519b4c4fa8ead38f848ad569b647320850a765a4f4b36527f3",
+  "commit": "eaa9628",
+  "dirty": true,
+  "host": "AMD64 Family 25 Model 97 Stepping 2, AuthenticAMD / Windows 10",
+  "profiled": false
+}

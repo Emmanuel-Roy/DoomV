@@ -74,6 +74,9 @@ public:
 	Decoder(RiscvCore &core, Registers &regs, Memory &mem);
 
 	DispatchResult decode_and_dispatch(uint64_t pc, uint32_t raw_instr);
+	// What decode_and_dispatch would decode `raw` (as the history records
+	// it: 16 bits for a compressed instruction) to, executing nothing.
+	DecodedInstruction describe(uint32_t raw) const;
 
 private:
 	RiscvCore &core;

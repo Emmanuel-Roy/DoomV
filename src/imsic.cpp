@@ -33,6 +33,7 @@ void Imsic::write_indirect(uint64_t iselect, uint64_t value)
 	else if (iselect == SEL_EITHRESHOLD) eithreshold = (uint32_t)value;
 	else if (iselect >= SEL_EIP0 && iselect <= SEL_EIP63) eip[iselect - SEL_EIP0] = (uint32_t)value;
 	else if (iselect >= SEL_EIE0 && iselect <= SEL_EIE63) eie[iselect - SEL_EIE0] = (uint32_t)value;
+	refresh();
 }
 
 bool Imsic::heard(uint32_t id) const
@@ -43,29 +44,36 @@ bool Imsic::heard(uint32_t id) const
 	return eithreshold == 0 || id < eithreshold;
 }
 
-uint32_t Imsic::topei_value() const
+void Imsic::refresh()
 {
-	if (!eidelivery) return 0;
+	gen++;
+	top = 0;
+	if (!eidelivery) return;
 	for (int w = 0; w < NUM_WORDS; w++) {
 		if (!(eip[w] & eie[w])) continue; // whole-word fast skip
 		for (int b = 0; b < 32; b++) {
 			uint32_t id = (uint32_t)(w * 32 + b);
-			if (heard(id)) return (id << 16) | id;
+			if (heard(id)) { top = (id << 16) | id; return; }
 		}
 	}
-	return 0;
+}
+
+uint32_t Imsic::topei_value() const
+{
+	return top;
 }
 
 void Imsic::claim()
 {
-	uint32_t top = topei_value();
 	if (top == 0) return;
 	uint32_t id = top & 0xFFFF;
 	eip[id / 32] &= ~(1u << (id % 32));
+	refresh();
 }
 
 void Imsic::set_pending(uint32_t id)
 {
 	if (id == 0 || id >= (uint32_t)NUM_WORDS * 32) return; // not an implemented identity -- ignored, per spec
 	eip[id / 32] |= (1u << (id % 32));
+	refresh();
 }

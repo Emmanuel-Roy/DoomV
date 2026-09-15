@@ -299,6 +299,18 @@ The harness lives in `tools/verification/`. `tests/differential/` is the
 hand-written suites, `tests/archtest/` drives riscv-arch-test, and
 `tests/suites/` runs the precompiled third-party suites.
 
+## Performance
+
+An interpreter, one instruction at a time, so that every instruction can be
+lock-stepped against Sail. Within that, [performance/](performance/README.md)
+measures and profiles it: `bench.py` runs a Linux boot or DOOM's demo to an
+exact step count and records the run, with a sampling histogram of where the
+host's time goes, and requires the run to end in the same `crash.log` as the
+baseline -- the proof that an optimization changed speed and nothing else.
+Caching the interrupt check and the instruction fetch took the Linux boot from
+10.5 to 29.6 MIPS and DOOM from 16.6 to 37.9; `performance/pgo.py` builds with
+profile-guided optimization for 36.3 and 50.3.
+
 ## Code layout
 
 ```
@@ -655,7 +667,7 @@ python scripts/build.py all
 python scripts/boot.py doom
 python scripts/boot.py linux
 python scripts/boot.py linux --smoke
-python scripts/boot.py ubuntu
+python scripts/boot.py ubuntu                 # the window logs in as root by itself
 python scripts/boot.py ubuntu --login
 
 # Ubuntu desktops: install all three once (hours), then pick one per boot.

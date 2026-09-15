@@ -20,7 +20,8 @@ python scripts/build.py all
 python scripts/boot.py doom
 python scripts/boot.py linux
 python scripts/boot.py linux --smoke
-python scripts/boot.py ubuntu
+python scripts/boot.py ubuntu                 # window; logs in as root once getty asks
+python scripts/boot.py ubuntu --no-autologin  # window; stops at the login prompt
 python scripts/boot.py ubuntu --login
 
 # Desktops: install all three once (DoomV runs the install, for hours), then

@@ -349,6 +349,24 @@ DecodedInstruction Decoder::decode(uint32_t raw_instr, Extension ext) const
 	}
 }
 
+DecodedInstruction Decoder::describe(uint32_t raw) const
+{
+	DecodedInstruction instr;
+	if ((raw & 0x3) != 0x3) {
+		if (Extensions.C) {
+			instr = decode_compressed((uint16_t)raw);
+		} else {
+			instr = DecodedInstruction{};
+			instr.ext = Extension::ILLEGAL;
+			instr.length = 2;
+		}
+	} else {
+		instr = decode(raw, classify(raw));
+	}
+	instr.raw = raw;
+	return instr;
+}
+
 DispatchResult Decoder::decode_and_dispatch(uint64_t pc, uint32_t raw_word)
 {
 	// Bit[1:0] of the first halfword being != 0b11 is what marks an

@@ -40,6 +40,9 @@ enum class AccessType : uint8_t {
 // risk of having a cache at all -- a stale entry is a guest reading another
 // process's memory, silently and much later.
 void mmu_tlb_flush();
+// Bumped by every mmu_tlb_flush, so a cache holding translations -- the
+// fetch cache in DoomSystem -- is flushed with the TLB.
+uint64_t mmu_tlb_generation();
 
 // Sv39/48/57 address translation.
 //

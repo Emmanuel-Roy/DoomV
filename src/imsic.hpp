@@ -35,9 +35,21 @@ public:
 	void set_pending(uint32_t id);
 
 	bool delivery_enabled() const { return eidelivery; }
-	bool aggregate_pending() const { return eidelivery && topei_value() != 0; }
+	bool aggregate_pending() const { return top != 0; }
+
+	// Bumped by every change to the file's state, so a caller that decided
+	// "nothing pending" can tell when that decision has gone stale.
+	uint64_t generation() const { return gen; }
 
 private:
+	// topei, recomputed whenever eidelivery, eithreshold, eip or eie
+	// changes -- every one of which happens in a member below. It used to
+	// be rescanned, 64 words at a time, on every read, and compute_mip reads
+	// it before every instruction: a quarter of a Linux boot's host time.
+	uint32_t top = 0;
+	uint64_t gen = 0;
+	void refresh();
+
 	bool eidelivery;
 	uint32_t eithreshold;
 	uint32_t eip[NUM_WORDS];

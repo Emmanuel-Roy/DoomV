@@ -80,6 +80,12 @@ void write_addr(Registers &regs, uint16_t csr, uint64_t value);
 // Returns true if the access is permitted.
 bool check(Registers &regs, uint64_t paddr, unsigned size, int access, uint8_t priv);
 
+// Whether every access of `access` that lies inside the 4KB page at
+// `page` is permitted at `priv` -- so that check() would answer true for
+// each of them. False when it cannot say so, including when an entry
+// covers only part of the page, which is not the same as denying.
+bool page_permits(Registers &regs, uint64_t page, int access, uint8_t priv);
+
 // access values, matching AccessType's ordering without depending on it
 // (mmu.hpp includes this file, not the other way round).
 enum { ACC_FETCH = 0, ACC_LOAD = 1, ACC_STORE = 2 };

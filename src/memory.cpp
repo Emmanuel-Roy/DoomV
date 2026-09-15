@@ -360,6 +360,15 @@ void Memory::check_tohost()
 void Memory::write32(uint64_t addr, uint32_t val)
 {
 	StoreCapture capture(*this, addr, val, 4);
+	// RAM first, as read32 does: most stores are to RAM, and they used to
+	// test every device window and then land a byte at a time through
+	// write8. The tohost check is the one thing a RAM store does besides
+	// storing, and it stays.
+	if (addr >= RAM_BASE && addr <= RAM_BASE + RAM_SIZE + WAD_SIZE - 4) {
+		std::memcpy(&ram[addr - RAM_BASE], &val, sizeof(val));
+		if (tohost_addr && addr == tohost_addr + 4) check_tohost();
+		return;
+	}
 	// Unlike the byte-addressable devices below (RAM/framebuffer/debug
 	// putchar, all handled through write8), these are register-file-style
 	// devices whose writes need to land atomically (e.g. setipnum's
@@ -495,16 +504,6 @@ void Memory::push_mouse_button(int doom_bit, bool pressed)
 		mouse_clicked |= (1u << doom_bit);
 	} else {
 		mouse_buttons &= ~(1u << doom_bit);
-	}
-}
-
-void Memory::step_instructions(uint32_t count)
-{
-	instr_count += count;
-	ms_accum += count;
-	while (ms_accum >= INSTR_PER_MS) {
-		ms_accum -= INSTR_PER_MS;
-		tick_counter++;
 	}
 }
 

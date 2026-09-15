@@ -59,8 +59,10 @@ boots Linux is that it can run the distribution's own tooling. If DoomV can
 configure a hundred Ubuntu packages then it is running real riscv64 userspace
 under real load, which is a far stronger statement than any conformance suite
 makes -- and if it cannot, that is a bug worth finding. Expect it to take a
-long while -- a Linux boot measures about 6.6 MIPS
-(`tools/verification/bench_boot.sh`), and this is a great deal of dpkg.
+long while -- a Linux boot measured about 6.6 MIPS when stage 2 was built
+(`tools/verification/bench_boot.sh` measures yours, and
+[performance/](../../../performance/README.md) records what has changed
+since), and this is a great deal of dpkg.
 
 Stage 2 is unattended, and it took three separate fixes to make that true.
 The guest powers itself off through SBI SRST and the `sifive,test0` device in
@@ -125,7 +127,8 @@ install.
 ## Booting
 
 ```
-python scripts/boot.py ubuntu            # window, systemd, log in as root
+python scripts/boot.py ubuntu            # window, systemd, logs in as root by itself
+python scripts/boot.py ubuntu --no-autologin  # window, stop at the login prompt
 python scripts/boot.py ubuntu --no-build # skip the kernel rebuild
 python scripts/boot.py ubuntu --headless # no window; kernel log on stdout
 python scripts/boot.py ubuntu --login    # headless self-check, see below
@@ -142,7 +145,15 @@ emulated keyboard**, so it exercises the virtio-input device and the VT
 layer rather than just the boot. It leaves `build/logs/ubuntu-login.log` and
 a framebuffer dump beside it.
 
-Log in as `root` / `doomv`. That opens a window, and with `FB_SIMPLE` in the
+In the window it logs itself in: once getty prints `doomv login:`, the
+boot script types `root` and `doomv` through the emulated keyboard, the same
+way `--login` does, and the shell on tty1 is yours. The waits count
+instructions, so the login lands at the same point in every boot. The image
+is not changed for this -- getty still asks, a headless boot still stops at
+the prompt, and `--no-autologin` stops there in the window too. A `--desktop`
+session needs none of it: its service starts X as root without a login.
+
+The account is `root` / `doomv`. The window, with `FB_SIMPLE` in the
 kernel and the `framebuffer@50000000` node in the device tree the console is
 a real 1168x1056 framebuffer rather than a serial log -- Ubuntu being
 *displayed* by the emulator, not merely logged by it. Pass `-ng` for the log
@@ -250,12 +261,14 @@ heartbeat produced no output at all. Anything scripted inside a guest that
 means to wait for a wall-clock interval has to be scaled, or keyed off work
 done rather than time passed.
 
-**Speed.** A Linux boot measures about 6.6 MIPS -- run
-`tools/verification/bench_boot.sh` to check it on your machine -- so a
-systemd boot that takes two seconds on hardware takes minutes here. The
-figure is worth measuring rather than assuming: it was 1.67 MIPS before a
-TLB, a `read16` fast path and a PMP region cache, which is a 4x difference
-in how long anything on this page takes. That is expected, not a fault, and
+**Speed.** A Linux boot measured about 6.6 MIPS when this page was
+written, and the initramfs boot in [performance/](../../../performance/README.md)
+now runs at about 30 MIPS, or 36 with its PGO build -- run
+`tools/verification/bench_boot.sh` to check yours -- so a systemd boot that
+takes two seconds on hardware still takes minutes here. The figure is worth
+measuring rather than assuming: it was 1.67 MIPS before a TLB, a `read16` fast
+path and a PMP region cache, and the timings quoted on this page were taken at
+6.6. That is expected, not a fault, and
 it is why `-ng` exists for the test suites — but for this image you want the
 window, since the point is to log in and look around.
 
@@ -319,6 +332,6 @@ byte stream, and systemd colourises unit names -- `Started
 getty@tty1.service` is really `Started \e[0;1;39mgetty@tty1.service`, so a
 needle spanning the space never fires and the script silently sends
 nothing. `doomv login:` is contiguous and safe. And the waits have to be
-generous: authenticating a password means `crypt()`, which at 6.6 MIPS is
-not quick, and typing during it gets echoed by the tty before `login` has
+generous: authenticating a password means `crypt()`, which at emulated
+speed is not quick, and typing during it gets echoed by the tty before `login` has
 finished, which looks alarming and is harmless.

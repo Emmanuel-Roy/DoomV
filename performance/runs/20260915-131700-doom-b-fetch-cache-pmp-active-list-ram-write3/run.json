@@ -1,0 +1,15 @@
+{
+  "time": "20260915-131700",
+  "label": "B: fetch cache, pmp active list, ram write32",
+  "workload": "doom",
+  "steps": 1000000000,
+  "seconds": 29.018,
+  "mips": 34.461,
+  "crash_log_sha256": "3d73dac132f396aa505f0bc0ca70860519d439b38267eadb95954786cf97ee99",
+  "exe": "Z:\\Code\\Dev\\DoomV\\riscv_doom.exe",
+  "exe_sha256": "0970c8b8d1a4b70bf56c38ef42cf4dc5be93eb2d632604f148964579d59c595d",
+  "commit": "eaa9628",
+  "dirty": true,
+  "host": "AMD64 Family 25 Model 97 Stepping 2, AuthenticAMD / Windows 10",
+  "profiled": false
+}

@@ -156,7 +156,7 @@ void Debugger::dump_log(const Registers &regs, Memory &mem, const char *path)
 
 	int pos = regs.history_pos();
 	for (int i = 0; i < Registers::HISTORY_SIZE; i++) {
-		const HistoryEntry &h = regs.history_at((pos + i) % Registers::HISTORY_SIZE);
+		const Registers::HistoryRecord &h = regs.history_at((pos + i) % Registers::HISTORY_SIZE);
 		file << std::hex << std::setw(16) << std::setfill('0') << h.pc
 		     << ": " << std::setw(8) << std::setfill('0') << h.instr << "\n";
 	}

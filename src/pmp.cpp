@@ -91,14 +91,32 @@ struct Decoded {
 unsigned cache_gen = 0;      // bumped by every pmpcfg/pmpaddr write
 unsigned cache_built = ~0u;  // generation the cache was built from
 Decoded cache[ENTRIES];
+// The enabled entries' indices, in priority order. A boot leaves most of the
+// sixteen off, and every access used to test all of them.
+unsigned active[ENTRIES];
+unsigned n_active = 0;
 
 inline void rebuild_cache(Registers &regs)
 {
+	n_active = 0;
 	for (unsigned i = 0; i < ENTRIES; i++) {
 		cache[i].on = region_of(regs, i, cache[i].lo, cache[i].hi);
 		cache[i].cfg = cfg_byte(regs, i);
+		if (cache[i].on) active[n_active++] = i;
 	}
 	cache_built = cache_gen;
+}
+
+inline bool permits(uint8_t cfg, int access, uint8_t priv)
+{
+	// M-mode ignores permissions on unlocked entries -- the lock bit
+	// is precisely what makes an entry bind M-mode too.
+	if (priv == (uint8_t)3 && !(cfg & CFG_L)) return true;
+	switch (access) {
+	case ACC_FETCH: return (cfg & CFG_X) != 0;
+	case ACC_LOAD:  return (cfg & CFG_R) != 0;
+	default:        return (cfg & CFG_W) != 0;
+	}
 }
 
 } // namespace
@@ -187,30 +205,38 @@ bool check(Registers &regs, uint64_t paddr, unsigned size, int access, uint8_t p
 
 	if (cache_built != cache_gen) rebuild_cache(regs);
 
-	for (unsigned i = 0; i < ENTRIES; i++) {
-		if (!cache[i].on) continue;
-		const uint64_t lo = cache[i].lo, hi = cache[i].hi;
+	for (unsigned k = 0; k < n_active; k++) {
+		const Decoded &e = cache[active[k]];
+		const uint64_t lo = e.lo, hi = e.hi;
 		bool hit_first = (first >= lo && first < hi);
 		bool hit_last  = (last  >= lo && last  < hi);
 		if (!hit_first && !hit_last) continue;
 		if (hit_first != hit_last) return false;   // straddles this region's edge
-
-		const uint8_t cfg = cache[i].cfg;
-		// M-mode ignores permissions on unlocked entries -- the lock bit
-		// is precisely what makes an entry bind M-mode too.
-		if (priv == (uint8_t)3 && !(cfg & CFG_L)) return true;
-
-		switch (access) {
-		case ACC_FETCH: return (cfg & CFG_X) != 0;
-		case ACC_LOAD:  return (cfg & CFG_R) != 0;
-		default:        return (cfg & CFG_W) != 0;
-		}
+		return permits(e.cfg, access, priv);
 	}
 
 	// No entry matched. M-mode may go anywhere; everything else is denied.
 	// That default is the one people get backwards: with no PMP entries
 	// configured at all, S and U mode can reach *nothing*, which is why a
 	// bare-metal test that drops privilege has to program an entry first.
+	return priv == (uint8_t)3;
+}
+
+bool page_permits(Registers &regs, uint64_t page, int access, uint8_t priv)
+{
+	if (cache_built != cache_gen) rebuild_cache(regs);
+	const uint64_t end = page + 0x1000;
+	// The first enabled entry touching the page decides. If it covers the
+	// whole page, it is also the first entry any access inside the page
+	// matches, with the same answer. If it covers only part, an access in
+	// the uncovered part would fall to a later entry, so no page-wide
+	// answer exists.
+	for (unsigned k = 0; k < n_active; k++) {
+		const Decoded &e = cache[active[k]];
+		if (e.hi <= page || e.lo >= end) continue;
+		if (e.lo <= page && e.hi >= end) return permits(e.cfg, access, priv);
+		return false;
+	}
 	return priv == (uint8_t)3;
 }
 

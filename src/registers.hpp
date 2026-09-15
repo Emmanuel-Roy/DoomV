@@ -63,6 +63,12 @@ public:
 	PrivMode get_priv() const;
 	void set_priv(PrivMode mode);
 
+	// Bumped by every CSR write and every change of privilege or V. Caches of
+	// decisions that depend only on those -- whether an interrupt could be
+	// taken, which counters count, whether a code page may be fetched from --
+	// compare it with the value they were made under.
+	uint64_t state_gen = 0;
+
 	// Virtualisation mode (the H extension's V bit). Orthogonal to the
 	// privilege level rather than another value of it: the hart is in one
 	// of M, HS, VS, HU or VU, which is (priv, virt) rather than a single
@@ -74,7 +80,7 @@ public:
 	// M-mode is never virtual, so set_virt(true) is only ever meaningful
 	// alongside S or U.
 	bool get_virt() const { return virt; }
-	void set_virt(bool v) { virt = v; }
+	void set_virt(bool v) { virt = v; state_gen++; }
 
 	uint64_t read_csr(uint16_t addr) const;
 	void write_csr(uint16_t addr, uint64_t value);
@@ -119,9 +125,17 @@ public:
 	void set_vxsat(uint8_t flag);
 	void or_vxsat(uint8_t flag);
 
-	void record_history(uint64_t pc, uint32_t instr, const DecodedInstruction &decoded);
-	const HistoryEntry &history_at(int index) const;
-	int history_pos() const;
+	// The last HISTORY_SIZE instructions, as pc and encoding only. It is
+	// written before every instruction, so it holds no more than crash.log
+	// prints; the dashboard decodes the few entries it shows.
+	struct HistoryRecord { uint64_t pc; uint32_t instr; };
+	void record_history(uint64_t pc, uint32_t instr)
+	{
+		history[history_ptr] = { pc, instr };
+		history_ptr = (history_ptr + 1) % HISTORY_SIZE;
+	}
+	const HistoryRecord &history_at(int index) const { return history[index]; }
+	int history_pos() const { return history_ptr; }
 
 	// Which CSRs the guest is busy with, for the dashboard's CSRs panel.
 	//
@@ -185,7 +199,7 @@ private:
 	uint8_t vxrm;
 	uint8_t vxsat;
 
-	HistoryEntry history[HISTORY_SIZE];
+	HistoryRecord history[HISTORY_SIZE];
 	int history_ptr;
 
 	uint16_t csr_window[CSR_WINDOW];  // ring of recent accesses

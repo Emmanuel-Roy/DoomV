@@ -1,0 +1,47 @@
+linux, 300,000,000 steps, 17.985 MIPS while sampled (sampling every 2 ms slows the run a little)
+
+ samples  share  function
+
+    1090  17.4%  ##################################################  pmp::check(Registers&, unsigned long long, unsigned int, int, unsigned char)
+     978  15.6%  #############################################  RiscvCore::translate_or_trap(Registers&, Memory&, unsigned long long, AccessType, unsigned long long&, unsigned int)
+     816  13.0%  #####################################  mmu_translate(Registers&, Memory&, unsigned long long, AccessType, unsigned long long&, unsigned long long&, unsigned long long&, bool)
+     665  10.6%  ###############################  RiscvCore::exec_32I(DecodedInstruction const&, Registers&, Memory&)
+     640  10.2%  #############################  DoomSystem::step_execute()
+     391   6.2%  ##################  Decoder::decode_and_dispatch(unsigned long long, unsigned int)
+     274   4.4%  #############  Memory::read16(unsigned long long)
+     198   3.2%  #########  DoomSystem::refresh_counter_enables()
+     171   2.7%  ########  DoomSystem::interrupt_may_be_due()
+     167   2.7%  ########  DoomSystem::cpu_loop()
+     131   2.1%  ######  Memory::write8(unsigned long long, unsigned char)
+     128   2.0%  ######  Registers::read_x(int) const
+     100   1.6%  #####  Memory::is_backed(unsigned long long, unsigned int) const
+      65   1.0%  ###  Memory::read64(unsigned long long)
+      57   0.9%  ###  Memory::write32(unsigned long long, unsigned int)
+      55   0.9%  ###  Registers::write_x(int, unsigned long long)
+      50   0.8%  ##  RiscvCore::store_virtual(Registers&, Memory&, unsigned long long, unsigned int, unsigned long long)
+      46   0.7%  ##  Registers::get_priv() const
+      44   0.7%  ##  Registers::read_csr(unsigned short) const
+      36   0.6%  ##  pointer_mask_len(Registers&, PrivMode, bool, bool)
+      32   0.5%  #  RiscvCore::load_virtual(Registers&, Memory&, unsigned long long, unsigned int, unsigned long long&)
+      27   0.4%  #  Memory::read32(unsigned long long)
+      26   0.4%  #  Registers::get_pc() const
+      18   0.3%  #  Memory::write64(unsigned long long, unsigned long long)
+      12   0.2%  #  Registers::set_pc(unsigned long long)
+      11   0.2%  #  Decoder::decode_compressed(unsigned short) const
+       6   0.1%  #  Timer::tick(unsigned int)
+       5   0.1%  #  mmu_tlb_flush()
+       4   0.1%  #  Decoder::decode_i(unsigned int, Extension) const
+       4   0.1%  #  RiscvCore::exec_32M(DecodedInstruction const&, Registers&, Memory&)
+       4   0.1%  #  Registers::record_csr_access(unsigned short)
+       3   0.0%  #  Memory::read8(unsigned long long)
+       3   0.0%  #  RiscvCore::exec_32ZICSR(DecodedInstruction const&, Registers&, Memory&)
+       3   0.0%  #  Decoder::classify(unsigned int) const
+       3   0.0%  #  RiscvCore::csr_access_permitted(Registers&, unsigned short, bool)
+       3   0.0%  #  RiscvCore::exec_32A(DecodedInstruction const&, Registers&, Memory&)
+       3   0.0%  #  [ntdll.dll]
+       2   0.0%  #  RiscvCore::exec_ZBB(DecodedInstruction const&, Registers&, Memory&)
+       2   0.0%  #  Decoder::decode(unsigned int, Extension) const
+       1   0.0%  #  Registers::write_csr(unsigned short, unsigned long long)
+       3   0.0%  (the other 3 functions)
+
+6277 samples

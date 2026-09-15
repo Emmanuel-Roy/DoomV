@@ -24,6 +24,7 @@ public:
 
 	uint64_t get_mtime() const { return mtime; }
 	uint64_t get_mtimecmp() const { return mtimecmp; }
+	uint64_t cmp_generation() const { return cmp_gen; }
 	bool mtip_pending() const { return mtime >= mtimecmp; }
 
 	uint32_t read32(uint64_t offset) const;
@@ -32,4 +33,5 @@ public:
 private:
 	uint64_t mtime;
 	uint64_t mtimecmp;
+	uint64_t cmp_gen = 0;   // bumped by every mtimecmp write
 };

@@ -395,9 +395,17 @@ bool gstage_translate(Registers &regs, Memory &mem, uint64_t gpa, AccessType typ
 }
 }
 
+namespace { uint64_t tlb_generation = 0; }
+
 void mmu_tlb_flush()
 {
 	for (unsigned i = 0; i < TLB_SIZE; i++) tlb[i].key = 0;
+	tlb_generation++;
+}
+
+uint64_t mmu_tlb_generation()
+{
+	return tlb_generation;
 }
 
 // Pointer masking (Smnpm / Ssnpm / Sspm).

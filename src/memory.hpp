@@ -214,6 +214,13 @@ public:
 
 	uint8_t  read8(uint64_t addr);
 	uint16_t read16(uint64_t addr);
+	// RAM's bytes, for a caller that has already established an address is
+	// RAM (DoomSystem's fetch cache). RAM_BASE is index 0.
+	const uint8_t *ram_data() const { return ram.data(); }
+	static bool in_ram(uint64_t addr, uint64_t size)
+	{
+		return addr >= RAM_BASE && size <= RAM_SIZE + WAD_SIZE && addr - RAM_BASE <= RAM_SIZE + WAD_SIZE - size;
+	}
 	uint32_t read32(uint64_t addr);
 	uint64_t read64(uint64_t addr);
 	void     write8(uint64_t addr, uint8_t val);
@@ -296,7 +303,15 @@ public:
 	bool htif_busy = false;   // see Memory::check_tohost
 
 	static constexpr uint32_t INSTR_PER_MS = 1200;
-	void step_instructions(uint32_t count);
+	void step_instructions(uint32_t count)
+	{
+		instr_count += count;
+		ms_accum += count;
+		while (ms_accum >= INSTR_PER_MS) {
+			ms_accum -= INSTR_PER_MS;
+			tick_counter++;
+		}
+	}
 	// Steps taken so far, a trap or an interrupt counting as one: Sail's step
 	// number. Not guest time -- mtime is the clock, and it advances every
 	// second step (DoomSystem::clock_tick).

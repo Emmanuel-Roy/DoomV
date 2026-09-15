@@ -234,6 +234,28 @@ private:
 	void clock_tick();
 	void run_wait();
 
+	// Whether check_and_take_interrupt could find anything it did not find
+	// the last time it looked. See interrupt_may_be_due.
+	uint64_t irq_key = ~0ull;
+	uint64_t irq_deadline = 0;
+	bool interrupt_may_be_due();
+	// mcountinhibit and the Smcntrpmf filters for the mode the hart is in,
+	// decided once per change of CSRs or privilege rather than every step.
+	uint64_t counter_key = ~0ull;
+	bool counts_instret = false, counts_cycle = false;
+	void refresh_counter_enables();
+
+	// Instruction fetch, a halfword at a time, with a small cache of code
+	// pages that are plain RAM and fetchable as a whole. See fetch16.
+	struct FetchPage {
+		uint64_t vpage = ~0ull;
+		uint64_t key = ~0ull;
+		const uint8_t *host = nullptr;
+	};
+	static constexpr unsigned FETCH_CACHE_SIZE = 256;
+	FetchPage fetch_cache[FETCH_CACHE_SIZE];
+	bool fetch16(uint64_t vaddr, uint16_t &out);
+
 	// lockstep.cpp
 	void traced_step();
 	void lockstep_end();
