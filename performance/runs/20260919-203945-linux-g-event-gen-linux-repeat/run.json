@@ -1,0 +1,15 @@
+{
+  "time": "20260919-203945",
+  "label": "G: event gen (linux repeat)",
+  "workload": "linux",
+  "steps": 300000000,
+  "seconds": 6.033,
+  "mips": 49.723,
+  "crash_log_sha256": "f1e71792e77dc0252c20c00aaef01f6728c43c7f5a1b04e2d6b7f72d3ad12edf",
+  "exe": "build\\perf-eventgen.exe",
+  "exe_sha256": "9ebd52f97e24faaeb327f836bb318570c2eddc4d29bd0c28828bc6a6ae7a0376",
+  "commit": "38bc40e",
+  "dirty": true,
+  "host": "AMD64 Family 25 Model 97 Stepping 2, AuthenticAMD / Windows 10",
+  "profiled": false
+}

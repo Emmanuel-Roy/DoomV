@@ -1,0 +1,15 @@
+{
+  "time": "20260919-203922",
+  "label": "G: event gen (repeat)",
+  "workload": "doom",
+  "steps": 1000000000,
+  "seconds": 16.735,
+  "mips": 59.755,
+  "crash_log_sha256": "3d73dac132f396aa505f0bc0ca70860519d439b38267eadb95954786cf97ee99",
+  "exe": "build\\perf-eventgen.exe",
+  "exe_sha256": "9ebd52f97e24faaeb327f836bb318570c2eddc4d29bd0c28828bc6a6ae7a0376",
+  "commit": "38bc40e",
+  "dirty": true,
+  "host": "AMD64 Family 25 Model 97 Stepping 2, AuthenticAMD / Windows 10",
+  "profiled": false
+}

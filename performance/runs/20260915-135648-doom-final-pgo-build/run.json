@@ -1,0 +1,78 @@
+{
+  "time": "20260915-135648",
+  "label": "final: PGO build",
+  "workload": "doom",
+  "steps": 1000000000,
+  "seconds": 21.522,
+  "mips": 46.464,
+  "crash_log_sha256": "3d73dac132f396aa505f0bc0ca70860519d439b38267eadb95954786cf97ee99",
+  "exe": "Z:\\Code\\Dev\\DoomV\\riscv_doom.exe",
+  "exe_sha256": "c6302764fc0387519b4c4fa8ead38f848ad569b647320850a765a4f4b36527f3",
+  "commit": "eaa9628",
+  "dirty": true,
+  "host": "AMD64 Family 25 Model 97 Stepping 2, AuthenticAMD / Windows 10",
+  "profiled": true,
+  "samples": 8228,
+  "top": [
+    [
+      "DoomSystem::step_execute()",
+      2933
+    ],
+    [
+      "RiscvCore::exec_32I(DecodedInstruction const&, Registers&, Memory&)",
+      1306
+    ],
+    [
+      "Decoder::decode_and_dispatch(unsigned long long, unsigned int)",
+      1262
+    ],
+    [
+      "DoomSystem::cpu_loop()",
+      499
+    ],
+    [
+      "Registers::read_x(int) const",
+      452
+    ],
+    [
+      "mmu_translate(Registers&, Memory&, unsigned long long, AccessType, unsigned long long&, unsigned long long&, unsigned long long&, bool)",
+      406
+    ],
+    [
+      "RiscvCore::load_virtual(Registers&, Memory&, unsigned long long, unsigned int, unsigned long long&)",
+      377
+    ],
+    [
+      "pmp::check(Registers&, unsigned long long, unsigned int, int, unsigned char)",
+      191
+    ],
+    [
+      "Memory::read32(unsigned long long)",
+      129
+    ],
+    [
+      "Registers::write_x(int, unsigned long long)",
+      96
+    ],
+    [
+      "RiscvCore::store_virtual(Registers&, Memory&, unsigned long long, unsigned int, unsigned long long)",
+      83
+    ],
+    [
+      "Memory::write8(unsigned long long, unsigned char)",
+      68
+    ],
+    [
+      "Registers::read_csr(unsigned short) const",
+      64
+    ],
+    [
+      "Registers::get_pc() const",
+      60
+    ],
+    [
+      "Registers::get_priv() const",
+      55
+    ]
+  ]
+}
