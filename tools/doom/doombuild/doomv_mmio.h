@@ -40,8 +40,11 @@
 
 // Framebuffer: native 32bpp RGBA, DOOMGENERIC_RESX * DOOMGENERIC_RESY
 // words, doomgeneric already does the palette conversion internally.
-// 320*200*4 = 256000 bytes, padded to a 256K page.
-#define MMIO_FB      0x10001000u
+// 320*200*4 = 256000 bytes. At 0x10200000, past the emulator's virtio
+// slots: at 0x10001000, where it was, it ran across the root disk's window at
+// 0x10008000 and those pixels were never drawn. Must match
+// Memory::MMIO_FB in src/memory.hpp.
+#define MMIO_FB      0x10200000u
 
 // RAM (.text/.data/.bss/heap/stack) -- see riscv.lds. Moved to 0x80000000
 // for Stage 3 to match OpenSBI's own hardcoded, 2MB-aligned load address

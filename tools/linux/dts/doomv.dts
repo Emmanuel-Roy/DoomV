@@ -317,13 +317,11 @@
 		//
 		// Separate interrupts because an MMIO virtio device has exactly
 		// one and there is no way for two devices to share it.
-		// Past 0x1003F800, not in the 0x10009000/0x1000A000 slots the
-		// QEMU convention would suggest: DOOM's framebuffer aperture is
-		// 320*200*4 bytes at 0x10001000 and covers all of them. The disk
-		// above gets away with it because the emulator's 32-bit access
-		// paths test the virtio range first; a device whose config space
-		// is read a byte at a time does not, and reads framebuffer zeros
-		// instead. See the note on VIRTIO_KBD_BASE in src/memory.hpp.
+		// At 0x10100000, not in the 0x10009000/0x1000A000 slots the QEMU
+		// convention would suggest: DOOM's framebuffer used to cover those,
+		// and a device whose config space is read a byte at a time read
+		// framebuffer zeros there. The framebuffer has since moved past all
+		// the virtio slots; see the note on VIRTIO_KBD_BASE in src/memory.hpp.
 		virtio_mmio@10100000 {
 			compatible = "virtio,mmio";
 			reg = <0x0 0x10100000 0x0 0x1000>;

@@ -160,7 +160,7 @@ Input travels the opposite way. SDL key events are translated to DOOM codes and 
 |---|---|---|
 | Time | `DG_GetTicksMs` | Read `0x10000004`; advances once per 1,200 modeled steps |
 | Sleep | `DG_SleepMs` | Guest busy loop until unsigned tick difference reaches requested delay |
-| Graphics | `DG_DrawFrame` | Store 320×200 32-bit pixels at `0x10001000` |
+| Graphics | `DG_DrawFrame` | Store 320×200 32-bit pixels at `0x10200000` |
 | Keys | `DG_GetKey` | Pop word at `0x10000000` |
 | Debug text | `_write` | Write bytes to `0x10000008`; host prints/flushed stdout |
 | Memory allocation | newlib malloc calls project `_sbrk` | Grow guest heap within the backing RAM limit |

@@ -529,6 +529,11 @@ bool Memory::is_backed(uint64_t addr, unsigned size) const
 	if (in(MMIO_FB, FB_SIZE)) return true;
 	if (in(LFB_BASE, LFB_SIZE)) return true;
 	if (in(TEST_BASE, TEST_SIZE)) return true;
+	// The root disk's slot was missing from this list for as long as DOOM's
+	// framebuffer covered it, because the framebuffer's entry answered for
+	// it. Moving the framebuffer made every probe of the slot an access
+	// fault -- Linux's virtio_mmio_probe, at boot.
+	if (in(VIRTIO_BASE, VIRTIO_SIZE)) return true;
 	if (in(VIRTIO_KBD_BASE, VIRTIO_SIZE)) return true;
 	if (in(VIRTIO_MOUSE_BASE, VIRTIO_SIZE)) return true;
 	if (in(VIRTIO_DRIVE_BASE, NUM_DRIVES * VIRTIO_SIZE)) return true;

@@ -334,6 +334,7 @@ of console output (`2667bf1`, re-verified in `936df17`).
 165. [The clock was the instruction count](#bug165)
 166. [WFI and WRS never waited](#bug166)
 167. [The counter CSRs had no rules of their own](#bug167)
+168. [A black line through every DOOM frame](#bug168)
 
 <a id="part-vii"></a>
 ### Part VII — Cross-cutting
@@ -7096,3 +7097,31 @@ and wrote like one, and `hpmcounter3`..`31` read zero whatever
 `mhpmcounter3`..`31` held. `mhpmevent` kept bits 57:32, which Sail's
 legalization clears. Each now follows Sail's rules, the lock-step test
 reading back every write.
+
+<a id="bug168"></a>
+### 168. A black line through every DOOM frame
+
+**Symptom.** Screenshots of the window, taken while testing mouse clicks,
+showed a black band across DOOM's picture near the top -- the same place in
+every frame, straight through the menu's logo.
+
+**Root cause.** [Bug 155](#bug155) again, from the other side. DOOM's
+framebuffer was `320*200*4` bytes at `0x10001000`, so it ran across the root
+disk's virtio window at `0x10008000`. `write32` tests the virtio ranges
+before the framebuffer, and DOOM stores its pixels a word at a time, so every
+pixel written into that 4KB went to the disk's register file and was
+dropped: pixels 7168 to 8191, which is all of rows 23 and 24 and parts of
+22 and 25. Bug 155 moved the input devices out of the aperture and left the
+disk inside it, reasoning that the word paths favoured the disk -- which was
+true, and was exactly this bug: the framebuffer lost those writes instead.
+
+**Fix.** The framebuffer moved to `0x10200000`, past every virtio slot, in
+`Memory::MMIO_FB` and the guest's `doomv_mmio.h` (the DOOM ELF is rebuilt with
+it). Static assertions now require it to clear the last virtio slot, the
+root disk and the UART, and to end before the IMSIC files. The disk keeps
+`0x10008000`, the address the device tree and the QEMU convention give it.
+
+The first Linux boot after the move panicked in `virtio_mmio_probe` with a
+load access fault. `Memory::is_backed`, which says which physical addresses
+answer at all, had never listed the root disk's slot: the framebuffer's entry
+had been covering for it. It is listed now.

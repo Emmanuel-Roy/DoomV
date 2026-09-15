@@ -18,7 +18,12 @@ public:
 	static constexpr uint64_t MMIO_INPUT = 0x10000000;
 	static constexpr uint64_t MMIO_TICK  = 0x10000004;
 	static constexpr uint64_t MMIO_DEBUG = 0x10000008;
-	static constexpr uint64_t MMIO_FB    = 0x10001000;
+	// DOOM's framebuffer. Past every virtio slot rather than straight after
+	// the registers above, where it used to be: its 256KB there ran across
+	// the root disk's window at 0x10008000, and DOOM's pixel writes into
+	// that 4KB were taken by the disk -- rows 23 and 24 of every frame, and
+	// parts of 22 and 25, never drawn. See the static_asserts below.
+	static constexpr uint64_t MMIO_FB    = 0x10200000;
 
 	// DOOM's mouse. A different shape from the Linux guest's, on purpose.
 	//
@@ -63,8 +68,8 @@ public:
 	static constexpr uint64_t MMIO_WAD_BASE = 0x10000014;
 	static constexpr uint64_t MMIO_WAD_SIZE = 0x10000018;
 
-	// Stage 4's UART -- clear of MMIO_INPUT/TICK/DEBUG above (which end at
-	// 0x1000000B) and MMIO_FB below.
+	// Stage 4's UART -- clear of MMIO_INPUT/TICK/DEBUG and the DOOM mouse
+	// and WAD registers above, which end at 0x1000001B.
 	static constexpr uint64_t UART_BASE = 0x10000100;
 	static constexpr uint64_t UART_SIZE = 0x100;
 
@@ -76,8 +81,8 @@ public:
 	// and deliberately not the same memory. DOOM writes its 320x200 through
 	// MMIO_FB because doomgeneric hands us exactly that buffer; Linux wants
 	// a linear aperture it can ioremap and a resolution worth looking at,
-	// and the two cannot share a base because MMIO_FB's 256KB would have to
-	// grow across the virtio window at 0x10008000.
+	// and at 1168x1056 it is nearly twenty times the size of DOOM's buffer,
+	// so the two are separate regions rather than one grown to fit both.
 	//
 	// 0x50000000 is clear of everything: RAM starts at 0x80000000, the
 	// IMSIC files sit at 0x24/0x28000000, and the platform devices are all
@@ -162,21 +167,17 @@ public:
 	// that looks at it -- the VT layer included.
 	//
 	// Not the next slots up from the disk, which is where they were put
-	// first and is inside DOOM's framebuffer. MMIO_FB is 320*200*4 bytes
-	// long, so its aperture runs 0x10001000..0x1003F7FF and covers every
-	// QEMU-convention virtio slot there is -- 0x10008000 included.
+	// first -- inside DOOM's framebuffer as it then was, 320*200*4 bytes from
+	// 0x10001000, which covered every QEMU-convention virtio slot there is.
+	// Whether a device or the framebuffer answered depended on the order of
+	// a branch chain, and it differed between the byte and word paths:
+	// virtio-input's config space, read a byte at a time, came back as
+	// framebuffer zeros (bug 155), and the disk's window took DOOM's
+	// word-sized pixel writes (bug 168). The framebuffer has since moved
+	// clear of all of them, and these stay where they are.
 	//
-	// The disk survives that overlap only because read32/write32 happen to
-	// test VIRTIO_BASE before MMIO_FB. read8/write8 test MMIO_FB first, and
-	// virtio-input is the first device here whose config space is read a
-	// byte at a time: the driver's reads came back as framebuffer bytes,
-	// which are zeros, so both devices probed, registered, and reported no
-	// name and no capabilities. A device that is there and answers nothing
-	// is a worse failure than one that is not there at all.
-	//
-	// So these sit past the aperture instead of relying on the order of a
-	// branch chain. Each still needs its own APLIC source: an MMIO virtio
-	// device has exactly one interrupt and there is no way to share it.
+	// Each still needs its own APLIC source: an MMIO virtio device has
+	// exactly one interrupt and there is no way to share it.
 	static constexpr uint64_t VIRTIO_KBD_BASE   = 0x10100000;
 	static constexpr uint64_t VIRTIO_MOUSE_BASE = 0x10101000;
 
@@ -199,8 +200,15 @@ public:
 	static constexpr uint64_t VIRTIO_SHARE_BASE = 0x1010A000;
 	static_assert(VIRTIO_SHARE_BASE == VIRTIO_DRIVE_BASE + NUM_DRIVES * VIRTIO_SIZE,
 	              "the shared folder's slot follows the last drive slot");
-	static_assert(VIRTIO_KBD_BASE >= MMIO_FB + FB_SIZE,
-	              "input devices must not sit inside DOOM's framebuffer aperture");
+	// No device window may overlap DOOM's framebuffer. The address decoders
+	// test ranges in different orders on different paths, so an overlap is
+	// never an error anyone sees -- only pixels or registers that go missing.
+	static_assert(MMIO_FB >= VIRTIO_SHARE_BASE + VIRTIO_SIZE,
+	              "DOOM's framebuffer must start past the last virtio slot");
+	static_assert(MMIO_FB >= VIRTIO_BASE + VIRTIO_SIZE && MMIO_FB >= UART_BASE + UART_SIZE,
+	              "DOOM's framebuffer must not overlap the root disk or the UART");
+	static_assert(MMIO_FB + FB_SIZE <= IMSIC_M_BASE,
+	              "DOOM's framebuffer must end before the IMSIC files");
 
 	Memory();
 

@@ -74,19 +74,19 @@ All ranges below are half-open: base is included, end is excluded. Values come f
 | DOOM mouse buttons | `0x10000010` | 4 | `0x10000014` | Button state |
 | DOOM WAD base and size | `0x10000014` | 8 | `0x1000001C` | Where the host loaded the WAD, and its length |
 | UART | `0x10000100` | `0x100` | `0x10000200` | Polled byte register interface |
-| DOOM framebuffer | `0x10001000` | `0x3E800` | `0x1003F800` | 320×200×4 bytes |
 | Root disk (virtio-blk) | `0x10008000` | `0x1000` | `0x10009000` | `-disk=` image; APLIC source 1 |
 | Keyboard (virtio-input) | `0x10100000` | `0x1000` | `0x10101000` | APLIC source 2 |
 | Mouse (virtio-input) | `0x10101000` | `0x1000` | `0x10102000` | APLIC source 3 |
 | Drive slots (8 × virtio-blk) | `0x10102000` | `0x8000` | `0x1010A000` | `drives/*.img`; APLIC sources 4–11 |
 | Shared folder (virtio-9p) | `0x1010A000` | `0x1000` | `0x1010B000` | `shared/`; APLIC source 12 |
+| DOOM framebuffer | `0x10200000` | `0x3E800` | `0x1023E800` | 320×200×4 bytes, past every virtio slot |
 | M IMSIC file | `0x24000000` | `0x1000` | `0x24001000` | M-target MSI doorbell |
 | S IMSIC file | `0x28000000` | `0x1000` | `0x28001000` | S-target MSI doorbell |
 | Linux framebuffer | `0x50000000` | `0x4B4800` | `0x504B4800` | 1168×1056×4 bytes, `simple-framebuffer` |
 | RAM | `0x80000000` | `0x40000000` | `0xC0000000` | 1 GiB |
 | WAD | `0xC0000000` | `0x01400000` | `0xC1400000` | 20-MiB asset window |
 
-The DOOM framebuffer allocation is exactly 256,000 bytes, not a rounded 256-KiB backing region. RAM and WAD share one contiguous allocation. The device tree advertises only the RAM portion as ordinary Linux RAM; the Linux framebuffer deliberately sits outside it, so the kernel never allocates over the aperture.
+The DOOM framebuffer allocation is exactly 256,000 bytes, not a rounded 256-KiB backing region. It sits past the virtio slots because the address decoders test ranges in different orders on the byte and word paths, so a device window overlapping it would silently take either pixels or register accesses; `Memory` has static assertions that nothing does. RAM and WAD share one contiguous allocation. The device tree advertises only the RAM portion as ordinary Linux RAM; the Linux framebuffer deliberately sits outside it, so the kernel never allocates over the aperture.
 
 An empty drive slot is still a device window: it reads device ID 0, which the virtio-mmio driver skips. That is how the device tree can list all eight slots whether or not eight drives exist.
 
