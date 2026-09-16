@@ -159,31 +159,62 @@ previous build: identical. The input script's run was also done twice with the
 same build -- identical again, which is the check for a dependence on host
 timing or thread interleaving rather than on the old behaviour.
 
-### Compiler flags
+### Compiler and flags
 
-* **`-flto` was rejected.** With this toolchain (MinGW GCC 8.1) the LTO plugin
-  warns *No symbol for section 'Extensions'* -- the C++17 inline variable in
-  `extensions.hpp` -- and the linked emulator dies of heap corruption before it
-  prints anything. The same sources without it run correctly. It may be worth
-  trying again with a newer GCC.
-* **PGO works**, and is `pgo.py`. It needed two workarounds, documented there:
-  the profiling runtime cannot write to Git Bash paths and fails silently, so
-  `GCOV_PREFIX` redirects it; and `-fprofile-use` needs the Windows path too.
+The installed compiler is MinGW GCC 8.1 (2018), from the CodeBlocks bundle
+`scripts/install_dependencies.ps1` relies on.
+
+* **`-flto` is unusable with GCC 8.1.** Its LTO plugin warns *No symbol for
+  section 'Extensions'* -- the C++17 inline variable in `extensions.hpp` -- and
+  the linked emulator dies of heap corruption before printing anything. The
+  same sources without it run correctly.
+* **PGO works**, and is `pgo.py`. Two things it has to get right, both
+  documented there: GCC 8.1's profiling runtime writes nothing at all when
+  `-fprofile-dir` is a Git Bash path, so `GCOV_PREFIX` redirects it; and GCC 11
+  and later name each profile after the *output* path, so the instrumented and
+  final builds must be built to the same one.
 * `-march=native` was not used: it would tie the binary to the build machine,
   and FMA contraction can change floating-point results between hosts.
 
+**A newer GCC was measured, and is not the default.** GCC 14.2 (winlibs,
+MSVCRT, POSIX threads) unpacked under `build/toolchains/`, every build with
+`crash.log` identical to the baseline:
+
+| build | linux MIPS | doom MIPS |
+|---|---:|---:|
+| GCC 8.1, plain (what `make` gives) | 49.2 | 60.5 |
+| GCC 14.2, plain | 39.8 | 54.2 |
+| GCC 14.2 + LTO | 43.7 | 53.6 |
+| GCC 8.1 + PGO (`pgo.py`) | 59.7 | 82.2 |
+| GCC 14.2 + PGO | 59.4 | 79.2 |
+| GCC 14.2 + PGO + LTO | 64.8 | 86.0 |
+
+Plain GCC 14 is 10-20% *slower* on this code than GCC 8, and LTO does not make
+that back; with PGO the two are level. Only PGO and LTO together, which GCC 8
+cannot produce, get ahead -- by 5-9%, for an 850 MB toolchain (a 245 MB
+download) this machine does not otherwise have. So `make` and `pgo.py` keep the installed compiler, and
+`pgo.py` takes the other route as an option:
+
+```sh
+TC=build/toolchains/gcc14/mingw64/bin
+python performance/pgo.py --lto --cxx $TC/g++.exe --cc $TC/gcc.exe
+```
+
+GCC 14 did earn its keep once already: it rejected two headers that use
+`uint32_t` without including `<cstdint>`, which GCC 8 accepted only because its
+own headers happened to pull it in.
+
 ## What is left
 
-Nothing here is measured -- these are the candidates the histograms point at
-now that fetch, loads and stores are cached.
+The candidates the histograms point at now that fetch, loads and stores are
+cached. Nothing here is measured except where it says so.
 
-* **A newer compiler.** This is GCC 8.1, from 2018. A current GCC would very
-  likely generate better code by itself, and would probably make `-flto` work,
-  which inlines across files for free -- worth more here than usual, because
-  the hot path crosses `doom_system.cpp`, `riscv_decoder.cpp`, `ext_*.cpp`,
-  `mmu.cpp` and `pmp.cpp` on every instruction. It is a toolchain change
-  rather than a code change: SDL2, the `-static-lib*` linking and the build
-  scripts all need checking.
+* **A newer compiler** has been measured rather than guessed -- see the table
+  above. Plain GCC 14 is slower than GCC 8 here; only PGO and LTO together get
+  ahead, by 5-9%, and that needs a toolchain this machine does not ship. What
+  is still untried is a different compiler family: clang's optimizer makes
+  rather different choices on interpreter dispatch, and neither it nor a
+  UCRT-based GCC has been tried against the bundled SDL2.
 * **Per-page pre-decode.** Decode a code page into a table of handlers once,
   and execute from it, still one instruction at a time with the same event
   checks between. The largest remaining gain and the most work to get right,

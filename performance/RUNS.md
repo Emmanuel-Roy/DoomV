@@ -47,3 +47,27 @@ and nothing else.
 | 20260916-120957 | linux 300M | E: caches report to lock-step | 30a9663+ | 49.22 | 6.1 | `f1e71792e77d` |  |
 | 20260916-121022 | doom 1000M | E: caches report to lock-step (reference) | 30a9663+ | 16.79 | 59.5 | `3d73dac132f3` |  |
 | 20260916-121122 | doom 1000M | E: caches report to lock-step | 30a9663+ | 60.52 | 16.5 | `3d73dac132f3` |  |
+| 20260916-171959 | linux 300M | gcc14 (reference) | 9ce37c8+ | 9.07 | 33.1 | `f1e71792e77d` |  |
+| 20260916-172032 | linux 300M | gcc14 | 9ce37c8+ | 39.83 | 7.5 | `f1e71792e77d` |  |
+| 20260916-172039 | doom 1000M | gcc14 (reference) | 9ce37c8+ | 14.31 | 69.9 | `3d73dac132f3` |  |
+| 20260916-172149 | doom 1000M | gcc14 | 9ce37c8+ | 54.16 | 18.5 | `3d73dac132f3` |  |
+| 20260916-172253 | linux 300M | gcc14 + lto (reference) | 9ce37c8+ | 9.31 | 32.2 | `f1e71792e77d` |  |
+| 20260916-172325 | linux 300M | gcc14 + lto | 9ce37c8+ | 43.66 | 6.9 | `f1e71792e77d` |  |
+| 20260916-172332 | doom 1000M | gcc14 + lto (reference) | 9ce37c8+ | 14.60 | 68.5 | `3d73dac132f3` |  |
+| 20260916-172441 | doom 1000M | gcc14 + lto | 9ce37c8+ | 53.55 | 18.7 | `3d73dac132f3` |  |
+| 20260916-172905 | linux 300M | gcc14 + PGO (reference) | 9ce37c8+ | 9.23 | 32.5 | `f1e71792e77d` |  |
+| 20260916-172938 | linux 300M | gcc14 + PGO | 9ce37c8+ | 43.59 | 6.9 | `f1e71792e77d` |  |
+| 20260916-172945 | doom 1000M | gcc14 + PGO (reference) | 9ce37c8+ | 14.78 | 67.7 | `3d73dac132f3` |  |
+| 20260916-173052 | doom 1000M | gcc14 + PGO | 9ce37c8+ | 60.75 | 16.5 | `3d73dac132f3` |  |
+| 20260916-173444 | linux 300M | gcc14 + PGO (profiles used) (reference) | 9ce37c8+ | 10.52 | 28.5 | `f1e71792e77d` |  |
+| 20260916-173513 | linux 300M | gcc14 + PGO (profiles used) | 9ce37c8+ | 59.43 | 5.0 | `f1e71792e77d` |  |
+| 20260916-173518 | doom 1000M | gcc14 + PGO (profiles used) (reference) | 9ce37c8+ | 16.47 | 60.7 | `3d73dac132f3` |  |
+| 20260916-173619 | doom 1000M | gcc14 + PGO (profiles used) | 9ce37c8+ | 79.24 | 12.6 | `3d73dac132f3` |  |
+| 20260916-173953 | linux 300M | gcc14 + PGO + LTO (reference) | 9ce37c8+ | 10.41 | 28.8 | `f1e71792e77d` |  |
+| 20260916-174022 | linux 300M | gcc14 + PGO + LTO | 9ce37c8+ | 64.79 | 4.6 | `f1e71792e77d` |  |
+| 20260916-174026 | doom 1000M | gcc14 + PGO + LTO (reference) | 9ce37c8+ | 16.46 | 60.7 | `3d73dac132f3` |  |
+| 20260916-174127 | doom 1000M | gcc14 + PGO + LTO | 9ce37c8+ | 86.01 | 11.6 | `3d73dac132f3` |  |
+| 20260916-180136 | linux 300M | PGO build (reference) | 9ce37c8+ | 10.43 | 28.8 | `f1e71792e77d` |  |
+| 20260916-180205 | linux 300M | PGO build | 9ce37c8+ | 59.50 | 5.0 | `f1e71792e77d` |  |
+| 20260916-180210 | doom 1000M | PGO build (reference) | 9ce37c8+ | 16.52 | 60.5 | `3d73dac132f3` |  |
+| 20260916-180311 | doom 1000M | PGO build | 9ce37c8+ | 81.03 | 12.3 | `3d73dac132f3` |  |

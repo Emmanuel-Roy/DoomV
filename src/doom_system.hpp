@@ -1,5 +1,6 @@
 #pragma once
 #include <atomic>
+#include <cstdint>
 #include "memory.hpp"
 #include "registers.hpp"
 #include "riscv_core.hpp"

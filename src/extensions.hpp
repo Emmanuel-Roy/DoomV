@@ -1,5 +1,6 @@
 #pragma once
 #include <string>
+#include <cstdint>
 
 // Runtime-configurable, not compile-time -- every extension (and the base
 // XLEN width) can be switched on/off per run via -march= on the command
