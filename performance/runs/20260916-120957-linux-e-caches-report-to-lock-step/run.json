@@ -1,0 +1,15 @@
+{
+  "time": "20260916-120957",
+  "label": "E: caches report to lock-step",
+  "workload": "linux",
+  "steps": 300000000,
+  "seconds": 6.095,
+  "mips": 49.223,
+  "crash_log_sha256": "f1e71792e77dc0252c20c00aaef01f6728c43c7f5a1b04e2d6b7f72d3ad12edf",
+  "exe": "Z:\\Code\\Dev\\DoomV\\riscv_doom.exe",
+  "exe_sha256": "0f20db64ae15f1e5cc881eea0d8f618523968729b8166fe3a7346e36f678ea50",
+  "commit": "30a9663",
+  "dirty": true,
+  "host": "AMD64 Family 25 Model 97 Stepping 2, AuthenticAMD / Windows 10",
+  "profiled": false
+}

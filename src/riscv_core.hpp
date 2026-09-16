@@ -54,6 +54,7 @@ public:
 	struct DataPage {
 		uint64_t vpage = ~0ull;
 		uint64_t key = ~0ull;
+		uint64_t ppage = 0;      // what the translation produced, for the access log
 		uint8_t *host = nullptr;
 	};
 	static constexpr unsigned DATA_CACHE_SIZE = 256;

@@ -135,8 +135,13 @@ the enabled entries only, and `write32` tests RAM before the device windows.
   store is what sets D. A page is remembered after a successful access through
   the full path, only when it is RAM end to end with no second stage, no MPRV,
   and one PMP entry for the whole page, and it goes stale on the same events.
-  A store keeps its side effects: the page holding `tohost` is never cached,
-  and nothing is served from the caches while lock-step is logging accesses.
+  A store keeps its side effects: the page holding `tohost` is never cached.
+  A cached access reports itself exactly as the full path does -- into the
+  access log lock-step compares against the reference, and for a store the
+  bytes it wrote. The caches first switched themselves off whenever those logs
+  were set, which was correct but left them the one part of the machine the
+  Sail sweep never exercised; reporting instead of bypassing puts the fast
+  paths under the instruction-by-instruction check too.
 * **Register accessors inline.** `read_x`, `write_x`, `get_pc`, `set_pc`,
   `get_priv` and `read_csr` were defined in `registers.cpp`, so every
   instruction made several real calls; without LTO nothing could inline them.

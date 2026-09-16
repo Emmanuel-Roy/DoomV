@@ -1156,8 +1156,15 @@ uint64_t RiscvCore::read_csr_effective(Registers &regs, Memory &mem, uint16_t cs
 // extensions makes it stale.
 //
 // Stores keep the side effects a store has beyond storing: a page holding the
-// tohost register is never cached, and nothing is served from the caches while
-// lock-step is logging accesses or stores.
+// tohost register is never cached.
+//
+// A cached access records itself exactly as the full path would -- the access
+// log that lock-step compares against the reference, and for a store the bytes
+// it wrote (Memory's StoreCapture does that when the slow path goes through
+// it). The caches used to switch themselves off whenever those logs were set,
+// which kept lock-step correct but meant the Sail sweep only ever exercised
+// the slow paths: the one part of the machine the instruction-by-instruction
+// check did not reach. Reporting instead of bypassing puts them under it.
 static uint64_t data_cache_key(const Registers &regs)
 {
 	return regs.state_gen + mmu_tlb_generation() + ExtensionsEpoch;
@@ -1176,6 +1183,7 @@ static void remember_data_page(Registers &regs, Memory &mem, RiscvCore::DataPage
 		return;
 	e.vpage = vpage;
 	e.key = key;
+	e.ppage = ppage;
 	e.host = mem.ram_data_mut() + (ppage - Memory::RAM_BASE);
 }
 
@@ -1188,10 +1196,13 @@ bool RiscvCore::load_virtual(Registers &regs, Memory &mem, uint64_t vaddr,
 		const uint64_t vpage = vaddr >> 12;
 		const uint64_t key = data_cache_key(regs);
 		DataPage &e = load_cache[vpage & (DATA_CACHE_SIZE - 1)];
-		if (e.vpage == vpage && e.key == key && !access_log) {
+		if (e.vpage == vpage && e.key == key) {
+			const unsigned offset = (unsigned)(vaddr & 0xFFF);
 			uint64_t v = 0;
-			std::memcpy(&v, e.host + (vaddr & 0xFFF), size);
+			std::memcpy(&v, e.host + offset, size);
 			out = v;
+			if (access_log)
+				access_log->push_back({vaddr, e.ppage | offset, (uint8_t)size, false});
 			return true;
 		}
 		uint64_t paddr;
@@ -1231,8 +1242,17 @@ bool RiscvCore::store_virtual(Registers &regs, Memory &mem, uint64_t vaddr,
 		const uint64_t vpage = vaddr >> 12;
 		const uint64_t key = data_cache_key(regs);
 		DataPage &e = store_cache[vpage & (DATA_CACHE_SIZE - 1)];
-		if (e.vpage == vpage && e.key == key && !access_log && !mem.store_log) {
-			std::memcpy(e.host + (vaddr & 0xFFF), &value, size);
+		if (e.vpage == vpage && e.key == key) {
+			const unsigned offset = (unsigned)(vaddr & 0xFFF);
+			const uint64_t paddr = e.ppage | offset;
+			std::memcpy(e.host + offset, &value, size);
+			if (access_log)
+				access_log->push_back({vaddr, paddr, (uint8_t)size, true});
+			// The bytes, as StoreCapture records them for a store that goes
+			// through Memory: little-endian, one entry each.
+			if (mem.store_log)
+				for (unsigned i = 0; i < size; i++)
+					mem.store_log->push_back({paddr + i, (uint8_t)(value >> (8 * i))});
 			return true;
 		}
 		uint64_t paddr;
