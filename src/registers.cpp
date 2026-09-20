@@ -1,4 +1,5 @@
 #include "registers.hpp"
+#include "event_gen.hpp"
 #include <cstring>
 
 // vtype.vill=1 (bit 63) is the spec-mandated reset state: no vset{i}vl{i}
@@ -49,6 +50,7 @@ void Registers::set_priv(PrivMode mode)
 {
 	priv = mode;
 	state_gen++;
+	bump_event_gen();
 }
 
 
@@ -57,6 +59,7 @@ void Registers::write_csr(uint16_t addr, uint64_t value)
 {
 	csr[addr] = value;
 	state_gen++;
+	bump_event_gen();
 	if (csr_log) csr_log->push_back(addr);
 }
 

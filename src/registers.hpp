@@ -1,4 +1,5 @@
 #pragma once
+#include "event_gen.hpp"
 #include "riscv_decoder.hpp" // for DecodedInstruction, embedded in HistoryEntry below
 #include <cstdint>
 #include <vector>
@@ -26,7 +27,8 @@ struct HistoryEntry {
 
 class Registers {
 public:
-	static constexpr int HISTORY_SIZE = 4096;
+	static constexpr int HISTORY_SIZE = 4096; // a power of two -- record_history masks with it
+	static_assert((HISTORY_SIZE & (HISTORY_SIZE - 1)) == 0, "HISTORY_SIZE must be a power of two");
 
 	Registers();
 
@@ -84,7 +86,7 @@ public:
 	// M-mode is never virtual, so set_virt(true) is only ever meaningful
 	// alongside S or U.
 	bool get_virt() const { return virt; }
-	void set_virt(bool v) { virt = v; state_gen++; }
+	void set_virt(bool v) { virt = v; state_gen++; bump_event_gen(); }
 
 	uint64_t read_csr(uint16_t addr) const { return csr[addr]; }
 	void write_csr(uint16_t addr, uint64_t value);
@@ -136,7 +138,11 @@ public:
 	void record_history(uint64_t pc, uint32_t instr)
 	{
 		history[history_ptr] = { pc, instr };
-		history_ptr = (history_ptr + 1) % HISTORY_SIZE;
+		// & rather than %: HISTORY_SIZE is a power of two, but history_ptr is
+		// signed, so the compiler has to emit the sign-correcting sequence for
+		// the modulo -- it cannot know the value never goes negative. The mask
+		// is the same answer for every value this actually takes.
+		history_ptr = (history_ptr + 1) & (HISTORY_SIZE - 1);
 	}
 	const HistoryRecord &history_at(int index) const { return history[index]; }
 	int history_pos() const { return history_ptr; }

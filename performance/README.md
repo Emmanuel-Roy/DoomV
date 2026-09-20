@@ -219,11 +219,29 @@ cached. Nothing here is measured except where it says so.
   and execute from it, still one instruction at a time with the same event
   checks between. The largest remaining gain and the most work to get right,
   since the table has to be invalidated exactly where the decode cache is.
-* **Dispatch through a handler pointer** in the decode cache entry, instead of
-  a switch on the extension.
+* **Dispatch through a handler pointer** in the decode cache entry was tried,
+  measured and dropped: linux 0.998x and 0.992x, doom 0.922x, 0.982x and
+  1.001x over five paired runs -- neutral at best, and the one low reading is
+  what run-to-run noise looks like on doom. GCC already compiles the switch on
+  Extension to a jump table, so there was no dispatch overhead to remove, and
+  the indirect call through a pointer-to-member only takes inlining away. The
+  patch is kept at `build/patches/handler-pointer.patch`, because a per-page
+  pre-decode table would want exactly that handler resolved per entry.
 * **The cost of a step itself.** `step_execute` is the largest single entry in
   the histogram, and it is now mostly bookkeeping: the trap-count snapshot, the
-  committed/decoded flags, the history write, the clock and `minstret`.
+  committed/decoded flags, the history write, the clock and `minstret`. Two
+  pieces of it have been taken (see the rows below): the interrupt check's four
+  generation counters became one `EventGen`, and `record_history` masks instead
+  of taking a signed modulo -- together 1.012-1.022x over four paired runs.
+  What is left there is genuinely per-step state, not redundant lookups.
+
+The lesson from the three changes measured in this pass: the wins are in
+removing a redundant *lookup*, not in cheaper arithmetic. Folding the two
+halfword fetches into one page-cache lookup was worth 1.12-1.17x; collapsing
+four counter loads into one was worth 1.01-1.02x; making dispatch arithmetic
+cheaper was worth nothing at all. The remaining redundancy of that shape is
+that a step still looks up the fetch page cache and then, separately, the
+decode cache -- which is what the per-page pre-decode item above would fuse.
 
 A JIT is deliberately not on this list. It could still be exact -- per-
 instruction state, single-instruction blocks under lock-step -- but every

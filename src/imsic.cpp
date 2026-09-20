@@ -1,4 +1,5 @@
 #include "imsic.hpp"
+#include "event_gen.hpp"
 #include <cstring>
 
 namespace {
@@ -47,6 +48,7 @@ bool Imsic::heard(uint32_t id) const
 void Imsic::refresh()
 {
 	gen++;
+	bump_event_gen();
 	top = 0;
 	if (!eidelivery) return;
 	for (int w = 0; w < NUM_WORDS; w++) {

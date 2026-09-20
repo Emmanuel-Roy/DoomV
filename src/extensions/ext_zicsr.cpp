@@ -1,6 +1,7 @@
 // Zicsr extension: ECALL/EBREAK/MRET control-transfer plus CSR read/modify/
 // write. Also owns the M-mode trap-entry sequence (enter_trap), since ECALL/
 // EBREAK are the only things in this project that ever trigger one.
+#include "event_gen.hpp"
 #include "ext_h.hpp"
 #include "ext_sscofpmf.hpp"
 #include <cstdio>
@@ -483,6 +484,7 @@ static void write_misa(uint64_t value, uint64_t next_pc)
 	Extensions.ZFHMIN = s.ZFHMIN && f;
 	Extensions.ZCMOP = s.ZCMOP && Extensions.C;
 	ExtensionsEpoch++;
+	bump_event_gen();
 	mmu_tlb_flush();
 }
 

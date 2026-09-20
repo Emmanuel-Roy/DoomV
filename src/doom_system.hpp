@@ -256,6 +256,9 @@ private:
 	static constexpr unsigned FETCH_CACHE_SIZE = 256;
 	FetchPage fetch_cache[FETCH_CACHE_SIZE];
 	bool fetch16(uint64_t vaddr, uint16_t &out);
+	// A whole instruction, in one cache lookup where that is exactly
+	// equivalent to the two fetch16s it replaces. See fetch_instr.
+	bool fetch_instr(uint64_t vaddr, uint32_t &out);
 
 	// lockstep.cpp
 	void traced_step();

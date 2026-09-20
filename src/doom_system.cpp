@@ -1,4 +1,5 @@
 #include "doom_system.hpp"
+#include "event_gen.hpp"
 #include "pmp.hpp"
 #include "mmu.hpp"
 #include "extensions.hpp"
@@ -246,8 +247,7 @@ void DoomSystem::refresh_counter_enables()
 bool DoomSystem::interrupt_may_be_due()
 {
 	Timer &timer = memory.get_timer();
-	const uint64_t key = regs.state_gen + memory.get_imsic_m().generation()
-	                   + memory.get_imsic_s().generation() + timer.cmp_generation() + ExtensionsEpoch;
+	const uint64_t key = EventGen;
 	const uint64_t now = timer.get_mtime();
 	if (key == irq_key && now < irq_deadline) return false;
 
@@ -375,6 +375,51 @@ bool DoomSystem::fetch16(uint64_t vaddr, uint16_t &out)
 	return true;
 }
 
+// A whole instruction in one cache lookup, where that is exactly what the two
+// halfword fetches below would have done anyway.
+//
+// fetch16 splits a fetch in two because the architecture checks a halfword at
+// a time: the two halves of a 4-byte instruction can sit in different pages,
+// or on opposite sides of a PMP region's edge, and answer differently. None of
+// that is possible when both halves are in the *same* page and that page is
+// already in the fetch cache -- getting in there required the page to be plain
+// RAM, not a guest's second-stage mapping, and fetchable under PMP as a whole
+// (see the tail of fetch16). Within such a page the second halfword cannot
+// fault, cannot hit an MMIO side effect, and cannot answer differently from
+// the first. So one read of four bytes is the same answer as two reads of two,
+// for a third of the per-instruction fetch work.
+//
+// The offset bound is 0xFFC rather than fetch16's 0xFFE because this reads
+// four bytes, not two. Anything past it -- and every miss -- falls back to the
+// halfword path, which stays the definition of what a fetch means.
+//
+// A compressed instruction only occupies the low half, and this reads the two
+// bytes after it as well. They are ordinary RAM in a page already proven
+// fetchable, so reading them has no effect the guest can observe, and
+// step_execute masks them off before anything records the encoding.
+bool DoomSystem::fetch_instr(uint64_t vaddr, uint32_t &out)
+{
+	const uint64_t key = regs.state_gen + mmu_tlb_generation() + ExtensionsEpoch;
+	const uint64_t vpage = vaddr >> 12;
+	const unsigned offset = (unsigned)(vaddr & 0xFFF);
+	const FetchPage &e = fetch_cache[vpage & (FETCH_CACHE_SIZE - 1)];
+	if (e.vpage == vpage && e.key == key && offset <= 0xFFC) {
+		uint32_t word;
+		std::memcpy(&word, e.host + offset, sizeof(word));
+		out = word;
+		return true;
+	}
+
+	uint16_t half;
+	if (!fetch16(vaddr, half)) return false;
+	out = half;
+	if ((out & 0x3) == 0x3) {
+		if (!fetch16(vaddr + 2, half)) return false;
+		out |= (uint32_t)half << 16;
+	}
+	return true;
+}
+
 void DoomSystem::step_execute()
 {
 	if (debugger.halted) return;
@@ -389,9 +434,7 @@ void DoomSystem::step_execute()
 	// themselves. Strict lock-step takes them as ever, and checks the timing.
 	// The same test interrupt_may_be_due opens with, inline: on most steps
 	// it is all there is.
-	const bool irq_unchanged = regs.state_gen + memory.get_imsic_m().generation()
-	                           + memory.get_imsic_s().generation()
-	                           + memory.get_timer().cmp_generation() + ExtensionsEpoch == irq_key
+	const bool irq_unchanged = EventGen == irq_key
 	                        && memory.get_timer().get_mtime() < irq_deadline;
 	if (!(lockstep_active && !lockstep_strict) && !irq_unchanged && interrupt_may_be_due()
 	    && core.check_and_take_interrupt(regs, memory)) {
@@ -429,20 +472,12 @@ void DoomSystem::step_execute()
 		return;
 	}
 
-	uint16_t half;
-	if (!fetch16(pc, half)) {
+	uint32_t instr;
+	if (!fetch_instr(pc, instr)) {
 		// A page fault redirected pc into the trap handler already --
 		// nothing more to do for this step.
 		memory.step_instructions(1);
 		return;
-	}
-	uint32_t instr = half;
-	if ((instr & 0x3) == 0x3) {
-		if (!fetch16(pc + 2, half)) {
-			memory.step_instructions(1);
-			return;
-		}
-		instr |= (uint32_t)half << 16;
 	}
 	step_decoded = true;
 	DispatchResult result = decoder.decode_and_dispatch(pc, instr);

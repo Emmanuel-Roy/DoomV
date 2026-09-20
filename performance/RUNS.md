@@ -71,3 +71,27 @@ and nothing else.
 | 20260916-180205 | linux 300M | PGO build | 9ce37c8+ | 59.50 | 5.0 | `f1e71792e77d` |  |
 | 20260916-180210 | doom 1000M | PGO build (reference) | 9ce37c8+ | 16.52 | 60.5 | `3d73dac132f3` |  |
 | 20260916-180311 | doom 1000M | PGO build | 9ce37c8+ | 81.03 | 12.3 | `3d73dac132f3` |  |
+| 20260919-203217 | linux 300M | F: handler pointer -- INVALID PAIR, this reference is the PGO binary, not a plain build | 38bc40e+ | 58.09 | 5.2 | `f1e71792e77d` |  |
+| 20260919-203222 | linux 300M | F: handler pointer -- INVALID PAIR, measures PGO vs plain, not the change | 38bc40e+ | 46.11 | 6.5 | `f1e71792e77d` |  |
+| 20260919-203308 | linux 300M | F: dispatch through a handler pointer (reference) | 38bc40e+ | 47.08 | 6.4 | `f1e71792e77d` |  |
+| 20260919-203314 | linux 300M | F: dispatch through a handler pointer | 38bc40e+ | 47.01 | 6.4 | `f1e71792e77d` |  |
+| 20260919-203328 | doom 1000M | F: dispatch through a handler pointer (reference) | 38bc40e+ | 58.25 | 17.2 | `3d73dac132f3` |  |
+| 20260919-203345 | doom 1000M | F: dispatch through a handler pointer | 38bc40e+ | 53.69 | 18.6 | `3d73dac132f3` |  |
+| 20260919-203411 | doom 1000M | F: handler pointer (repeat) (reference) | 38bc40e+ | 58.75 | 17.0 | `3d73dac132f3` |  |
+| 20260919-203428 | doom 1000M | F: handler pointer (repeat) | 38bc40e+ | 57.71 | 17.3 | `3d73dac132f3` |  |
+| 20260919-203453 | doom 1000M | F: handler pointer (third) (reference) | 38bc40e+ | 58.50 | 17.1 | `3d73dac132f3` |  |
+| 20260919-203510 | doom 1000M | F: handler pointer (third) | 38bc40e+ | 58.53 | 17.1 | `3d73dac132f3` |  |
+| 20260919-203527 | linux 300M | F: handler pointer (linux repeat) (reference) | 38bc40e+ | 48.52 | 6.2 | `f1e71792e77d` |  |
+| 20260919-203533 | linux 300M | F: handler pointer (linux repeat) | 38bc40e+ | 48.15 | 6.2 | `f1e71792e77d` |  |
+| 20260919-203807 | linux 300M | G: one event generation, masked history (reference) | 38bc40e+ | 47.34 | 6.3 | `f1e71792e77d` |  |
+| 20260919-203813 | linux 300M | G: one event generation, masked history | 38bc40e+ | 48.36 | 6.2 | `f1e71792e77d` |  |
+| 20260919-203824 | doom 1000M | G: one event generation, masked history (reference) | 38bc40e+ | 58.99 | 17.0 | `3d73dac132f3` |  |
+| 20260919-203841 | doom 1000M | G: one event generation, masked history | 38bc40e+ | 59.74 | 16.7 | `3d73dac132f3` |  |
+| 20260919-203905 | doom 1000M | G: event gen (repeat) (reference) | 38bc40e+ | 59.02 | 16.9 | `3d73dac132f3` |  |
+| 20260919-203922 | doom 1000M | G: event gen (repeat) | 38bc40e+ | 59.76 | 16.7 | `3d73dac132f3` |  |
+| 20260919-203939 | linux 300M | G: event gen (linux repeat) (reference) | 38bc40e+ | 49.13 | 6.1 | `f1e71792e77d` |  |
+| 20260919-203945 | linux 300M | G: event gen (linux repeat) | 38bc40e+ | 49.72 | 6.0 | `f1e71792e77d` |  |
+| 20260919-205417 | doom 1000M | H: whole-instruction fetch in one lookup (reference) | 38bc40e+ | 59.84 | 16.7 | `3d73dac132f3` |  |
+| 20260919-205434 | doom 1000M | H: whole-instruction fetch in one lookup | 38bc40e+ | 69.86 | 14.3 | `3d73dac132f3` |  |
+| 20260919-205454 | linux 300M | H: whole-instruction fetch in one lookup (reference) | 38bc40e+ | 49.41 | 6.1 | `f1e71792e77d` |  |
+| 20260919-205500 | linux 300M | H: whole-instruction fetch in one lookup | 38bc40e+ | 55.52 | 5.4 | `f1e71792e77d` |  |
