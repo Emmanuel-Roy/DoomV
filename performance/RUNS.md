@@ -100,3 +100,7 @@ and nothing else.
 | 20260919-211202 | doom 1000M | I: decodes in the code page's own table | 7e8e827+ | 65.42 | 15.3 | `3d73dac132f3` |  |
 | 20260919-211306 | doom 1000M | I2: page decode tables, 64, no clear (reference) | 7e8e827+ | 69.61 | 14.4 | `3d73dac132f3` |  |
 | 20260919-211320 | doom 1000M | I2: page decode tables, 64, no clear | 7e8e827+ | 66.50 | 15.0 | `3d73dac132f3` |  |
+| 20260919-211451 | doom 1000M | HEAD c4af636 vs 38bc40e plain (reference) | c4af636 | 58.03 | 17.2 | `3d73dac132f3` |  |
+| 20260919-211508 | doom 1000M | HEAD c4af636 vs 38bc40e plain | c4af636 | 69.47 | 14.4 | `3d73dac132f3` |  |
+| 20260919-211523 | linux 300M | HEAD c4af636 vs 38bc40e plain (reference) | c4af636 | 48.92 | 6.1 | `f1e71792e77d` |  |
+| 20260919-211529 | linux 300M | HEAD c4af636 vs 38bc40e plain | c4af636 | 55.30 | 5.4 | `f1e71792e77d` |  |
