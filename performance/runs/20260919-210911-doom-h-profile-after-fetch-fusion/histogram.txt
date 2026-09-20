@@ -1,0 +1,28 @@
+doom, 1,000,000,000 steps, 69.56 MIPS while sampled (sampling every 2 ms slows the run a little)
+
+ samples  share  function
+
+    2210  40.6%  ##################################################  DoomSystem::step_execute()
+     819  15.0%  ###################  Decoder::decode_and_dispatch(unsigned long long, unsigned int)
+     781  14.4%  ##################  RiscvCore::exec_32I(DecodedInstruction const&, Registers&, Memory&)
+     552  10.1%  ############  RiscvCore::load_virtual(Registers&, Memory&, unsigned long long, unsigned int, unsigned long long&)
+     520   9.6%  ############  DoomSystem::fetch_instr(unsigned long long, unsigned int&)
+     220   4.0%  #####  DoomSystem::cpu_loop()
+     150   2.8%  ###  [msvcrt.dll]
+      63   1.2%  #  RiscvCore::store_virtual(Registers&, Memory&, unsigned long long, unsigned int, unsigned long long)
+      34   0.6%  #  Memory::write8(unsigned long long, unsigned char)
+      26   0.5%  #  Timer::tick(unsigned int)
+      14   0.3%  #  mmu_translate(Registers&, Memory&, unsigned long long, AccessType, unsigned long long&, unsigned long long&, unsigned long long&, bool)
+      14   0.3%  #  Memory::write32(unsigned long long, unsigned int)
+      12   0.2%  #  memcpy
+       8   0.1%  #  pmp::check(Registers&, unsigned long long, unsigned int, int, unsigned char)
+       5   0.1%  #  pointer_mask_len(Registers&, PrivMode, bool, bool)
+       4   0.1%  #  Memory::is_backed(unsigned long long, unsigned int) const
+       4   0.1%  #  [ntdll.dll]
+       2   0.0%  #  Memory::read32(unsigned long long)
+       1   0.0%  #  RiscvCore::exec_32M(DecodedInstruction const&, Registers&, Memory&)
+       1   0.0%  #  DoomSystem::publish_snapshot()
+       1   0.0%  #  Registers::top_csrs(unsigned short*, int) const
+       1   0.0%  #  Memory::read8(unsigned long long)
+
+5442 samples

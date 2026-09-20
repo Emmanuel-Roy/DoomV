@@ -95,3 +95,8 @@ and nothing else.
 | 20260919-205434 | doom 1000M | H: whole-instruction fetch in one lookup | 38bc40e+ | 69.86 | 14.3 | `3d73dac132f3` |  |
 | 20260919-205454 | linux 300M | H: whole-instruction fetch in one lookup (reference) | 38bc40e+ | 49.41 | 6.1 | `f1e71792e77d` |  |
 | 20260919-205500 | linux 300M | H: whole-instruction fetch in one lookup | 38bc40e+ | 55.52 | 5.4 | `f1e71792e77d` |  |
+| 20260919-210911 | doom 1000M | H profile: after fetch fusion | 7e8e827 | 69.56 | 14.4 | `3d73dac132f3` | [histogram](runs/20260919-210911-doom-h-profile-after-fetch-fusion/histogram.txt) |
+| 20260919-211148 | doom 1000M | I: decodes in the code page's own table (reference) | 7e8e827+ | 70.03 | 14.3 | `3d73dac132f3` |  |
+| 20260919-211202 | doom 1000M | I: decodes in the code page's own table | 7e8e827+ | 65.42 | 15.3 | `3d73dac132f3` |  |
+| 20260919-211306 | doom 1000M | I2: page decode tables, 64, no clear (reference) | 7e8e827+ | 69.61 | 14.4 | `3d73dac132f3` |  |
+| 20260919-211320 | doom 1000M | I2: page decode tables, 64, no clear | 7e8e827+ | 66.50 | 15.0 | `3d73dac132f3` |  |

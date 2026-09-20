@@ -215,10 +215,28 @@ cached. Nothing here is measured except where it says so.
   is still untried is a different compiler family: clang's optimizer makes
   rather different choices on interpreter dispatch, and neither it nor a
   UCRT-based GCC has been tried against the bundled SDL2.
-* **Per-page pre-decode.** Decode a code page into a table of handlers once,
-  and execute from it, still one instruction at a time with the same event
-  checks between. The largest remaining gain and the most work to get right,
-  since the table has to be invalidated exactly where the decode cache is.
+* **Per-page pre-decode** was tried in its cheapest form -- give each cached
+  code page its own table of decode slots, indexed by halfword offset, so that
+  the page a step has already found for the fetch carries the decode too and
+  the second lookup disappears. It measured 0.934x on doom with 16 tables, and
+  0.955x with 64 and the clear-on-handover removed. It was dropped.
+
+  The premise turned out to be wrong, and it is worth writing down because it
+  was the reason this item was called the largest remaining gain. The decode
+  cache is indexed `(pc >> 1) & CACHE_MASK`, so consecutive instructions
+  already occupy consecutive slots: a per-page table is not a better layout
+  than the shared array, it *is* that layout, over a 2048-slot window of it.
+  Being megabytes wide costs nothing when only the hot window is ever touched.
+  So there was no locality to win, and what remained was a branch and a pointer
+  chase per step, which is what the numbers show.
+
+  What that leaves of the idea is the eager form: decode a whole page up front
+  and execute from it with no per-instruction tag check at all. The tag check
+  is four comparisons on a line that is already hot, so the ceiling is low,
+  while dropping it means invalidating the table exactly where the tag check
+  invalidates itself today -- self-modifying code included. Low ceiling, high
+  risk. The patch for the measured version is at
+  `build/patches/page-decode-tables.patch`.
 * **Dispatch through a handler pointer** in the decode cache entry was tried,
   measured and dropped: linux 0.998x and 0.992x, doom 0.922x, 0.982x and
   1.001x over five paired runs -- neutral at best, and the one low reading is
@@ -235,13 +253,15 @@ cached. Nothing here is measured except where it says so.
   of taking a signed modulo -- together 1.012-1.022x over four paired runs.
   What is left there is genuinely per-step state, not redundant lookups.
 
-The lesson from the three changes measured in this pass: the wins are in
-removing a redundant *lookup*, not in cheaper arithmetic. Folding the two
-halfword fetches into one page-cache lookup was worth 1.12-1.17x; collapsing
-four counter loads into one was worth 1.01-1.02x; making dispatch arithmetic
-cheaper was worth nothing at all. The remaining redundancy of that shape is
-that a step still looks up the fetch page cache and then, separately, the
-decode cache -- which is what the per-page pre-decode item above would fuse.
+The lesson from the four changes measured in this pass: a win comes from
+removing a redundant *lookup*, and only from that. Folding the two halfword
+fetches into one page-cache lookup was worth 1.12-1.17x, because the second
+fetch really was asking a question the first had already answered. Collapsing
+four generation loads into one was worth 1.01-1.02x for the same reason, on a
+smaller scale. Making dispatch arithmetic cheaper was worth nothing, and moving
+the decode cache into the code page -- which looked like the same fusion, but
+was not, since the two lookups answer different questions and the second was
+already laid out well -- was worth less than nothing.
 
 A JIT is deliberately not on this list. It could still be exact -- per-
 instruction state, single-instruction blocks under lock-step -- but every
