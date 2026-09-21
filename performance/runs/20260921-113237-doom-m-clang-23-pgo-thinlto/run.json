@@ -1,0 +1,15 @@
+{
+  "time": "20260921-113237",
+  "label": "M: clang 23 + PGO + ThinLTO",
+  "workload": "doom",
+  "steps": 1000000000,
+  "seconds": 8.998,
+  "mips": 111.139,
+  "crash_log_sha256": "3d73dac132f396aa505f0bc0ca70860519d439b38267eadb95954786cf97ee99",
+  "exe": "build\\clang-pgo-lto.exe",
+  "exe_sha256": "833d1dc63af9566cabe48c38710b4cb1d815eeeac20664b34b89e70ede4c3976",
+  "commit": "b97fd13",
+  "dirty": false,
+  "host": "AMD64 Family 25 Model 97 Stepping 2, AuthenticAMD / Windows 10",
+  "profiled": false
+}

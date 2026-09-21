@@ -204,17 +204,62 @@ GCC 14 did earn its keep once already: it rejected two headers that use
 `uint32_t` without including `<cstdint>`, which GCC 8 accepted only because its
 own headers happened to pull it in.
 
+**Clang is much faster on this code, and PGO with ThinLTO is what makes it
+so.** llvm-mingw 20260908 (Clang 23.1.1, MSVCRT, x86_64) unpacked under
+`build/toolchains/`. The MSVCRT build rather than the UCRT one, so that the C
+runtime matches the installed GCC and the bundled SDL2 and the only thing that
+differs is the compiler. Every build below stops both workloads with a
+`crash.log` identical to the baseline's:
+
+| build | linux MIPS | doom MIPS |
+|---|---:|---:|
+| GCC 8.1, plain (what `make` gives) | 55.3 | 69.5 |
+| Clang 23, plain | 56.1 | 74.2 |
+| Clang 23 + ThinLTO | 56.5 | 79.3 |
+| GCC 8.1 + PGO (`pgo.py`) | 64.8 | 88.9 |
+| Clang 23 + PGO | 64.4 | 90.3 |
+| Clang 23 + PGO + ThinLTO | 80.0 | 116.6 |
+
+Head to head on the same sources, Clang with PGO and ThinLTO is 1.312x on doom
+and 1.235x on linux over the best the installed GCC can produce. It also passes
+the whole gate in that configuration: 373/373 strict lock-step against Sail,
+and every suite in `scripts/verify.py`.
+
+The shape of the table is worth reading, because it is not the shape GCC 14's
+was. Plain Clang is ahead of plain GCC 8 but only by 1.05-1.07x, and PGO alone
+brings the two compilers level -- Clang's win is almost entirely in ThinLTO,
+which is worth 1.02x on its own and 1.17-1.20x once there is a profile to go
+with it. That combination is exactly the one GCC 8.1 cannot build at all: its
+LTO plugin loses the `Extensions` inline variable and the binary dies of heap
+corruption. So the gap is less "Clang optimizes interpreter dispatch better"
+than "Clang can do the two things together, and they compound."
+
+`make` and a bare `pgo.py` still use the installed GCC, since `make` should
+work on a checkout with nothing unpacked. The Clang route is an option on
+`pgo.py`, which learned Clang's profile flow to support it -- the instrumented
+binary writes one `.profraw` per run rather than a `.gcda` per object, and
+`llvm-profdata merge` has to fold them before `-fprofile-use` can read them:
+
+```sh
+TC=build/toolchains/llvm-mingw-20260908-msvcrt-x86_64/bin
+python performance/pgo.py --lto --cxx $TC/clang++.exe --cc $TC/clang.exe
+```
+
+Clang built these sources without a single error or new warning on the first
+attempt, which is some evidence the code is not leaning on GCC-specific
+behaviour anywhere.
+
 ## What is left
 
 The candidates the histograms point at now that fetch, loads and stores are
 cached. Nothing here is measured except where it says so.
 
-* **A newer compiler** has been measured rather than guessed -- see the table
-  above. Plain GCC 14 is slower than GCC 8 here; only PGO and LTO together get
-  ahead, by 5-9%, and that needs a toolchain this machine does not ship. What
-  is still untried is a different compiler family: clang's optimizer makes
-  rather different choices on interpreter dispatch, and neither it nor a
-  UCRT-based GCC has been tried against the bundled SDL2.
+* **Another compiler** has now been measured in both directions -- see the two
+  tables above. GCC 14 is not worth it; Clang 23 with PGO and ThinLTO is worth
+  1.31x on doom over the best the installed GCC can do, and is the fastest this
+  emulator has been. What remains untried there is a UCRT-based toolchain
+  against the bundled SDL2, which the MSVCRT llvm-mingw build was chosen
+  specifically to avoid needing to answer.
 * **Per-page pre-decode** was tried in its cheapest form -- give each cached
   code page its own table of decode slots, indexed by halfword offset, so that
   the page a step has already found for the fetch carries the decode too and

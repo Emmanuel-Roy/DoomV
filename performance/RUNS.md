@@ -104,3 +104,23 @@ and nothing else.
 | 20260919-211508 | doom 1000M | HEAD c4af636 vs 38bc40e plain | c4af636 | 69.47 | 14.4 | `3d73dac132f3` |  |
 | 20260919-211523 | linux 300M | HEAD c4af636 vs 38bc40e plain (reference) | c4af636 | 48.92 | 6.1 | `f1e71792e77d` |  |
 | 20260919-211529 | linux 300M | HEAD c4af636 vs 38bc40e plain | c4af636 | 55.30 | 5.4 | `f1e71792e77d` |  |
+| 20260921-112614 | doom 1000M | J: clang 23 -O3 (reference is gcc 8.1 -O3) (reference) | b97fd13 | 63.47 | 15.8 | `3d73dac132f3` |  |
+| 20260921-112630 | doom 1000M | J: clang 23 -O3 (reference is gcc 8.1 -O3) | b97fd13 | 74.17 | 13.5 | `3d73dac132f3` |  |
+| 20260921-112650 | linux 300M | J: clang 23 -O3 (reference is gcc 8.1 -O3) (reference) | b97fd13 | 53.17 | 5.6 | `f1e71792e77d` |  |
+| 20260921-112656 | linux 300M | J: clang 23 -O3 (reference is gcc 8.1 -O3) | b97fd13 | 56.05 | 5.4 | `f1e71792e77d` |  |
+| 20260921-112737 | doom 1000M | K: clang 23 + ThinLTO (reference) | b97fd13 | 77.49 | 12.9 | `3d73dac132f3` |  |
+| 20260921-112750 | doom 1000M | K: clang 23 + ThinLTO | b97fd13 | 79.26 | 12.6 | `3d73dac132f3` |  |
+| 20260921-112802 | linux 300M | K: clang 23 + ThinLTO (reference) | b97fd13 | 56.48 | 5.3 | `f1e71792e77d` |  |
+| 20260921-112808 | linux 300M | K: clang 23 + ThinLTO | b97fd13 | 56.47 | 5.3 | `f1e71792e77d` |  |
+| 20260921-113015 | doom 1000M | L: clang 23 + PGO (reference) | b97fd13 | 76.44 | 13.1 | `3d73dac132f3` |  |
+| 20260921-113029 | doom 1000M | L: clang 23 + PGO | b97fd13 | 90.30 | 11.1 | `3d73dac132f3` |  |
+| 20260921-113040 | linux 300M | L: clang 23 + PGO (reference) | b97fd13 | 55.49 | 5.4 | `f1e71792e77d` |  |
+| 20260921-113045 | linux 300M | L: clang 23 + PGO | b97fd13 | 64.44 | 4.7 | `f1e71792e77d` |  |
+| 20260921-113226 | doom 1000M | M: clang 23 + PGO + ThinLTO (reference) | b97fd13 | 92.83 | 10.8 | `3d73dac132f3` |  |
+| 20260921-113237 | doom 1000M | M: clang 23 + PGO + ThinLTO | b97fd13 | 111.14 | 9.0 | `3d73dac132f3` |  |
+| 20260921-113246 | linux 300M | M: clang 23 + PGO + ThinLTO (reference) | b97fd13 | 67.72 | 4.4 | `f1e71792e77d` |  |
+| 20260921-113250 | linux 300M | M: clang 23 + PGO + ThinLTO | b97fd13 | 79.04 | 3.8 | `f1e71792e77d` |  |
+| 20260921-114919 | doom 1000M | N: best vs best -- clang PGO+ThinLTO over gcc 8.1 PGO (reference) | b97fd13 | 88.86 | 11.3 | `3d73dac132f3` |  |
+| 20260921-114930 | doom 1000M | N: best vs best -- clang PGO+ThinLTO over gcc 8.1 PGO | b97fd13 | 116.57 | 8.6 | `3d73dac132f3` |  |
+| 20260921-114939 | linux 300M | N: best vs best -- clang PGO+ThinLTO over gcc 8.1 PGO (reference) | b97fd13 | 64.81 | 4.6 | `f1e71792e77d` |  |
+| 20260921-114944 | linux 300M | N: best vs best -- clang PGO+ThinLTO over gcc 8.1 PGO | b97fd13 | 80.00 | 3.8 | `f1e71792e77d` |  |

@@ -74,6 +74,40 @@ def windows_path(p: Path) -> str:
     return str(p.resolve()).replace("\\", "/")
 
 
+def is_clang(cxx) -> bool:
+    """Whether --cxx names a clang, which profiles differently from GCC."""
+    if not cxx:
+        return False
+    try:
+        out = subprocess.run([cxx, "--version"], capture_output=True, text=True).stdout
+    except OSError:
+        return False
+    return "clang" in out.lower()
+
+
+def merge_profraw(cxx, data: Path) -> Path:
+    """Clang's .profraw files into the single .profdata -fprofile-use wants.
+
+    GCC leaves one .gcda per object and reads them straight back from
+    -fprofile-dir. Clang instead writes a .profraw per *run* of the
+    instrumented binary, and they have to be merged by llvm-profdata -- which
+    ships beside the compiler, so it is found there rather than on PATH.
+    """
+    raw = sorted(data.rglob("*.profraw"))
+    if not raw:
+        raise RuntimeError(f"training wrote no .profraw into {data}")
+    profdata = data / "merged.profdata"
+    tool = Path(cxx).resolve().parent / "llvm-profdata.exe"
+    if not tool.exists():
+        tool = Path("llvm-profdata")
+    r = subprocess.run([str(tool), "merge", f"-output={windows_path(profdata)}"]
+                       + [windows_path(f) for f in raw], capture_output=True, text=True)
+    if r.returncode != 0:
+        raise RuntimeError(f"llvm-profdata merge failed: {r.stderr.strip()}")
+    print(f"    {len(raw)} .profraw merged", flush=True)
+    return profdata
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--bench", action="store_true", help="afterwards, record bench.py runs against the baseline")
@@ -82,7 +116,12 @@ def main():
     ap.add_argument("--cc", help="...and this C compiler, for SoftFloat (defaults beside --cxx's gcc)")
     ap.add_argument("--lto", action="store_true", help="add -flto (needs a compiler whose LTO works: not GCC 8.1)")
     args = ap.parse_args()
-    lto = " -flto=auto" if args.lto else ""
+    clang = is_clang(args.cxx)
+    # ThinLTO is clang's scalable form and the one that actually links this
+    # project; GCC's -flto=auto is the equivalent spelling there.
+    lto = ""
+    if args.lto:
+        lto = " -flto=thin" if clang else " -flto=auto"
 
     shutil.rmtree(PGO, ignore_errors=True)
     GEN.mkdir(parents=True)
@@ -95,14 +134,17 @@ def main():
     print("1/3 instrumented build", flush=True)
     # The same Windows-style profile directory the optimized build reads, so
     # the names the instrumented binary writes are the names GCC looks for.
-    make(staged, f"-fprofile-generate -fprofile-dir={windows_path(DATA)}{lto}",
-         PGO / "build-gen.log", args.cxx, args.cc)
+    # Clang takes the directory as part of the flag and writes .profraw into
+    # it at run time; GCC takes -fprofile-dir and writes .gcda at compile time.
+    gen_flags = (f"-fprofile-generate={windows_path(DATA)}" if clang
+                 else f"-fprofile-generate -fprofile-dir={windows_path(DATA)}")
+    make(staged, f"{gen_flags}{lto}", PGO / "build-gen.log", args.cxx, args.cc)
     for dll in ROOT.glob("*.dll"):
         shutil.copy2(dll, GEN / dll.name)
 
     print("2/3 training", flush=True)
     env = dict(os.environ)
-    if not args.cxx:
+    if not args.cxx:  # the bundled GCC 8.1; clang needs none of this
         # GCC 8.1's runtime writes each profile under the compile-time
         # directory of the object, and silently writes nothing when that path
         # is not one Windows understands. GCOV_PREFIX redirects it, stripping
@@ -117,16 +159,21 @@ def main():
         print(f"    {name}: exit {r.returncode}", flush=True)
         if r.returncode != 0:
             raise RuntimeError(f"training run {name} failed; see {PGO / f'train-{name}.log'}")
-    profiles = sorted(DATA.rglob("*.gcda"))
-    if not profiles:
-        raise RuntimeError(f"training wrote no profiles into {DATA}")
-    print(f"    {len(profiles)} profiles", flush=True)
+    if clang:
+        use_flags = f"-fprofile-use={windows_path(merge_profraw(args.cxx, DATA))}"
+    else:
+        profiles = sorted(DATA.rglob("*.gcda"))
+        if not profiles:
+            raise RuntimeError(f"training wrote no profiles into {DATA}")
+        print(f"    {len(profiles)} profiles", flush=True)
+        use_flags = f"-fprofile-use -fprofile-correction -fprofile-dir={windows_path(DATA)}"
 
     print("3/3 optimized build -> riscv_doom.exe", flush=True)
-    log = make(staged, f"-fprofile-use -fprofile-correction -fprofile-dir={windows_path(DATA)}{lto}",
-               PGO / "build-use.log", args.cxx, args.cc)
+    log = make(staged, f"{use_flags}{lto}", PGO / "build-use.log", args.cxx, args.cc)
     if "profile count data file not found" in log:
         raise RuntimeError(f"GCC found no profiles; the binary is not a PGO build. See {PGO / 'build-use.log'}")
+    if clang and "profile data may be out of date" in log:
+        print("    warning: clang reports stale profile data for some functions", flush=True)
     shutil.copy2(staged, ROOT / "riscv_doom.exe")
     print("done: riscv_doom.exe is a PGO build", flush=True)
 

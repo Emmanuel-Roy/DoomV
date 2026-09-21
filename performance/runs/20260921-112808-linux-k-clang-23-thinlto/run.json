@@ -1,0 +1,15 @@
+{
+  "time": "20260921-112808",
+  "label": "K: clang 23 + ThinLTO",
+  "workload": "linux",
+  "steps": 300000000,
+  "seconds": 5.313,
+  "mips": 56.467,
+  "crash_log_sha256": "f1e71792e77dc0252c20c00aaef01f6728c43c7f5a1b04e2d6b7f72d3ad12edf",
+  "exe": "build\\clang-lto.exe",
+  "exe_sha256": "6156da26897a313966a93bc50ea401ba93f9df48d2446a04c05fa07d1db09674",
+  "commit": "b97fd13",
+  "dirty": false,
+  "host": "AMD64 Family 25 Model 97 Stepping 2, AuthenticAMD / Windows 10",
+  "profiled": false
+}

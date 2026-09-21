@@ -1,0 +1,15 @@
+{
+  "time": "20260921-113029",
+  "label": "L: clang 23 + PGO",
+  "workload": "doom",
+  "steps": 1000000000,
+  "seconds": 11.074,
+  "mips": 90.299,
+  "crash_log_sha256": "3d73dac132f396aa505f0bc0ca70860519d439b38267eadb95954786cf97ee99",
+  "exe": "build\\clang-pgo.exe",
+  "exe_sha256": "268993269c1b6f1a55b8d231d7a19ffa3917ac4c007caad9b28cd483b8287710",
+  "commit": "b97fd13",
+  "dirty": false,
+  "host": "AMD64 Family 25 Model 97 Stepping 2, AuthenticAMD / Windows 10",
+  "profiled": false
+}
