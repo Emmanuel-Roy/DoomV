@@ -218,12 +218,38 @@ differs is the compiler. Every build below stops both workloads with a
 | Clang 23 + ThinLTO | 56.5 | 79.3 |
 | GCC 8.1 + PGO (`pgo.py`) | 64.8 | 88.9 |
 | Clang 23 + PGO | 64.4 | 90.3 |
-| Clang 23 + PGO + ThinLTO | 80.0 | 116.6 |
+| Clang 23 + PGO + ThinLTO | 80.0 | 113.2 |
 
-Head to head on the same sources, Clang with PGO and ThinLTO is 1.312x on doom
-and 1.235x on linux over the best the installed GCC can produce. It also passes
-the whole gate in that configuration: 373/373 strict lock-step against Sail,
-and every suite in `scripts/verify.py`.
+Head to head on the same sources, Clang with PGO and ThinLTO is 1.284x on doom
+and 1.254x on linux over the best the installed GCC can produce -- the two
+workloads' figures move by a couple of points between runs, so read them as
+1.25-1.31x rather than to three digits -- and it passes the whole gate in that
+configuration: 373/373 strict lock-step against Sail, and
+every suite in `scripts/verify.py`.
+
+It did not pass at first, and what it caught was a bug in this project rather
+than anything about Clang. Ten riscv-arch-test failures and three vector ones,
+every single difference an `fflags` bit and never a computed value: NX was not
+being raised by any `FCVT` or `VFNCVT`. The cause is that F/D are computed with
+real host float arithmetic and the host's exception flags are read back, and
+the twelve call sites doing that collected the flags *after* restoring the
+rounding mode:
+
+    clear -> fesetround(guest mode) -> compute -> fesetround(old) -> collect
+
+C says `fesetround` establishes the rounding direction; nothing guarantees it
+leaves the exception flags alone. The mingw-w64 runtime in the GCC 8.1 bundle
+does a read-modify-write and preserves them, so that order worked for as long
+as there was one toolchain in play. llvm-mingw's writes MXCSR whole and clears
+the status bits with it, which zeroed the flag between raising it and reading
+it. Collecting before restoring is correct under either runtime and is what the
+code does now; `collect_fflags` in `ext_fp_common.hpp` says why. Both compilers
+pass everything with the fix, and the GCC build's `crash.log` is unchanged.
+
+Worth noting for its own sake: a second toolchain found a latent bug here that
+373 lock-step tests and a 3,042-test vector suite could not, because on the
+original runtime the code was not wrong in any observable way. That is a better
+argument for keeping Clang buildable than the speed is.
 
 The shape of the table is worth reading, because it is not the shape GCC 14's
 was. Plain Clang is ahead of plain GCC 8 but only by 1.05-1.07x, and PGO alone

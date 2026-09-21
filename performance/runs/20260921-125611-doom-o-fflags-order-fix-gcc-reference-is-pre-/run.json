@@ -1,0 +1,15 @@
+{
+  "time": "20260921-125611",
+  "label": "O: fflags order fix, gcc (reference is pre-fix gcc)",
+  "workload": "doom",
+  "steps": 1000000000,
+  "seconds": 14.378,
+  "mips": 69.552,
+  "crash_log_sha256": "3d73dac132f396aa505f0bc0ca70860519d439b38267eadb95954786cf97ee99",
+  "exe": "Z:\\Code\\Dev\\DoomV\\riscv_doom.exe",
+  "exe_sha256": "8bbca3de7572221ca35685126738b1e7aff5ac6fb9e736607b7181eb2beeb569",
+  "commit": "5bd434d",
+  "dirty": true,
+  "host": "AMD64 Family 25 Model 97 Stepping 2, AuthenticAMD / Windows 10",
+  "profiled": false
+}

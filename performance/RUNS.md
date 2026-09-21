@@ -124,3 +124,9 @@ and nothing else.
 | 20260921-114930 | doom 1000M | N: best vs best -- clang PGO+ThinLTO over gcc 8.1 PGO | b97fd13 | 116.57 | 8.6 | `3d73dac132f3` |  |
 | 20260921-114939 | linux 300M | N: best vs best -- clang PGO+ThinLTO over gcc 8.1 PGO (reference) | b97fd13 | 64.81 | 4.6 | `f1e71792e77d` |  |
 | 20260921-114944 | linux 300M | N: best vs best -- clang PGO+ThinLTO over gcc 8.1 PGO | b97fd13 | 80.00 | 3.8 | `f1e71792e77d` |  |
+| 20260921-125556 | doom 1000M | O: fflags order fix, gcc (reference is pre-fix gcc) (reference) | 5bd434d+ | 68.33 | 14.6 | `3d73dac132f3` |  |
+| 20260921-125611 | doom 1000M | O: fflags order fix, gcc (reference is pre-fix gcc) | 5bd434d+ | 69.55 | 14.4 | `3d73dac132f3` |  |
+| 20260921-131014 | doom 1000M | P: clang PGO+ThinLTO with fflags fix vs gcc 8.1 PGO (reference) | 5bd434d+ | 88.16 | 11.3 | `3d73dac132f3` |  |
+| 20260921-131026 | doom 1000M | P: clang PGO+ThinLTO with fflags fix vs gcc 8.1 PGO | 5bd434d+ | 113.22 | 8.8 | `3d73dac132f3` |  |
+| 20260921-131034 | linux 300M | P: clang PGO+ThinLTO with fflags fix vs gcc 8.1 PGO (reference) | 5bd434d+ | 63.77 | 4.7 | `f1e71792e77d` |  |
+| 20260921-131039 | linux 300M | P: clang PGO+ThinLTO with fflags fix vs gcc 8.1 PGO | 5bd434d+ | 79.97 | 3.8 | `f1e71792e77d` |  |

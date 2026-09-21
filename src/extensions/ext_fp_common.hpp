@@ -97,6 +97,18 @@ inline void clear_fp_exceptions()
 // the shared cause instead.
 //
 // Found by riscv-arch-test D-fnmadd.d-* against Sail.
+//
+// Call this BEFORE restoring the rounding mode, never after. Every caller
+// here runs clear -> fesetround(guest mode) -> compute -> collect ->
+// fesetround(old), and the last two used to be the other way round. C says
+// fesetround establishes the rounding direction and says nothing that
+// guarantees it leaves the exception flags alone; whether it does is the
+// runtime's business. The GCC 8.1 bundle's mingw-w64 does a read-modify-write
+// and preserves them, so the wrong order worked here for as long as there was
+// only one toolchain. llvm-mingw's writes MXCSR whole and clears the status
+// bits with it, which silently zeroed NX on every FCVT and VFNCVT -- ten
+// riscv-arch-test failures and three vector ones, all of them fflags, none of
+// them values. Collecting first is correct under either, and costs nothing.
 inline uint8_t collect_fflags()
 {
 	int e = std::fetestexcept(FE_ALL_EXCEPT);

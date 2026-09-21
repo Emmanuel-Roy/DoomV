@@ -707,8 +707,8 @@ void exec_v_fp(const DecodedInstruction &instr, Registers &regs)
 						? (wsew == 64 ? fcvt_to_u64(src, regs) : (uint64_t)fcvt_to_u32(src, regs))
 						: (wsew == 64 ? (uint64_t)fcvt_to_i64(src, regs)
 						              : (uint64_t)(int64_t)fcvt_to_i32(src, regs));
-					std::fesetround(old_round);
 					regs.or_fflags(collect_fflags());
+					std::fesetround(old_round);
 					write_velem(regs, instr.rd, wsew, i, xr & elem_mask(wsew));
 					break;
 				}
@@ -728,8 +728,8 @@ void exec_v_fp(const DecodedInstruction &instr, Registers &regs)
 					uint64_t raw = read_velem(regs, instr.rs2, nsew, i);
 					double r0 = (sub == 0x0A) ? (double)raw : (double)sext_elem(raw, nsew);
 					volatile double r = (wsew == 32) ? (double)(float)r0 : r0;
-					std::fesetround(old_round);
 					regs.or_fflags(collect_fflags());
+					std::fesetround(old_round);
 					write_f(instr.rd, wsew, i, r, rm);
 					break;
 				}
@@ -793,8 +793,8 @@ void exec_v_fp(const DecodedInstruction &instr, Registers &regs)
 					bool uns = (sub == 0x10 || sub == 0x16);
 					volatile uint64_t xr = uns ? (uint64_t)fcvt_to_u32(src, regs)
 					                           : (uint64_t)(int64_t)fcvt_to_i32(src, regs);
-					std::fesetround(old_round);
 					regs.or_fflags(collect_fflags());
+					std::fesetround(old_round);
 					write_velem(regs, instr.rd, nsew, i, xr & elem_mask(nsew));
 					break;
 				}
@@ -814,8 +814,8 @@ void exec_v_fp(const DecodedInstruction &instr, Registers &regs)
 					uint64_t raw = read_velem(regs, instr.rs2, wsew, i);
 					double r0 = (sub == 0x12) ? (double)raw : (double)sext_elem(raw, wsew);
 					volatile double r = (nsew == 32) ? (double)(float)r0 : r0;
-					std::fesetround(old_round);
 					regs.or_fflags(collect_fflags());
+					std::fesetround(old_round);
 					write_f(instr.rd, nsew, i, r, rm);
 					break;
 				}
@@ -873,8 +873,8 @@ void exec_v_fp(const DecodedInstruction &instr, Registers &regs)
 						double v = read_f(instr.rs2, wsew, i);
 						std::fesetround(host_rm);
 						volatile double r = (double)(float)v;
-						std::fesetround(old_round);
 						uint8_t fl = collect_fflags();
+						std::fesetround(old_round);
 						uint32_t fb = bits_from_f32((float)r);
 						if (sub == 0x15 && (fl & 0x01)) fb |= 1;
 						regs.or_fflags(fl);
@@ -925,15 +925,15 @@ void exec_v_fp(const DecodedInstruction &instr, Registers &regs)
 				volatile uint64_t xr = is_unsigned
 					? (sew == 64 ? fcvt_to_u64(src, regs) : (uint64_t)fcvt_to_u32(src, regs))
 					: (sew == 64 ? (uint64_t)fcvt_to_i64(src, regs) : (uint64_t)(int64_t)fcvt_to_i32(src, regs));
-				std::fesetround(old_round);
 				regs.or_fflags(collect_fflags());
+				std::fesetround(old_round);
 				write_velem(regs, instr.rd, sew, i, xr & elem_mask(sew));
 			} else {
 				double r0 = (sub == 0x02) ? (double)read_velem(regs, instr.rs2, sew, i) // f.xu
 				                          : (double)sext_elem(read_velem(regs, instr.rs2, sew, i), sew); // f.x
 				volatile double r = (sew == 32) ? (double)(float)r0 : r0; // round through the actual target precision
-				std::fesetround(old_round);
 				regs.or_fflags(collect_fflags());
+				std::fesetround(old_round);
 				write_felem(regs, instr.rd, sew, i, r);
 			}
 		});

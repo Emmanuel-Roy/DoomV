@@ -214,8 +214,8 @@ void RiscvCore::exec_D(const DecodedInstruction &instr, Registers &regs, Memory 
 		case 0b00010: result = (uint64_t)fcvt_to_i64(v, regs); break;         // FCVT.L.D
 		case 0b00011: result = fcvt_to_u64(v, regs); break;                   // FCVT.LU.D
 		}
-		std::fesetround(old_round);
 		regs.or_fflags(collect_fflags());
+		std::fesetround(old_round);
 		regs.write_x(instr.rd, result);
 		break;
 	}
@@ -232,8 +232,8 @@ void RiscvCore::exec_D(const DecodedInstruction &instr, Registers &regs, Memory 
 		case 0b00010: dv = (double)(int64_t)xv; break;
 		case 0b00011: dv = (double)xv; break;
 		}
-		std::fesetround(old_round);
 		regs.or_fflags(collect_fflags());
+		std::fesetround(old_round);
 		regs.write_f(instr.rd, dv);
 		break;
 	}
@@ -244,8 +244,8 @@ void RiscvCore::exec_D(const DecodedInstruction &instr, Registers &regs, Memory 
 		int old_round = std::fegetround();
 		std::fesetround(host_round_mode(instr.funct3, regs.get_frm()));
 		volatile float result = (float)a;
-		std::fesetround(old_round);
 		regs.or_fflags(collect_fflags());
+		std::fesetround(old_round);
 		float rv = result;
 		if (std::isnan(rv)) rv = canonical_nan<float>();
 		write_f32_reg(regs, instr.rd, rv);

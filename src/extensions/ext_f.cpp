@@ -193,8 +193,8 @@ void RiscvCore::exec_F(const DecodedInstruction &instr, Registers &regs, Memory 
 		case 0b00010: result = (uint64_t)fcvt_to_i64(v, regs); break;         // FCVT.L.S
 		case 0b00011: result = fcvt_to_u64(v, regs); break;                   // FCVT.LU.S
 		}
-		std::fesetround(old_round);
 		regs.or_fflags(collect_fflags());
+		std::fesetround(old_round);
 		regs.write_x(instr.rd, result);
 		break;
 	}
@@ -212,8 +212,8 @@ void RiscvCore::exec_F(const DecodedInstruction &instr, Registers &regs, Memory 
 		case 0b00010: fv = (float)(int64_t)xv; break;
 		case 0b00011: fv = (float)xv; break;
 		}
-		std::fesetround(old_round);
 		regs.or_fflags(collect_fflags());
+		std::fesetround(old_round);
 		write_f32_reg(regs, instr.rd, fv);
 		break;
 	}
