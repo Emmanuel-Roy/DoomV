@@ -1,0 +1,15 @@
+{
+  "time": "20260923-123150",
+  "label": "Q: gcc fallback vs clang, same sources (reference)",
+  "workload": "doom",
+  "steps": 1000000000,
+  "seconds": 12.703,
+  "mips": 78.724,
+  "crash_log_sha256": "3d73dac132f396aa505f0bc0ca70860519d439b38267eadb95954786cf97ee99",
+  "exe": "build\\clang-fixed.exe",
+  "exe_sha256": "e5ad1f49748e4184a22f38db48278019cf606be480a1eb2079c30a9cce96d565",
+  "commit": "10e0f6d",
+  "dirty": true,
+  "host": "AMD64 Family 25 Model 97 Stepping 2, AuthenticAMD / Windows 10",
+  "profiled": false
+}

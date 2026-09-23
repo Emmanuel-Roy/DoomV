@@ -130,3 +130,7 @@ and nothing else.
 | 20260921-131026 | doom 1000M | P: clang PGO+ThinLTO with fflags fix vs gcc 8.1 PGO | 5bd434d+ | 113.22 | 8.8 | `3d73dac132f3` |  |
 | 20260921-131034 | linux 300M | P: clang PGO+ThinLTO with fflags fix vs gcc 8.1 PGO (reference) | 5bd434d+ | 63.77 | 4.7 | `f1e71792e77d` |  |
 | 20260921-131039 | linux 300M | P: clang PGO+ThinLTO with fflags fix vs gcc 8.1 PGO | 5bd434d+ | 79.97 | 3.8 | `f1e71792e77d` |  |
+| 20260923-123150 | doom 1000M | Q: gcc fallback vs clang, same sources (reference) | 10e0f6d+ | 78.72 | 12.7 | `3d73dac132f3` |  |
+| 20260923-123203 | doom 1000M | Q: gcc fallback vs clang, same sources | 10e0f6d+ | 70.40 | 14.2 | `3d73dac132f3` |  |
+| 20260923-123344 | doom 1000M | R: bare pgo.py (now clang) vs gcc 8.1 PGO (reference) | 10e0f6d+ | 89.18 | 11.2 | `3d73dac132f3` |  |
+| 20260923-123355 | doom 1000M | R: bare pgo.py (now clang) vs gcc 8.1 PGO | 10e0f6d+ | 95.29 | 10.5 | `3d73dac132f3` |  |

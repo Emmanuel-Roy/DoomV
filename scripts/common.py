@@ -84,7 +84,14 @@ def build_emulator():
 
 def ensure_host_tools():
     """Install native prerequisites once, then verify the commands are usable."""
-    required = ("python", "make", "gcc", "g++")
+    # A compiler is required, but not a particular one: the Makefile prefers
+    # Clang and falls back to GCC, so only demand GCC when there is no Clang
+    # for it to have found. install_dependencies.ps1 installs GCC either way.
+    required = ["python", "make"]
+    if not (list(ROOT.glob("build/toolchains/llvm-mingw-*/bin/clang++.exe"))
+            or shutil.which("clang++")):
+        required += ["gcc", "g++"]
+    required = tuple(required)
     path = environment().get("PATH")
     missing = [name for name in required if shutil.which(name, path=path) is None]
     if missing:

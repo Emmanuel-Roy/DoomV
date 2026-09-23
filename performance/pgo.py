@@ -74,6 +74,20 @@ def windows_path(p: Path) -> str:
     return str(p.resolve()).replace("\\", "/")
 
 
+def default_compiler() -> tuple[str, str]:
+    """The (C++, C) compilers `make` picks when none is named on its line.
+
+    This mirrors the Makefile's own selection, and has to: with --cxx absent,
+    make builds with whatever it prefers, so anything here that assumed GCC
+    would be preparing profiles for a compiler that is not the one building.
+    """
+    for clang in sorted(ROOT.glob("build/toolchains/llvm-mingw-*/bin/clang++.exe")):
+        return str(clang), str(clang.with_name("clang.exe"))
+    if shutil.which("clang++"):
+        return "clang++", "clang"
+    return "g++", "gcc"
+
+
 def is_clang(cxx) -> bool:
     """Whether --cxx names a clang, which profiles differently from GCC."""
     if not cxx:
@@ -116,7 +130,15 @@ def main():
     ap.add_argument("--cc", help="...and this C compiler, for SoftFloat (defaults beside --cxx's gcc)")
     ap.add_argument("--lto", action="store_true", help="add -flto (needs a compiler whose LTO works: not GCC 8.1)")
     args = ap.parse_args()
+    # An explicit --cxx wins; otherwise resolve what make would use, so the
+    # profile flow below matches the compiler that actually does the building.
+    explicit_cxx = args.cxx is not None
+    if not explicit_cxx:
+        args.cxx, args.cc = default_compiler()
+    elif args.cc is None:
+        args.cc = args.cxx.replace("clang++", "clang").replace("g++", "gcc")
     clang = is_clang(args.cxx)
+    print(f"compiler: {args.cxx}", flush=True)
     # ThinLTO is clang's scalable form and the one that actually links this
     # project; GCC's -flto=auto is the equivalent spelling there.
     lto = ""
@@ -144,7 +166,7 @@ def main():
 
     print("2/3 training", flush=True)
     env = dict(os.environ)
-    if not args.cxx:  # the bundled GCC 8.1; clang needs none of this
+    if not explicit_cxx and not clang:  # the bundled GCC 8.1; nothing else needs this
         # GCC 8.1's runtime writes each profile under the compile-time
         # directory of the object, and silently writes nothing when that path
         # is not one Windows understands. GCOV_PREFIX redirects it, stripping

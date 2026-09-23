@@ -346,6 +346,20 @@ make
 ./riscv_doom.exe tools/doom/doombuild/DOOM1.WAD tools/doom/doombuild/doomv-free.elf
 ```
 
+`make` builds with Clang when it can find one and GCC otherwise — both are
+supported, both pass the whole test suite, and the two builds run identically.
+Clang is preferred because it is considerably faster on this code (1.25–1.31x
+with PGO and ThinLTO, and ahead even plain; see
+[performance/README.md](performance/README.md)). To switch a GCC checkout over:
+
+```
+python scripts/get_clang.py
+```
+
+That unpacks llvm-mingw under `build/toolchains/`, which is the only thing
+`make` looks for. Nothing requires it — without it the build simply uses GCC —
+and `make CXX=g++ CC=gcc` forces GCC even when a Clang is present.
+
 `DOOM1.WAD` (the shareware IWAD) is the only WAD checked into this repo —
 it's free to redistribute. Point it at your own `DOOM.WAD`/`DOOM2.WAD` if
 you own a copy, and rebuild the guest ELF from `tools/doom/doombuild/` to match.
