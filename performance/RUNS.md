@@ -134,3 +134,7 @@ and nothing else.
 | 20260923-123203 | doom 1000M | Q: gcc fallback vs clang, same sources | 10e0f6d+ | 70.40 | 14.2 | `3d73dac132f3` |  |
 | 20260923-123344 | doom 1000M | R: bare pgo.py (now clang) vs gcc 8.1 PGO (reference) | 10e0f6d+ | 89.18 | 11.2 | `3d73dac132f3` |  |
 | 20260923-123355 | doom 1000M | R: bare pgo.py (now clang) vs gcc 8.1 PGO | 10e0f6d+ | 95.29 | 10.5 | `3d73dac132f3` |  |
+| 20260923-124921 | doom 1000M | S: default make with ThinLTO vs without (reference) | 942eb19+ | 78.31 | 12.8 | `3d73dac132f3` |  |
+| 20260923-124934 | doom 1000M | S: default make with ThinLTO vs without | 942eb19+ | 81.48 | 12.3 | `3d73dac132f3` |  |
+| 20260923-124946 | linux 300M | S: default make with ThinLTO vs without (reference) | 942eb19+ | 57.27 | 5.2 | `f1e71792e77d` |  |
+| 20260923-124952 | linux 300M | S: default make with ThinLTO vs without | 942eb19+ | 58.54 | 5.1 | `f1e71792e77d` |  |

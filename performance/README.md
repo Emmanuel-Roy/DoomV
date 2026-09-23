@@ -213,9 +213,9 @@ differs is the compiler. Every build below stops both workloads with a
 
 | build | linux MIPS | doom MIPS |
 |---|---:|---:|
-| GCC 8.1, plain (what `make` gives) | 55.3 | 69.5 |
+| GCC 8.1, plain (what `make` gives without a Clang) | 55.3 | 69.5 |
 | Clang 23, plain | 56.1 | 74.2 |
-| Clang 23 + ThinLTO | 56.5 | 79.3 |
+| Clang 23 + ThinLTO (what `make` gives) | 58.5 | 81.5 |
 | GCC 8.1 + PGO (`pgo.py`) | 64.8 | 88.9 |
 | Clang 23 + PGO | 64.4 | 90.3 |
 | Clang 23 + PGO + ThinLTO | 80.0 | 113.2 |

@@ -26,19 +26,26 @@ else
   CC = gcc
 endif
 
+# ThinLTO, but only under Clang. With GCC 8.1 any -flto is unusable: the LTO
+# plugin warns "No symbol for section 'Extensions'" -- the C++17 inline
+# variable in extensions.hpp -- and the linked emulator dies of heap
+# corruption before printing anything. Clang's works, is worth a few percent
+# on its own and much more with a profile, and passes the whole gate; the
+# empty LTO for GCC is what keeps that build exactly as it was.
+#
+# SoftFloat stays a plain -O2 native object. Mixing it with bitcode links
+# fine, and it is not where this emulator spends its time.
+ifneq ($(findstring clang,$(CXX)),)
+  LTO = -flto=thin
+else
+  LTO =
+endif
+
 # -frounding-math is for GCC; Clang accepts and ignores it, which is harmless
 # here because nothing depends on the compiler preserving the FP environment
 # across a call -- the flags are collected before the rounding mode is
 # restored, deliberately, see ext_fp_common.hpp's collect_fflags.
-#
-# No -flto in the default build. With GCC 8.1 it is unusable: the LTO plugin
-# warns "No symbol for section 'Extensions'" -- the C++17 inline variable in
-# extensions.hpp -- and the linked emulator dies of heap corruption before
-# printing anything. Clang's ThinLTO does work and is worth a further ~2% on
-# its own (much more with a profile), but it is left to pgo.py --lto rather
-# than made the default, so that `make` means the same build on either
-# compiler.
-CXXFLAGS = -std=c++2a -O3 -pthread -frounding-math -static-libgcc -static-libstdc++ -Wl,-Bstatic,--whole-archive -lwinpthread -Wl,--no-whole-archive,-Bdynamic
+CXXFLAGS = -std=c++2a -O3 -pthread $(LTO) -frounding-math -static-libgcc -static-libstdc++ -Wl,-Bstatic,--whole-archive -lwinpthread -Wl,--no-whole-archive,-Bdynamic
 
 # Include and Library paths
 #

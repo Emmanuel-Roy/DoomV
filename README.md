@@ -346,19 +346,57 @@ make
 ./riscv_doom.exe tools/doom/doombuild/DOOM1.WAD tools/doom/doombuild/doomv-free.elf
 ```
 
-`make` builds with Clang when it can find one and GCC otherwise — both are
-supported, both pass the whole test suite, and the two builds run identically.
-Clang is preferred because it is considerably faster on this code (1.25–1.31x
-with PGO and ThinLTO, and ahead even plain; see
-[performance/README.md](performance/README.md)). To switch a GCC checkout over:
+On a machine that has never built this before, install the host tools first —
+`make`, a compiler, SDL2 and Python:
+
+```
+powershell -ExecutionPolicy Bypass -File scripts/install_dependencies.ps1
+```
+
+That is all `make` needs. Building a *guest* (Linux, or the Ubuntu kernel)
+additionally needs the RISC-V cross-toolchain, which lives in WSL and is
+installed separately — see [Scripts](#scripts).
+
+### Which compiler
+
+`make` builds with Clang when it can find one and GCC otherwise. Both are
+fully supported, both pass the whole test suite, and the two builds are
+identical in behaviour — they stop the benchmark workloads on the same
+`crash.log` hash. Clang is preferred only because it is considerably faster on
+this code: roughly 1.12x plain, and 1.25–1.31x with PGO and ThinLTO. The
+measurements are in [performance/README.md](performance/README.md).
+
+`install_dependencies.ps1` installs GCC, so a fresh checkout builds with GCC
+and needs nothing else. To switch to Clang:
 
 ```
 python scripts/get_clang.py
 ```
 
-That unpacks llvm-mingw under `build/toolchains/`, which is the only thing
-`make` looks for. Nothing requires it — without it the build simply uses GCC —
-and `make CXX=g++ CC=gcc` forces GCC even when a Clang is present.
+That unpacks llvm-mingw under `build/toolchains/`, which is the only place
+`make` looks. It is pinned to the version the numbers were measured with and
+both suites were run against. Nothing depends on it having been run.
+
+`make` picks, in order: `CXX=` on the command line, the llvm-mingw under
+`build/toolchains/`, a `clang++` on `PATH`, then `g++`. So:
+
+```
+make                      # Clang if it is there, GCC if not
+make CXX=g++ CC=gcc       # force GCC even with a Clang unpacked
+make clean
+```
+
+Under Clang the default build uses ThinLTO; under GCC it does not, because
+GCC 8.1 cannot link this project with LTO at all. For the fastest binary, add
+a profile — this runs both benchmark workloads to train on, so it takes a few
+minutes:
+
+```
+python performance/pgo.py            # PGO, with the compiler make would use
+python performance/pgo.py --lto      # ...and LTO
+```
+
+It overwrites `riscv_doom.exe`; a plain `make` puts the ordinary build back.
 
 `DOOM1.WAD` (the shareware IWAD) is the only WAD checked into this repo —
 it's free to redistribute. Point it at your own `DOOM.WAD`/`DOOM2.WAD` if
@@ -401,6 +439,54 @@ finished test never exits on its own and has to be killed from outside, so
 every test cost its full timeout whether it passed or not; headless, the
 whole 663-test arch-test run takes about 40 seconds and the 43-group
 hypervisor suite about 10.
+
+<a id="ubuntu"></a>
+### Running Ubuntu, with or without a desktop
+
+Ubuntu is the one guest `boot.py` cannot build for you. DOOM and the BusyBox
+Linux are cross-compiled in minutes; the Ubuntu image is built in two stages,
+the second of which is DoomV running Ubuntu's own `dpkg` for about four hours.
+So `ubuntu.img` is an *input* here — [tools/linux/ubuntu/](tools/linux/ubuntu/README.md)
+is how one is made. Everything below assumes it exists in the repo root.
+
+The kernel is built for you; the image is not.
+
+```
+python scripts/boot.py ubuntu                 # window, logs in as root by itself
+python scripts/boot.py ubuntu --no-autologin  # window, stop at the login prompt
+python scripts/boot.py ubuntu --headless      # no window; kernel log to this console
+python scripts/boot.py ubuntu --login         # headless, prove login works, then exit
+python scripts/boot.py ubuntu --no-build      # skip the kernel build, boot what is there
+```
+
+A systemd boot here takes minutes, not seconds — it is a full distribution on
+an emulated hart. The window is black for a while before the framebuffer
+console appears; that is normal.
+
+**The desktops.** Openbox, XFCE and bare X can all run, and like the base
+system they are installed by DoomV running the guest's own `apt`. That is one
+long step, done once:
+
+```
+python scripts/boot.py ubuntu --install-desktops      # hours; DoomV does the installing
+```
+
+It copies the image aside first, because it rewrites it and takes hours.
+Afterwards, pick one per boot — each gets its own device tree, so the choice
+is made at boot rather than inside the guest:
+
+```
+python scripts/boot.py ubuntu --desktop openbox       # Xorg + Openbox + xterm
+python scripts/boot.py ubuntu --desktop xfce          # the full XFCE desktop
+python scripts/boot.py ubuntu --desktop x             # bare X, xterm windows only
+```
+
+A desktop session starts as root on its own, so `--no-autologin` does not
+apply to it. Use the mouse and keyboard in the window as you would expect —
+input is a virtio-input device, see [Input](#input). `--desktop` also takes
+`--headless`, which sounds contradictory but is how the screenshots above were
+captured: the session runs with no host window and `-fbdump` writes the
+guest's framebuffer out as a PPM. See [The display](#the-display).
 
 ### Driving a guest from a pipe
 
@@ -586,6 +672,7 @@ instruction count as nanoseconds from 2024-01-01 -- and that time is written
 to the Windows file too. Inode numbers count up in the order the guest first
 sees each file, listings are sorted by name, and `df` reports a fixed 1 TiB.
 
+<a id="the-display"></a>
 ### The display
 
 There are two framebuffers, and which one the window shows depends on how
@@ -672,6 +759,9 @@ The supported entry points are collected in `scripts/`:
 powershell -ExecutionPolicy Bypass -File scripts/install_dependencies.ps1
 powershell -ExecutionPolicy Bypass -File scripts/toolchain.ps1
 
+# Optional: build with Clang instead of GCC (faster; see Which compiler).
+python scripts/get_clang.py
+
 # Build DoomV, Linux, or both.
 python scripts/build.py doom
 python scripts/build.py linux
@@ -686,6 +776,7 @@ python scripts/boot.py ubuntu                 # the window logs in as root by it
 python scripts/boot.py ubuntu --login
 
 # Ubuntu desktops: install all three once (hours), then pick one per boot.
+# See "Running Ubuntu, with or without a desktop" above.
 python scripts/boot.py ubuntu --install-desktops
 python scripts/boot.py ubuntu --desktop openbox    # or xfce, or x
 
