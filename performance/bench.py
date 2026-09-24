@@ -53,7 +53,48 @@ WORKLOADS = {
     # the framebuffer, a different mix from the kernel's.
     "doom": dict(steps=1_000_000_000, args=lambda: [
         "-ng", str(DOOM / "DOOM1.WAD"), str(DOOM / "doomv-free.elf")]),
+    # Ubuntu 24.04 booting systemd on the XFCE configuration: a real
+    # distribution's init, its udev coldplug and its service dependency graph,
+    # off a virtio disk. The heaviest of the three by some way -- around 55
+    # MIPS where DOOM runs at 80 -- because it is the one doing real MMU work
+    # against a real userland rather than a single static binary.
+    #
+    # It boots *toward* the desktop and does not reach it: X is twenty minutes
+    # of emulated time away, which no benchmark can wait for. What this
+    # measures is the boot, on the device tree the desktop uses. Benchmarking
+    # the running desktop would need a way to resume from a booted machine,
+    # which this emulator does not have.
+    #
+    # `optional`: it needs ubuntu.img, which is built over hours and is not in
+    # a fresh checkout, so the things that sweep every workload skip it rather
+    # than failing. Name it explicitly to run it.
+    "ubuntu": dict(steps=3_000_000_000, optional=True, prepare=lambda: prepare_ubuntu(),
+                   args=lambda: [
+        "-ng", f"-opensbi={LINUX / 'fw_jump.elf'}", f"-kernel={LINUX / 'Image'}",
+        f"-dtb={LINUX / 'ubuntu-xfce.dtb'}", f"-disk={BENCH_IMAGE}",
+        # No drives or shared folder: both default to a directory in the
+        # working tree, and a benchmark must not depend on what is in them.
+        "-drives=", "-shared="]),
 }
+
+UBUNTU_IMAGE = ROOT / "ubuntu.img"
+BENCH_IMAGE = ROOT / "build" / "bench-ubuntu.img"
+
+
+def prepare_ubuntu():
+    """A fresh copy of the image before every run.
+
+    The root disk is opened read-write, so a run writes to it -- systemd's
+    journal, the random seed, whatever else early boot touches. Benchmarking
+    the real ubuntu.img would therefore mean each run started from what the
+    last one left, which is neither reproducible nor kind to an image that
+    took hours to build. About two seconds for 4GB, and outside the timed
+    section.
+    """
+    if not UBUNTU_IMAGE.exists():
+        raise RuntimeError(f"{UBUNTU_IMAGE} does not exist; see tools/linux/ubuntu/README.md")
+    BENCH_IMAGE.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(UBUNTU_IMAGE, BENCH_IMAGE)
 
 
 def sha256(path: Path) -> str:
@@ -81,6 +122,8 @@ def run_once(workload: str, exe: Path, steps: int, label: str, profile: bool, in
     work = ROOT / "build" / "perf-work" / out.name
     work.mkdir(parents=True, exist_ok=True)
 
+    if spec.get("prepare"):
+        spec["prepare"]()
     cmd = [str(exe.resolve())] + spec["args"]() + [f"-stopat={steps}"]
     started = time.perf_counter()
     with (work / "console.log").open("wb") as console:

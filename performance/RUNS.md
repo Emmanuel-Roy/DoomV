@@ -148,3 +148,5 @@ and nothing else.
 | 20260924-175453 | doom 1000M | U: configurable ram + GuestRam vs fixed constexpr | 972acde+ | 81.45 | 12.3 | `3d73dac132f3` |  |
 | 20260924-181602 | linux 300M | V: linux hash check after -ram work (reference) | d54fa5e | 56.27 | 5.3 | `e76932b2b713` |  |
 | 20260924-181608 | linux 300M | V: linux hash check after -ram work | d54fa5e | 59.50 | 5.0 | `e76932b2b713` |  |
+| 20260924-185543 | ubuntu 3000M | ubuntu-xfce boot, first | cfd8034 | 54.30 | 55.2 | `2ca0ac5022e1` |  |
+| 20260924-185639 | ubuntu 3000M | ubuntu-xfce boot, repeat | cfd8034 | 53.61 | 56.0 | `2ca0ac5022e1` |  |

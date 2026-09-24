@@ -275,6 +275,47 @@ Clang built these sources without a single error or new warning on the first
 attempt, which is some evidence the code is not leaning on GCC-specific
 behaviour anywhere.
 
+### The workloads
+
+`bench.py` measures three, each a different mix:
+
+| workload | steps | MIPS | what it exercises |
+|---|---|---|---|
+| doom | 1000M | ~81 | the renderer, WAD reads, the framebuffer |
+| linux | 300M | ~59 | OpenSBI, the kernel, BusyBox userspace |
+| ubuntu | 3000M | ~54 | systemd, udev coldplug, a real userland off a virtio disk |
+
+`ubuntu` is the newest and the heaviest, and it is heaviest for a reason worth
+knowing: it is the only one doing sustained MMU work against a real
+distribution rather than a single static binary. If a change helps the page
+tables or the TLB, this is where it shows.
+
+Two things about it are not obvious.
+
+**It does not reach the desktop.** It boots on the XFCE device tree, and X is
+twenty minutes of emulated time past where the measurement stops -- no
+benchmark can wait for that. What it measures is the boot. Measuring the
+running desktop would need a way to resume from an already-booted machine,
+which this emulator has no facility for; `Snapshot` is the dashboard's view of
+state, not a save file.
+
+**Every run starts from a fresh copy of the image.** The root disk is opened
+read-write and early boot writes to it -- the journal, the random seed -- so
+benchmarking `ubuntu.img` directly would mean each run began from whatever the
+last one left behind. Not reproducible, and not kind to an image that took
+hours to build. `prepare_ubuntu()` copies it to `build/bench-ubuntu.img` first,
+about two seconds for 4GB, outside the timed section. With that, two runs
+produce an identical crash.log hash, which is what makes it usable as an
+equivalence check the way the other two are.
+
+It is marked `optional`, because it needs an `ubuntu.img` a fresh checkout does
+not have. `pgo.py` skips it when training and `ram_backends.py` leaves it out
+by default; naming it explicitly runs it.
+
+```sh
+python performance/bench.py ubuntu --compare build/perf-baseline/riscv_doom.exe --label "..."
+```
+
 ### Does more RAM cost anything
 
 No, not with the backend `make` builds. Throughput does not move with the size

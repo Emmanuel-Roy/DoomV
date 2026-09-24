@@ -174,7 +174,13 @@ def main():
         # them itself, relative to -fprofile-dir, and redirecting instead
         # produces names its -fprofile-use will not look for.
         env.update(GCOV_PREFIX=windows_path(DATA), GCOV_PREFIX_STRIP="64")
+    # Optional workloads are skipped: training must work on a checkout that
+    # has only what `scripts/build.py all` produces, and ubuntu.img is not
+    # that. A profile from the two core workloads is what the recorded PGO
+    # numbers were measured with anyway.
     for name, spec in bench.WORKLOADS.items():
+        if spec.get("optional"):
+            continue
         cmd = [str(staged)] + spec["args"]() + [f"-stopat={spec['steps']}"]
         with (PGO / f"train-{name}.log").open("wb") as f:
             r = subprocess.run(cmd, cwd=GEN, env=env, stdin=subprocess.DEVNULL, stdout=f, stderr=subprocess.STDOUT)

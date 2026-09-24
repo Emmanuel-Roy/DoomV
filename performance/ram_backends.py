@@ -79,7 +79,8 @@ def main() -> int:
     ap.add_argument("--ram", help="pass -ram=<size> to every run")
     args = ap.parse_args()
 
-    workloads = args.workload or sorted(bench.WORKLOADS)
+    workloads = args.workload or sorted(w for w, spec in bench.WORKLOADS.items()
+                                        if not spec.get("optional"))
     backends = args.backend or list(BACKENDS)
 
     print(f"{args.exe.name}, {args.repeat} runs each"
