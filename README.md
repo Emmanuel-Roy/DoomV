@@ -402,6 +402,41 @@ It overwrites `riscv_doom.exe`; a plain `make` puts the ordinary build back.
 it's free to redistribute. Point it at your own `DOOM.WAD`/`DOOM2.WAD` if
 you own a copy, and rebuild the guest ELF from `tools/doom/doombuild/` to match.
 
+<a id="the-gate"></a>
+### The gate
+
+Nothing reaches `origin` that has not passed every test. That is enforced on
+the machine doing the pushing, by a `pre-push` hook:
+
+```
+python scripts/install_hooks.py
+```
+
+From then on `git push` runs `scripts/ci.py` first and refuses the push if
+anything fails. The gate is the build, strict lock-step against Sail, and every
+suite in `verify.py` — about thirteen minutes, nearly all of it the suites:
+
+```
+python scripts/ci.py            # the same thing, by hand
+python scripts/ci.py --quick    # skip the two slowest suites
+```
+
+The hook is the whole mechanism, deliberately. Running this suite on a hosted
+CI runner is not possible without rebuilding it: the reference signatures come
+from the Sail model and the tests are built by the RISC-V cross-toolchain, both
+of which live in WSL, and the Linux and Ubuntu suites need images measured in
+gigabytes. Testing on the machine that already has all of that is both faster
+and more honest than approximating it elsewhere.
+
+Two things worth knowing about it:
+
+* `git push --no-verify` skips the hook. It is git's own escape hatch and it is
+  there on purpose — a README typo does not need thirteen minutes — but it is
+  the only way past, so it is worth noticing when you reach for it.
+* Hooks are not version-controlled. `core.hooksPath` points at `.githooks/` in
+  the tree, so the hook that runs is always the committed one, but a fresh
+  clone still has to run `install_hooks.py` once before any of this applies.
+
 ### Command-line options
 
 ```
@@ -761,6 +796,12 @@ powershell -ExecutionPolicy Bypass -File scripts/toolchain.ps1
 
 # Optional: build with Clang instead of GCC (faster; see Which compiler).
 python scripts/get_clang.py
+
+# Refuse any push whose commits have not passed the whole gate.
+python scripts/install_hooks.py
+
+# All suites by default, or selected suites by name.
+python scripts/ci.py
 
 # Build DoomV, Linux, or both.
 python scripts/build.py doom
