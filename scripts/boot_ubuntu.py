@@ -25,7 +25,7 @@ import subprocess
 import sys
 import time
 
-from common import ROOT, BUILD, build_emulator, checkout_lock, entrypoint, environment, require_files, run, wsl_path, wsl_script
+from common import ROOT, BUILD, add_ram_option, build_emulator, checkout_lock, entrypoint, environment, ram_args, require_files, run, wsl_path, wsl_script
 
 DESKTOPS = ("openbox", "xfce", "x")
 
@@ -104,11 +104,11 @@ def autologin_args():
     return (f"-expect={LOGIN_PROMPT}", f"-input={script}")
 
 
-def ubuntu_command(image: Path, headless=False, extra=(), dtb="ubuntu.dtb"):
+def ubuntu_command(image: Path, headless=False, extra=(), dtb="ubuntu.dtb", ram=None):
     images = BUILD / "linux"
     paths = [images / "fw_jump.elf", images / "Image", images / dtb]
     require_files(ROOT / "riscv_doom.exe", *paths, image)
-    command = [str(ROOT / "riscv_doom.exe")]
+    command = [str(ROOT / "riscv_doom.exe")] + ram_args(ram)
     if headless:
         command.append("-ng")
     command += [f"-{name}={path}" for name, path in zip(("opensbi", "kernel", "dtb"), paths)]
@@ -131,7 +131,7 @@ def require_image(image: Path):
         "  Stage 2 takes hours. See tools/linux/ubuntu/README.md.")
 
 
-def login_test(image: Path, timeout: float):
+def login_test(image: Path, timeout: float, ram=None):
     """Boot headless, log in through the emulated keyboard, run a command.
 
     This is the end-to-end check that the input devices reach a real
@@ -144,7 +144,7 @@ def login_test(image: Path, timeout: float):
     script.write_text(LOGIN_SCRIPT, newline="\n")
     dump = BUILD / "logs/ubuntu-login.ppm"
 
-    command = ubuntu_command(image, headless=True, extra=(
+    command = ubuntu_command(image, headless=True, ram=ram, extra=(
         f"-expect={LOGIN_PROMPT}", f"-input={script}", f"-fbdump={dump}"))
     with log.open("wb") as output:
         proc = subprocess.Popen(command, cwd=ROOT, env=environment(),
@@ -199,7 +199,7 @@ def emulator_running():
     return "riscv_doom.exe" in out.lower()
 
 
-def install_desktops(image: Path, timeout_hours: float):
+def install_desktops(image: Path, timeout_hours: float, ram=None):
     """Put Openbox, XFCE and bare X into the image, with DoomV doing the install.
 
     Three steps. The image is copied aside first, because this changes it and
@@ -224,7 +224,7 @@ def install_desktops(image: Path, timeout_hours: float):
 
     log = BUILD / "logs/ubuntu-desktop-install.log"
     log.parent.mkdir(parents=True, exist_ok=True)
-    command = ubuntu_command(image, headless=True, dtb="ubuntu-install.dtb")
+    command = ubuntu_command(image, headless=True, dtb="ubuntu-install.dtb", ram=ram)
     print(f"DoomV is installing the desktops. This takes hours; the log is {log}", flush=True)
     started = time.monotonic()
     with log.open("wb") as output:
@@ -301,6 +301,7 @@ def main():
                         help="install all three desktops into the image (DoomV does it; hours)")
     parser.add_argument("--install-timeout", type=float, default=16,
                         help="--install-desktops timeout in hours")
+    add_ram_option(parser)
     args = parser.parse_args()
     if args.timeout <= 0:
         parser.error("--timeout must be positive")
@@ -315,9 +316,9 @@ def main():
             build_emulator()
             wsl_script("build_linux.sh")
         if args.install_desktops:
-            install_desktops(image, args.install_timeout)
+            install_desktops(image, args.install_timeout, args.ram)
         elif args.login:
-            login_test(image, args.timeout)
+            login_test(image, args.timeout, args.ram)
         elif args.desktop:
             if emulator_running():
                 raise RuntimeError("A DoomV is already running on an image; close it first.")
@@ -325,7 +326,7 @@ def main():
             print("systemd, then X, then the session all start at emulated speed: X draws")
             print("the screen after ~15 min and the desktop is usable after ~25-30 min.")
             print("Ctrl+Alt+G grabs the mouse.")
-            run(ubuntu_command(image, headless=args.headless, dtb=f"ubuntu-{args.desktop}.dtb"))
+            run(ubuntu_command(image, headless=args.headless, dtb=f"ubuntu-{args.desktop}.dtb", ram=args.ram))
         else:
             extra = ()
             if not args.headless:
@@ -337,7 +338,7 @@ def main():
                     print("It logs in as root by itself once the login prompt appears.")
                     extra = autologin_args()
             print("A systemd boot takes minutes at this speed -- see the README's note on MIPS.")
-            run(ubuntu_command(image, headless=args.headless, extra=extra))
+            run(ubuntu_command(image, headless=args.headless, extra=extra, ram=args.ram))
     return 0
 
 

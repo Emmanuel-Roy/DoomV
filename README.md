@@ -487,6 +487,11 @@ is how one is made. Everything below assumes it exists in the repo root.
 
 The kernel is built for you; the image is not.
 
+Any of these takes `--ram` to change how much memory the guest gets, e.g.
+`--ram 8G`; it becomes the emulator's `-ram=` and the device tree is rewritten
+to match. Ubuntu in particular has more room to breathe with more than the
+default 1G.
+
 ```
 python scripts/boot.py ubuntu                 # window, logs in as root by itself
 python scripts/boot.py ubuntu --no-autologin  # window, stop at the login prompt
@@ -816,6 +821,11 @@ python scripts/boot.py linux
 python scripts/boot.py linux --smoke
 python scripts/boot.py ubuntu                 # the window logs in as root by itself
 python scripts/boot.py ubuntu --login
+
+# More RAM for any guest. Passed through to -ram=, so the device tree is
+# rewritten to match and the guest is told what it actually got.
+python scripts/boot.py linux --ram 4G
+python scripts/boot.py ubuntu --ram 8G
 
 # Ubuntu desktops: install all three once (hours), then pick one per boot.
 # See "Running Ubuntu, with or without a desktop" above.

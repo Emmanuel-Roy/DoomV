@@ -6,18 +6,20 @@ import subprocess
 import sys
 import time
 
-from common import ROOT, BUILD, build_emulator, checkout_lock, entrypoint, environment, require_files, run, wsl_script
+from common import ROOT, BUILD, add_ram_option, build_emulator, checkout_lock, entrypoint, environment, ram_args, require_files, run, wsl_script
 
 SMOKE_MARKER = "DOOMV_USERSPACE_OK"
 
 
-def linux_command(smoke=False):
+def linux_command(smoke=False, ram=None):
     images = BUILD / "linux"
     paths = [images / "fw_jump.elf", images / "Image",
              images / ("smoke.dtb" if smoke else "doomv.dtb"),
              images / ("smoke.cpio" if smoke else "initramfs.cpio")]
     require_files(ROOT / "riscv_doom.exe", *paths)
-    return [str(ROOT / "riscv_doom.exe")] + [
+    # The device tree names a size too, and the emulator rewrites it in the
+    # loaded blob to match -ram=, so the guest is told what was allocated.
+    return [str(ROOT / "riscv_doom.exe")] + ram_args(ram) + [
         f"-{name}={path}" for name, path in zip(("opensbi", "kernel", "dtb", "initrd"), paths)]
 
 
@@ -62,6 +64,7 @@ def main():
     parser.add_argument("--no-build", action="store_true", help="use images already in build/linux")
     parser.add_argument("--smoke", action="store_true", help="exit after BusyBox executes a self-check")
     parser.add_argument("--timeout", type=float, default=180, help="smoke timeout in seconds")
+    add_ram_option(parser)
     args = parser.parse_args()
     if args.timeout <= 0:
         parser.error("--timeout must be positive")
@@ -70,10 +73,10 @@ def main():
             build_emulator()
             wsl_script("build_linux.sh")
         if args.smoke:
-            smoke_test(linux_command(True), BUILD / "logs/linux-smoke.log", args.timeout)
+            smoke_test(linux_command(True, args.ram), BUILD / "logs/linux-smoke.log", args.timeout)
         else:
             print("Linux opens in the emulator window. Type there for the shell; close it to exit.")
-            run(linux_command())
+            run(linux_command(ram=args.ram))
     return 0
 
 

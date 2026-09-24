@@ -4,7 +4,7 @@ import argparse
 from pathlib import Path
 import sys
 
-from common import ROOT, build_emulator, checkout_lock, entrypoint, require_files, run, wsl_script, wsl_path
+from common import ROOT, add_ram_option, build_emulator, checkout_lock, entrypoint, ram_args, require_files, run, wsl_script, wsl_path
 
 
 def main():
@@ -12,6 +12,7 @@ def main():
     parser.add_argument("--game", choices=("free", "doom", "doom2", "finaldoom"), default="free")
     parser.add_argument("--wad", type=Path, help="override the WAD path (must match --game)")
     parser.add_argument("--no-build", action="store_true", help="use existing emulator and guest ELF")
+    add_ram_option(parser)
     args = parser.parse_args()
     guest = ROOT / "tools/doom/doombuild"
     names = {"free": "DOOM1.WAD", "doom": "DOOM.WAD", "doom2": "DOOM2.WAD", "finaldoom": "TNT.WAD"}
@@ -24,7 +25,7 @@ def main():
             wsl_script("build_doom.sh", args.game, wsl_path(wad))
         require_files(ROOT / "riscv_doom.exe", elf)
         print("DOOM opens in the emulator window. Close the window to exit.")
-        run([ROOT / "riscv_doom.exe", wad, elf])
+        run([ROOT / "riscv_doom.exe", *ram_args(args.ram), wad, elf])
     return 0
 
 

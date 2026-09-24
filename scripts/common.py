@@ -82,6 +82,20 @@ def build_emulator():
     require_files(ROOT / "riscv_doom.exe")
 
 
+def add_ram_option(parser):
+    """--ram, defined once so the three boot scripts cannot describe it differently."""
+    parser.add_argument("--ram", metavar="SIZE",
+                        help="guest RAM, e.g. 4G. Bytes or a K/M/G/T suffix; any value, not "
+                             "just round ones. Default is the emulator's own 1G. A DOOM run "
+                             "is capped near 2G -- the WAD sits above RAM and the guest reads "
+                             "its address from a 32-bit register; Linux has no such limit.")
+
+
+def ram_args(ram):
+    """The emulator flag for --ram, or nothing when it was not given."""
+    return [f"-ram={ram}"] if ram else []
+
+
 def ensure_host_tools():
     """Install native prerequisites once, then verify the commands are usable."""
     # A compiler is required, but not a particular one: the Makefile prefers
