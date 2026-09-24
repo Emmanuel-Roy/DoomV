@@ -32,7 +32,15 @@ def smoke_test(command, log: Path, timeout: float):
                 text = log.read_text(errors="replace")
                 if "Kernel panic" in text:
                     raise RuntimeError(f"Linux panicked; see {log}")
-                if SMOKE_MARKER in text.splitlines():
+                # Compared stripped, not for equality. The marker reaches
+                # this log through an emulated serial console, and what
+                # arrives is not always the bare word: a run that otherwise
+                # passed has been seen printing " DOOMV_USERSPACE_OK",
+                # with a leading space, and an exact match then misses it and
+                # waits out the whole timeout. That failure looks like a
+                # broken guest and is not one -- the guest had already
+                # printed it -- so it is worth not being fragile about.
+                if any(line.strip() == SMOKE_MARKER for line in text.splitlines()):
                     print(f"PASS: BusyBox executed the userspace smoke script. Log: {log}")
                     return
                 if proc.poll() is not None:
