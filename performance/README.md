@@ -275,6 +275,54 @@ Clang built these sources without a single error or new warning on the first
 attempt, which is some evidence the code is not leaning on GCC-specific
 behaviour anywhere.
 
+### Does more RAM cost anything
+
+No, not with the backend `make` builds. Throughput does not move with the size
+of the guest, and startup barely does.
+
+Throughput, doom, three runs each (doom rather than linux for a reason given
+below):
+
+| -ram= | median MIPS |
+|---|---|
+| 1G | 81.59 |
+| 1500M | 82.01 |
+| 2000M | 81.92 |
+
+Flat, and the ranges overlap. Nothing in the hot path scales with the size of
+the allocation: the bounds checks are one compare against `RAM_SPAN` whatever
+it holds, and the decode and fetch caches are fixed-size and indexed by
+address, not sized from RAM.
+
+Startup is the one place the size is visible, and only for `vector`:
+
+| backend | 1G | 8G | 16G |
+|---|---:|---:|---:|
+| pages (the default) | 0.03s | 0.05s | 0.39s |
+| vector | 0.13s | 0.98s | 5.13s |
+
+`vector` zeroes the whole allocation before the guest runs -- about 0.32s per
+gigabyte -- and commits that much physical memory whether or not the guest ever
+reads it. `pages` takes address space and lets the physical pages arrive on
+first touch, so RAM the guest does not use costs nothing at all. That is a much
+larger argument for the backend than the ~2% throughput it was chosen on, and
+it is what makes `-ram=16G` a reasonable thing to type.
+
+What does cost is the guest *touching* the memory, not having it. Past the
+host's own RAM the host starts swapping, and no amount of emulator tuning
+survives that. Size the guest to what it will use.
+
+**Why doom and not linux for the table above.** Linux appears to get faster with
+more memory -- 59.9 MIPS at 1G rising to 80.9 at 8G -- and it is not faster. The
+workload runs a fixed 300M instructions, and a kernel with more memory spends
+those instructions differently: more page clearing, which is cheap per
+instruction, and proportionally less of everything else. The crash.log hashes
+differ across the sizes, which is the tell -- it is a different program, not the
+same one running faster. DOOM does the same work at any size, so it is the one
+that can answer the question. (Its hashes differ too, because the WAD sits above
+RAM and moves with it, but the instruction stream is the same work at a
+different address.)
+
 ### How the guest's RAM is allocated
 
 The guest's RAM is one flat allocation, and `GuestRam` backs it three ways so
