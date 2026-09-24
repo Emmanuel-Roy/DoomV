@@ -7,6 +7,65 @@
 #include <string>
 #include <vector>
 
+// -ram=<size>: bytes, or a K/M/G/T suffix. Any value, rounded up to a page,
+// not just the round ones.
+//
+// Two limits, and both of them are about something real rather than taste.
+// It has to be at least enough for what a boot loads before the guest runs --
+// OpenSBI puts the device tree 34MB in and the initrd above that -- and DOOM
+// additionally needs the WAD to stay addressable: the guest asks where it is
+// through a 32-bit MMIO register (Memory::MMIO_WAD_BASE), and the WAD sits
+// directly above RAM, so RAM_BASE + size + WAD_SIZE has to stay under 4GB.
+// Linux and Ubuntu have no such ceiling; nothing but DOOM reads the WAD.
+static bool parse_ram_size(const std::string &text, bool linux_boot)
+{
+	size_t consumed = 0;
+	unsigned long long value = 0;
+	try {
+		value = std::stoull(text, &consumed, 0);
+	} catch (const std::exception &) {
+		std::cerr << "-ram=: not a number: " << text << "\n";
+		return false;
+	}
+	uint64_t bytes = value;
+	std::string suffix = text.substr(consumed);
+	if (suffix.size() == 1 || (suffix.size() == 2 && (suffix[1] == 'B' || suffix[1] == 'b'))) {
+		switch (suffix[0]) {
+		case 'k': case 'K': bytes = value * 1024ull; break;
+		case 'm': case 'M': bytes = value * 1024ull * 1024; break;
+		case 'g': case 'G': bytes = value * 1024ull * 1024 * 1024; break;
+		case 't': case 'T': bytes = value * 1024ull * 1024 * 1024 * 1024; break;
+		default:
+			std::cerr << "-ram=: unknown suffix '" << suffix << "' (use K, M, G or T)\n";
+			return false;
+		}
+	} else if (!suffix.empty()) {
+		std::cerr << "-ram=: unknown suffix '" << suffix << "' (use K, M, G or T)\n";
+		return false;
+	}
+
+	bytes = (bytes + 0xFFF) & ~0xFFFull;
+	// 64MB is below anything that boots, and well below where a mistake like
+	// -ram=64 (bytes) would otherwise turn into a confusing crash much later.
+	const uint64_t floor = 64ull * 1024 * 1024;
+	if (bytes < floor) {
+		std::cerr << "-ram=" << text << " is too small; the minimum is 64M\n";
+		return false;
+	}
+	if (!linux_boot) {
+		const uint64_t ceiling = 0x100000000ull - Memory::RAM_BASE - Memory::WAD_SIZE;
+		if (bytes > ceiling) {
+			std::cerr << "-ram=" << text << " is too large for a DOOM run: the WAD sits just above\n"
+			          << "RAM and the guest reads its address from a 32-bit register, so RAM has to\n"
+			          << "end below 4GB. The limit here is " << (ceiling / (1024 * 1024)) << "M."
+			          << " A Linux boot has no such limit.\n";
+			return false;
+		}
+	}
+	Memory::set_ram_size(bytes);
+	return true;
+}
+
 int main(int argc, char *argv[])
 {
 	std::vector<std::string> positional;
@@ -19,7 +78,7 @@ int main(int argc, char *argv[])
 	std::string expect_text;
 	std::string input_script;
 	std::string gui_dump_path;
-	std::string opensbi_path, kernel_path, dtb_path, initrd_path;
+	std::string opensbi_path, kernel_path, dtb_path, initrd_path, ram_arg;
 	uint64_t tohost_addr = 0;
 	std::string disk_path;
 	// Where storage drive images are looked for on a Linux boot. Relative
@@ -56,6 +115,8 @@ int main(int argc, char *argv[])
 			// Stop when the guest stores nonzero to this address. Every
 			// bare-metal RISC-V test suite ends that way.
 			tohost_addr = std::stoull(arg.substr(8), nullptr, 16);
+		} else if (arg.rfind("-ram=", 0) == 0) {
+			ram_arg = arg.substr(5);
 		} else if (arg.rfind("-opensbi=", 0) == 0) {
 			opensbi_path = arg.substr(9);
 		} else if (arg.rfind("-kernel=", 0) == 0) {
@@ -127,6 +188,13 @@ int main(int argc, char *argv[])
 	if (!march.empty()) parse_march(march);
 
 	bool linux_boot = !opensbi_path.empty() || !kernel_path.empty() || !dtb_path.empty() || !initrd_path.empty();
+
+	// -ram=<size>, before anything constructs Memory. Plain bytes, or a K/M/G
+	// suffix; any value is allowed, not just the round ones, and the device
+	// tree is corrected to match it (see DoomSystem::init_linux_boot).
+	if (!ram_arg.empty()) {
+		if (!parse_ram_size(ram_arg, linux_boot)) return 1;
+	}
 
 	// A Linux boot with no -march gets the RVA23S64 profile rather than the
 	// bare rv64imafdc default. The device tree is a static file that

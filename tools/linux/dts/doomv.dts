@@ -185,7 +185,10 @@
 	memory@80000000 {
 		device_type = "memory";
 		// Matches Memory::RAM_BASE/RAM_SIZE (src/memory.hpp).
-		reg = <0x0 0x80000000 0x0 0x40000000>;   // 1GB -- see Memory::RAM_SIZE
+		reg = <0x0 0x80000000 0x0 0x40000000>;   // 1GB, the default; -ram= rewrites
+		                                         // this property in the loaded blob
+		                                         // (src/fdt_patch.cpp), so the guest is
+		                                         // told what was actually allocated
 	};
 
 	soc {

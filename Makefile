@@ -64,7 +64,7 @@ INCLUDES = -Isrc/include -Isrc -Isrc/softfloat -I$(SOFTFLOAT_DIR)
 LIBS = -Lsrc/lib -lmingw32 -lSDL2main -lSDL2
 
 # Source files
-SRCS = src/main.cpp src/doom_system.cpp src/memory.cpp src/registers.cpp \
+SRCS = src/main.cpp src/doom_system.cpp src/memory.cpp src/guest_ram.cpp src/fdt_patch.cpp src/registers.cpp \
        src/riscv_decoder.cpp src/mmu.cpp src/pmp.cpp src/timer.cpp src/imsic.cpp src/aplic.cpp src/uart.cpp src/virtio_blk.cpp src/virtio_input.cpp src/virtio_9p.cpp src/lockstep.cpp \
        src/debugger.cpp src/gui.cpp \
        src/controls.cpp src/extensions.cpp \

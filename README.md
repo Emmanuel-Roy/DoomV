@@ -447,6 +447,7 @@ riscv_doom.exe -opensbi=<f> -kernel=<f> -dtb=<f> -initrd=<f> [options]   # Linux
 | Option | Meaning |
 | --- | --- |
 | `-ng` | Headless: no SDL window, and the process exits as soon as the guest stops. Aliases: `-nogui`, `-headless`, `--headless`. |
+| `-ram=<size>` | Guest RAM, e.g. `-ram=8G`. Bytes, or a `K`/`M`/`G`/`T` suffix; any value works, not just round ones, and it is rounded up to a page. Default 1G, minimum 64M. The device tree's memory node is rewritten to match, so the guest is told what was actually allocated. A DOOM run is capped at 2028M — the WAD sits directly above RAM and the guest reads its address from a 32-bit register, so RAM has to end below 4GB; a Linux boot has no such limit. |
 | `-march=<isa>` | Override the enabled extension set, e.g. `rv64imafdc_zicsr_zifencei`. Without it a Linux boot gets the full RVA23S64 profile and everything else gets the `rv64imafdc_zicsr` default. |
 | `-break=<hex_pc>` | Halt and dump full CPU state when the pc reaches this address. |
 | `-sig=<hex_begin>:<hex_end>` | Dump this memory range to `signature.log` on halt — how the arch-test harness pulls signatures. |

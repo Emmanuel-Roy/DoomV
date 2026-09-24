@@ -138,3 +138,11 @@ and nothing else.
 | 20260923-124934 | doom 1000M | S: default make with ThinLTO vs without | 942eb19+ | 81.48 | 12.3 | `3d73dac132f3` |  |
 | 20260923-124946 | linux 300M | S: default make with ThinLTO vs without (reference) | 942eb19+ | 57.27 | 5.2 | `f1e71792e77d` |  |
 | 20260923-124952 | linux 300M | S: default make with ThinLTO vs without | 942eb19+ | 58.54 | 5.1 | `f1e71792e77d` |  |
+| 20260924-170747 | doom 1000M | T: ram=vector | 972acde+ | 77.26 | 12.9 | `3d73dac132f3` |  |
+| 20260924-170800 | doom 1000M | T: ram=pages | 972acde+ | 81.44 | 12.3 | `3d73dac132f3` |  |
+| 20260924-170819 | doom 1000M | T: ram=vector rep1 | 972acde+ | 80.20 | 12.5 | `3d73dac132f3` |  |
+| 20260924-170831 | doom 1000M | T: ram=pages rep1 | 972acde+ | 80.67 | 12.4 | `3d73dac132f3` |  |
+| 20260924-170844 | doom 1000M | T: ram=vector rep2 | 972acde+ | 80.79 | 12.4 | `3d73dac132f3` |  |
+| 20260924-170856 | doom 1000M | T: ram=pages rep2 | 972acde+ | 81.27 | 12.3 | `3d73dac132f3` |  |
+| 20260924-175440 | doom 1000M | U: configurable ram + GuestRam vs fixed constexpr (reference) | 972acde+ | 78.94 | 12.7 | `3d73dac132f3` |  |
+| 20260924-175453 | doom 1000M | U: configurable ram + GuestRam vs fixed constexpr | 972acde+ | 81.45 | 12.3 | `3d73dac132f3` |  |

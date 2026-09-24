@@ -1,4 +1,5 @@
 #pragma once
+#include "guest_ram.hpp"
 #include "timer.hpp"
 #include "imsic.hpp"
 #include "aplic.hpp"
@@ -138,9 +139,26 @@ public:
 	// cache it reads through, and systemd's own working set, and the
 	// failure mode of being short is an OOM kill of init rather than
 	// anything that names memory as the problem.
-	static constexpr uint64_t RAM_SIZE  = 1024ull * 1024 * 1024;
-	static constexpr uint64_t WAD_BASE  = RAM_BASE + RAM_SIZE;
+	// Runtime rather than constexpr since -ram= made it configurable, but
+	// still written exactly once, before any Memory exists, by set_ram_size.
+	// Everything that reads it runs after that, so it behaves like the
+	// constant it used to be -- and the hot bounds checks read RAM_SPAN, one
+	// load instead of an add.
+	//
+	// Default 1GB. 256MB was ample for a busybox initramfs and is not enough
+	// for a distribution: an Ubuntu rootfs wants room for the kernel, the page
+	// cache it reads through, and systemd's own working set, and the failure
+	// mode of being short is an OOM kill of init rather than anything that
+	// names memory as the problem.
+	static uint64_t RAM_SIZE;
+	static uint64_t WAD_BASE;
 	static constexpr uint64_t WAD_SIZE  = 20 * 1024 * 1024;
+	// RAM_SIZE + WAD_SIZE, which is what every bounds check actually wants.
+	static uint64_t RAM_SPAN;
+
+	// Set the guest's RAM size. Must be called before constructing Memory;
+	// DOOM additionally needs WAD_BASE to stay under 4GB, see main.cpp.
+	static void set_ram_size(uint64_t bytes);
 
 	// Platform devices added for Stage 2 (timer + AIA interrupt
 	// controller) -- addresses follow common real-hardware/QEMU-virt
@@ -220,7 +238,7 @@ public:
 	uint8_t *ram_data_mut() { return ram.data(); }
 	static bool in_ram(uint64_t addr, uint64_t size)
 	{
-		return addr >= RAM_BASE && size <= RAM_SIZE + WAD_SIZE && addr - RAM_BASE <= RAM_SIZE + WAD_SIZE - size;
+		return addr >= RAM_BASE && size <= RAM_SPAN && addr - RAM_BASE <= RAM_SPAN - size;
 	}
 	uint32_t read32(uint64_t addr);
 	uint64_t read64(uint64_t addr);
@@ -297,7 +315,7 @@ public:
 	int store_depth = 0;
 	bool is_ram(uint64_t paddr, unsigned size) const
 	{
-		const uint64_t span = RAM_SIZE + WAD_SIZE;
+		const uint64_t span = RAM_SPAN;
 		return paddr >= RAM_BASE && size <= span && paddr - RAM_BASE <= span - size;
 	}
 	uint64_t tohost_value = 0;
@@ -368,7 +386,7 @@ public:
 private:
 	// RAM and WAD are contiguous (RAM_BASE..RAM_BASE+RAM_SIZE == WAD_BASE),
 	// so one backing buffer covers both -- see the memory map in PLAN.md.
-	std::vector<uint8_t> ram;
+	GuestRam ram;
 	std::vector<uint8_t> fb;
 	std::vector<uint8_t> lfb;
 	bool poweroff = false;

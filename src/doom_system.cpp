@@ -1,4 +1,5 @@
 #include "doom_system.hpp"
+#include "fdt_patch.hpp"
 #include "event_gen.hpp"
 #include "pmp.hpp"
 #include "mmu.hpp"
@@ -143,6 +144,18 @@ bool DoomSystem::init_linux_boot(const char *sbi_path, const char *kernel_path, 
 	// tools/linux/rootfs/README.md).
 	if (!memory.load_blob(kernel_path, Memory::RAM_BASE + 0x200000)) return false;
 	if (!memory.load_blob(dtb_path, Memory::RAM_BASE + 0x2200000)) return false;
+	// The device tree ships with a memory size baked in; -ram= makes that a
+	// choice, so the blob is corrected to match what was actually allocated.
+	// A guest told the wrong size does not fail in a way that names memory --
+	// too large and it writes past the end, too small and it OOM-kills init.
+	{
+		uint8_t *dtb = memory.ram_data_mut() + 0x2200000;
+		const size_t room = (size_t)(Memory::RAM_SPAN - 0x2200000);
+		if (!fdt_set_memory_size(dtb, room, Memory::RAM_BASE, Memory::RAM_SIZE)) {
+			std::cerr << "warning: could not set the memory size in " << dtb_path
+			          << "; the guest will use the size the file was built with\n";
+		}
+	}
 	// Optional now: with a virtio disk attached the kernel mounts a real
 	// root filesystem instead, and there is no initramfs to place.
 	if (initrd_path && initrd_path[0]

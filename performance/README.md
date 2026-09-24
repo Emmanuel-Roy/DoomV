@@ -275,6 +275,44 @@ Clang built these sources without a single error or new warning on the first
 attempt, which is some evidence the code is not leaning on GCC-specific
 behaviour anywhere.
 
+### How the guest's RAM is allocated
+
+The guest's RAM is one flat allocation, and `GuestRam` backs it three ways so
+they can be compared in one binary: `DOOMV_RAM_BACKEND=vector|pages|hugepages`.
+`vector` is what it used to be, `pages` is VirtualAlloc or mmap, `hugepages`
+asks those for large pages. Measured on Windows, 1,044 MB, doom:
+
+| backend | allocation | first touch | steady | doom MIPS |
+|---|---:|---:|---:|---|
+| vector | 85.1 ms | 2.3 ms | 2.3 ms | 80.20, 80.79 |
+| pages | 0.0 ms | 55.8 ms | 2.1 ms | 80.67, 81.27 |
+| hugepages | *unavailable, fell back to pages* | | | |
+
+Two things worth writing down, because the obvious reading of that table is
+wrong in both directions.
+
+**Large pages could not be had here at all.** Windows gates them behind
+SeLockMemoryPrivilege ("Lock pages in memory"), which an ordinary account does
+not hold, so `MEM_LARGE_PAGES` fails and `allocate()` falls back. It reports
+what it actually got through `active()` rather than what was asked for,
+specifically so this shows up instead of looking like a measured win. Granting
+that privilege needs an administrator and a re-login; Linux wants transparent
+hugepages enabled, and `MADV_HUGEPAGE` is advisory there even then.
+
+**The throughput difference between vector and pages is noise**, ~0.6% across
+repeated runs, and that is the expected answer rather than a disappointing one.
+Both are 4KB pages; the allocation strategy does not change what the TLB has to
+do once the pages are resident. Published figures showing large pages winning
+1.4x on a buffer this size are measuring random access across the *whole*
+buffer, and that is not this workload -- DOOM's working set is tens of
+megabytes out of a gigabyte, so most of the buffer is never touched and the
+TLB pressure those figures depend on never builds. It should matter more at
+`-ram=8G` and up, with a guest big enough to use it.
+
+The real, unambiguous win is startup: 85 ms of zeroing becomes 0 ms, because
+pages arrive zeroed on first touch. `hugepages` is the default, which means
+`pages` wherever large pages cannot be had.
+
 ## What is left
 
 The candidates the histograms point at now that fetch, loads and stores are

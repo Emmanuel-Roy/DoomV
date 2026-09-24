@@ -74,7 +74,7 @@ constexpr uint32_t PT_LOAD = 1;
 // both formats -- the only thing that differs is which struct types get
 // plugged in.
 template <typename Ehdr, typename Phdr>
-bool load_elf_generic(std::ifstream &file, std::vector<uint8_t> &ram)
+bool load_elf_generic(std::ifstream &file, GuestRam &ram)
 {
 	Ehdr ehdr;
 	file.read((char *)&ehdr, sizeof(ehdr));
@@ -92,7 +92,7 @@ bool load_elf_generic(std::ifstream &file, std::vector<uint8_t> &ram)
 
 		if (phdr.p_type != PT_LOAD) continue;
 		uint64_t vaddr = phdr.p_vaddr, memsz = phdr.p_memsz;
-		if (vaddr < Memory::RAM_BASE || vaddr + memsz > Memory::RAM_BASE + Memory::RAM_SIZE + Memory::WAD_SIZE) {
+		if (vaddr < Memory::RAM_BASE || vaddr + memsz > Memory::RAM_BASE + Memory::RAM_SPAN) {
 			return false;
 		}
 
@@ -114,17 +114,29 @@ bool load_elf_generic(std::ifstream &file, std::vector<uint8_t> &ram)
 
 } // namespace
 
+uint64_t Memory::RAM_SIZE = 1024ull * 1024 * 1024;
+uint64_t Memory::WAD_BASE = Memory::RAM_BASE + Memory::RAM_SIZE;
+uint64_t Memory::RAM_SPAN = Memory::RAM_SIZE + Memory::WAD_SIZE;
+
+void Memory::set_ram_size(uint64_t bytes)
+{
+	RAM_SIZE = bytes;
+	WAD_BASE = RAM_BASE + RAM_SIZE;
+	RAM_SPAN = RAM_SIZE + WAD_SIZE;
+}
+
 Memory::Memory()
-	: ram(RAM_SIZE + WAD_SIZE, 0), fb(FB_SIZE, 0), lfb(LFB_SIZE, 0),
+	: fb(FB_SIZE, 0), lfb(LFB_SIZE, 0),
 	  key_queue_head(0), key_queue_tail(0), instr_count(0), tick_counter(0), ms_accum(0), fb_write_count(0),
 	  aplic(imsic_s)
 {
+	ram.allocate(RAM_SPAN, GuestRam::from_env());
 	for (int i = 0; i < 16; i++) key_queue[i] = 0;
 }
 
 uint8_t Memory::read8(uint64_t addr)
 {
-	if (addr >= RAM_BASE && addr < RAM_BASE + RAM_SIZE + WAD_SIZE)
+	if (addr >= RAM_BASE && addr < RAM_BASE + RAM_SPAN)
 		return ram[addr - RAM_BASE];
 	if (addr >= MMIO_FB && addr < MMIO_FB + FB_SIZE)
 		return fb[addr - MMIO_FB];
@@ -153,7 +165,7 @@ uint16_t Memory::read16(uint64_t addr)
 	// instruction reads two, and each one was walking the whole MMIO
 	// dispatch chain twice over through read8 -- four dispatches to fetch
 	// one instruction out of plain memory.
-	if (addr >= RAM_BASE && addr <= RAM_BASE + RAM_SIZE + WAD_SIZE - 2) {
+	if (addr >= RAM_BASE && addr <= RAM_BASE + RAM_SPAN - 2) {
 		uint16_t val;
 		std::memcpy(&val, &ram[addr - RAM_BASE], sizeof(val));
 		return val;
@@ -216,7 +228,7 @@ uint32_t Memory::read32(uint64_t addr)
 	// order for free because the host (x86) is little-endian too -- already
 	// an implicit assumption everywhere else raw instruction words get
 	// manipulated directly (e.g. the decoder's immediate-field shifts).
-	if (addr >= RAM_BASE && addr <= RAM_BASE + RAM_SIZE + WAD_SIZE - 4) {
+	if (addr >= RAM_BASE && addr <= RAM_BASE + RAM_SPAN - 4) {
 		uint32_t val;
 		std::memcpy(&val, &ram[addr - RAM_BASE], sizeof(val));
 		return val;
@@ -238,7 +250,7 @@ uint32_t Memory::read32(uint64_t addr)
 
 uint64_t Memory::read64(uint64_t addr)
 {
-	if (addr >= RAM_BASE && addr <= RAM_BASE + RAM_SIZE + WAD_SIZE - 8) {
+	if (addr >= RAM_BASE && addr <= RAM_BASE + RAM_SPAN - 8) {
 		uint64_t val;
 		std::memcpy(&val, &ram[addr - RAM_BASE], sizeof(val));
 		return val;
@@ -262,7 +274,7 @@ struct StoreCapture {
 void Memory::write8(uint64_t addr, uint8_t val)
 {
 	StoreCapture capture(*this, addr, val, 1);
-	if (addr >= RAM_BASE && addr < RAM_BASE + RAM_SIZE + WAD_SIZE) {
+	if (addr >= RAM_BASE && addr < RAM_BASE + RAM_SPAN) {
 		ram[addr - RAM_BASE] = val;
 	} else if (addr >= LFB_BASE && addr < LFB_BASE + LFB_SIZE) {
 		lfb[addr - LFB_BASE] = val;
@@ -284,7 +296,7 @@ void Memory::write8(uint64_t addr, uint8_t val)
 
 void Memory::read_bytes(uint64_t addr, uint8_t *out, size_t len)
 {
-	const uint64_t span = RAM_SIZE + WAD_SIZE;
+	const uint64_t span = RAM_SPAN;
 	if (addr >= RAM_BASE && addr - RAM_BASE <= span && len <= span - (addr - RAM_BASE)) {
 		std::memcpy(out, &ram[addr - RAM_BASE], len);
 		return;
@@ -294,7 +306,7 @@ void Memory::read_bytes(uint64_t addr, uint8_t *out, size_t len)
 
 void Memory::write_bytes(uint64_t addr, const uint8_t *data, size_t len)
 {
-	const uint64_t span = RAM_SIZE + WAD_SIZE;
+	const uint64_t span = RAM_SPAN;
 	if (addr >= RAM_BASE && addr - RAM_BASE <= span && len <= span - (addr - RAM_BASE)) {
 		std::memcpy(&ram[addr - RAM_BASE], data, len);
 		return;
@@ -364,7 +376,7 @@ void Memory::write32(uint64_t addr, uint32_t val)
 	// test every device window and then land a byte at a time through
 	// write8. The tohost check is the one thing a RAM store does besides
 	// storing, and it stays.
-	if (addr >= RAM_BASE && addr <= RAM_BASE + RAM_SIZE + WAD_SIZE - 4) {
+	if (addr >= RAM_BASE && addr <= RAM_BASE + RAM_SPAN - 4) {
 		std::memcpy(&ram[addr - RAM_BASE], &val, sizeof(val));
 		if (tohost_addr && addr == tohost_addr + 4) check_tohost();
 		return;
@@ -464,7 +476,7 @@ bool Memory::load_blob(const char *path, uint64_t addr)
 	size_t len = (size_t)file.tellg();
 	file.seekg(0);
 
-	if (addr < RAM_BASE || addr + len > RAM_BASE + RAM_SIZE + WAD_SIZE) return false;
+	if (addr < RAM_BASE || addr + len > RAM_BASE + RAM_SPAN) return false;
 
 	file.read((char *)&ram[addr - RAM_BASE], len);
 	return (bool)file;
@@ -523,7 +535,7 @@ bool Memory::is_backed(uint64_t addr, unsigned size) const
 
 	// RAM and the WAD window are contiguous and are treated as one region:
 	// they are one allocation, and Doom's WAD really is addressable memory.
-	if (in(RAM_BASE, RAM_SIZE + WAD_SIZE)) return true;
+	if (in(RAM_BASE, RAM_SPAN)) return true;
 
 	if (in(MMIO_FB, FB_SIZE)) return true;
 	if (in(LFB_BASE, LFB_SIZE)) return true;
