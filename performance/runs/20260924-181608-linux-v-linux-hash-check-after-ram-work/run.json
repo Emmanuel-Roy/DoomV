@@ -1,0 +1,15 @@
+{
+  "time": "20260924-181608",
+  "label": "V: linux hash check after -ram work",
+  "workload": "linux",
+  "steps": 300000000,
+  "seconds": 5.042,
+  "mips": 59.496,
+  "crash_log_sha256": "e76932b2b71346b1d9ff545dc78527c104cff57d2b2236d74684e6f7d029ed4a",
+  "exe": "Z:\\Code\\Dev\\DoomV\\riscv_doom.exe",
+  "exe_sha256": "5c1a633baa71dccc5179450087c81da96851b54810285f113abddb329b0c7207",
+  "commit": "d54fa5e",
+  "dirty": false,
+  "host": "AMD64 Family 25 Model 97 Stepping 2, AuthenticAMD / Windows 10",
+  "profiled": false
+}

@@ -280,38 +280,52 @@ behaviour anywhere.
 The guest's RAM is one flat allocation, and `GuestRam` backs it three ways so
 they can be compared in one binary: `DOOMV_RAM_BACKEND=vector|pages|hugepages`.
 `vector` is what it used to be, `pages` is VirtualAlloc or mmap, `hugepages`
-asks those for large pages. Measured on Windows, 1,044 MB, doom:
+asks those for large pages. `performance/ram_backends.py` runs the comparison:
+five runs of each backend on each workload, in a clean directory per run, with
+the crash.log hash checked every time.
 
-| backend | allocation | first touch | steady | doom MIPS |
-|---|---:|---:|---:|---|
-| vector | 85.1 ms | 2.3 ms | 2.3 ms | 80.20, 80.79 |
-| pages | 0.0 ms | 55.8 ms | 2.1 ms | 80.67, 81.27 |
-| hugepages | *unavailable, fell back to pages* | | | |
+| workload | vector | pages | hugepages |
+|---|---|---|---|
+| doom | 81.24 (81.01-81.64) | 81.70 (80.27-82.25) | 81.64 (80.04-81.85) |
+| linux | 58.71 (58.51-58.88) | 59.83 (59.34-60.04) | 59.91 (58.47-60.09) |
 
-Two things worth writing down, because the obvious reading of that table is
-wrong in both directions.
+Median MIPS, with the range across runs. Allocation cost is separate and is
+measured on the buffer alone: 85.1 ms for `vector`, 0.0 ms for the other two,
+because pages arrive zeroed on first touch rather than being written by the
+allocator.
 
-**Large pages could not be had here at all.** Windows gates them behind
-SeLockMemoryPrivilege ("Lock pages in memory"), which an ordinary account does
-not hold, so `MEM_LARGE_PAGES` fails and `allocate()` falls back. It reports
-what it actually got through `active()` rather than what was asked for,
+**`pages` wins on linux and is a wash on doom.** On linux the ranges do not
+overlap at all -- vector tops out at 58.88 and pages starts at 59.34 -- so the
+~1.9% is real. On doom the ranges overlap almost entirely and there is nothing
+to claim. The difference between the two workloads is the interesting part:
+Linux touches far more of the gigabyte, initialising its own structures and
+filling a page cache, while DOOM's working set is tens of megabytes. The
+backing matters in proportion to how much of the buffer is actually used.
+
+**Large pages could not be had here at all**, which is why `hugepages` and
+`pages` measure the same to within noise -- the first falls back to the second.
+Windows gates them behind SeLockMemoryPrivilege ("Lock pages in memory"), which
+an ordinary account does not hold, so `MEM_LARGE_PAGES` fails. `allocate()`
+reports what it actually got through `active()` rather than what was asked for,
 specifically so this shows up instead of looking like a measured win. Granting
-that privilege needs an administrator and a re-login; Linux wants transparent
-hugepages enabled, and `MADV_HUGEPAGE` is advisory there even then.
+that privilege needs an administrator and a re-login; on Linux `MADV_HUGEPAGE`
+needs transparent hugepages enabled and is advisory even then.
 
-**The throughput difference between vector and pages is noise**, ~0.6% across
-repeated runs, and that is the expected answer rather than a disappointing one.
-Both are 4KB pages; the allocation strategy does not change what the TLB has to
-do once the pages are resident. Published figures showing large pages winning
-1.4x on a buffer this size are measuring random access across the *whole*
-buffer, and that is not this workload -- DOOM's working set is tens of
-megabytes out of a gigabyte, so most of the buffer is never touched and the
-TLB pressure those figures depend on never builds. It should matter more at
-`-ram=8G` and up, with a guest big enough to use it.
+So published figures showing large pages winning ~1.4x on a buffer this size
+have not been reproduced here, and could not be: nothing in this table is
+running on large pages. Those figures also measure random access across the
+*whole* buffer, which is not either of these workloads. The honest expectation
+is that they would matter more at `-ram=8G` and up, with a guest big enough to
+use what it was given.
 
-The real, unambiguous win is startup: 85 ms of zeroing becomes 0 ms, because
-pages arrive zeroed on first touch. `hugepages` is the default, which means
-`pages` wherever large pages cannot be had.
+`hugepages` is the default, which means `pages` wherever large pages cannot be
+had, and `pages` is the better of the two that are actually available.
+
+A hash table for the decode cache was considered and not tried. It is already a
+flat array indexed by `(pc >> 1) & CACHE_MASK`, which is O(1) with consecutive
+instructions in consecutive slots; hashing would add work and an indirection to
+replace a mask. See the per-page pre-decode entry below for what happened the
+last time that array's layout looked improvable.
 
 ## What is left
 

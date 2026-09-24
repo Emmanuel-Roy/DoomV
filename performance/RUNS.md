@@ -146,3 +146,5 @@ and nothing else.
 | 20260924-170856 | doom 1000M | T: ram=pages rep2 | 972acde+ | 81.27 | 12.3 | `3d73dac132f3` |  |
 | 20260924-175440 | doom 1000M | U: configurable ram + GuestRam vs fixed constexpr (reference) | 972acde+ | 78.94 | 12.7 | `3d73dac132f3` |  |
 | 20260924-175453 | doom 1000M | U: configurable ram + GuestRam vs fixed constexpr | 972acde+ | 81.45 | 12.3 | `3d73dac132f3` |  |
+| 20260924-181602 | linux 300M | V: linux hash check after -ram work (reference) | d54fa5e | 56.27 | 5.3 | `e76932b2b713` |  |
+| 20260924-181608 | linux 300M | V: linux hash check after -ram work | d54fa5e | 59.50 | 5.0 | `e76932b2b713` |  |
