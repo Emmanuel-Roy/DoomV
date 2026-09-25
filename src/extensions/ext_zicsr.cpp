@@ -1145,20 +1145,29 @@ uint64_t RiscvCore::read_csr_effective(Registers &regs, Memory &mem, uint16_t cs
 // The translation is redone per byte rather than cached per page because
 // the page a byte falls in is the only thing that decides its physical
 // address, and recomputing it is cheap next to getting it wrong.
-// Loads and stores that stay inside one page, from a cached page of RAM.
+// Loads and stores that stay inside one page, from a cached page of RAM or of
+// a framebuffer.
 //
 // The same arrangement as DoomSystem's fetch cache. A page is remembered once
 // an access to it has gone through translate_or_trap and succeeded, and only
 // if every access of that kind inside the page would get the same answer: it
-// is RAM from end to end, there is no second translation stage and no MPRV,
-// and one PMP entry decides the whole page. The entry holds where the page
+// is RAM or one framebuffer from end to end (Memory::direct_page), there is no
+// second translation stage and no MPRV, and one PMP entry decides the whole
+// page. The entry holds where the page
 // is, never its contents. Any CSR write or change of privilege or V
 // (regs.state_gen, which covers satp, mstatus's SUM, MXR and MPRV, the PMP
 // CSRs and the pointer-masking controls), any TLB flush and any change to the
 // extensions makes it stale.
 //
 // Stores keep the side effects a store has beyond storing: a page holding the
-// tohost register is never cached.
+// tohost register is never cached, and a store to a framebuffer bumps the
+// host-side counters its uncached path would (Memory::framebuffer_stored).
+//
+// The framebuffers are here because drawing is most of what a guest does to
+// them, and the uncached path is long: a full translation and PMP check, then
+// write32 testing every device window before falling through, for DOOM's, to
+// four write8s. Every pixel of every DOOM frame and every glyph fbcon or X
+// draws took it.
 //
 // A cached access records itself exactly as the full path would -- the access
 // log that lock-step compares against the reference, and for a store the bytes
@@ -1176,7 +1185,9 @@ static void remember_data_page(Registers &regs, Memory &mem, RiscvCore::DataPage
                                uint64_t vpage, uint64_t key, uint64_t paddr, int access)
 {
 	const uint64_t ppage = paddr & ~0xFFFull;
-	if (!Memory::in_ram(ppage, 0x1000)) return;
+	Memory::Backing backing;
+	uint8_t *host = mem.direct_page(ppage, backing);
+	if (!host) return;
 	if (Extensions.H && regs.get_virt()) return;
 	if (regs.read_csr(CSR_MSTATUS) & MSTATUS_MPRV) return;
 	if (Extensions.SMPMP && !pmp::page_permits(regs, ppage, access, (uint8_t)regs.get_priv())) return;
@@ -1186,7 +1197,8 @@ static void remember_data_page(Registers &regs, Memory &mem, RiscvCore::DataPage
 	e.vpage = vpage;
 	e.key = key;
 	e.ppage = ppage;
-	e.host = mem.ram_data_mut() + (ppage - Memory::RAM_BASE);
+	e.host = host;
+	e.backing = backing;
 }
 
 bool RiscvCore::load_virtual(Registers &regs, Memory &mem, uint64_t vaddr,
@@ -1248,6 +1260,7 @@ bool RiscvCore::store_virtual(Registers &regs, Memory &mem, uint64_t vaddr,
 			const unsigned offset = (unsigned)(vaddr & 0xFFF);
 			const uint64_t paddr = e.ppage | offset;
 			std::memcpy(e.host + offset, &value, size);
+			if (e.backing != Memory::Backing::Ram) mem.framebuffer_stored(e.backing, size);
 			if (access_log)
 				access_log->push_back({vaddr, paddr, (uint8_t)size, true});
 			// The bytes, as StoreCapture records them for a store that goes

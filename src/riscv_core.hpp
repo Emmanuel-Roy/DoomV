@@ -1,6 +1,7 @@
 #pragma once
 #include "riscv_decoder.hpp"
 #include "mmu.hpp"
+#include "memory.hpp"   // Memory::Backing, for DataPage
 #include <cstdint>
 
 class Registers;
@@ -56,6 +57,10 @@ public:
 		uint64_t key = ~0ull;
 		uint64_t ppage = 0;      // what the translation produced, for the access log
 		uint8_t *host = nullptr;
+		// Which memory the page is. Both framebuffers are plain bytes too, and
+		// differ from RAM only in the host-side counters a store bumps, which
+		// a cached store bumps the same way -- see Memory::framebuffer_stored.
+		Memory::Backing backing = Memory::Backing::Ram;
 	};
 	static constexpr unsigned DATA_CACHE_SIZE = 256;
 	DataPage load_cache[DATA_CACHE_SIZE];

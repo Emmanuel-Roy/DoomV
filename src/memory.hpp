@@ -338,6 +338,47 @@ public:
 	void tick_clock() { timer.tick(1); }
 
 	const uint8_t *framebuffer() const { return fb.data(); }
+
+	// Memory the data caches may reach directly: RAM, and whole pages of
+	// either framebuffer. Neither framebuffer has a side effect on a read, and
+	// on a store the only one is on the host's side -- the counters the display
+	// thread and the dashboard read, which the guest cannot see.
+	enum class Backing : uint8_t { Ram, DoomFb, LinuxFb };
+	// Where the page at physical `ppage` lives in the host, if the whole page
+	// is one of those; nullptr otherwise.
+	uint8_t *direct_page(uint64_t ppage, Backing &backing)
+	{
+		if (in_ram(ppage, 0x1000)) {
+			backing = Backing::Ram;
+			return ram_data_mut() + (ppage - RAM_BASE);
+		}
+		if (ppage >= MMIO_FB && ppage + 0x1000 <= MMIO_FB + FB_SIZE) {
+			backing = Backing::DoomFb;
+			return fb.data() + (ppage - MMIO_FB);
+		}
+		if (ppage >= LFB_BASE && ppage + 0x1000 <= LFB_BASE + LFB_SIZE) {
+			backing = Backing::LinuxFb;
+			return lfb.data() + (ppage - LFB_BASE);
+		}
+		return nullptr;
+	}
+	// What a store of `size` bytes into a framebuffer does besides storing,
+	// exactly as the uncached path does it, so the counters come out the same
+	// whichever path a store takes. DOOM's framebuffer is stored a byte at a
+	// time (write32 and write64 fall through to write8), and every byte counts
+	// once toward both. The Linux framebuffer counts once per write8 and once
+	// per write32, and write64 is two write32s: so 1, 2 (a halfword store is
+	// two write8s), 1 and 2 for sizes 1, 2, 4 and 8.
+	void framebuffer_stored(Backing backing, unsigned size)
+	{
+		if (backing == Backing::DoomFb) {
+			fb_write_count += size;
+			fb_gen.store(fb_gen.load(std::memory_order_relaxed) + size, std::memory_order_relaxed);
+		} else {
+			const unsigned bumps = size == 4 ? 1 : size == 8 ? 2 : size;
+			lfb_gen.store(lfb_gen.load(std::memory_order_relaxed) + bumps, std::memory_order_relaxed);
+		}
+	}
 	const uint8_t *linux_framebuffer() const { return lfb.data(); }
 	// Bumped on every store into the matching framebuffer. The display
 	// thread reads them to tell a frame the guest is still drawing from one
