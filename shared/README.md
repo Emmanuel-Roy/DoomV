@@ -66,3 +66,20 @@ All of that is so that a run using the folder is deterministic: given the
 same starting contents, the guest sees exactly the same folder on every run.
 
 `-shared=<dir>` serves a different folder, and `-shared=` turns it off.
+
+## Handing a program to the guest
+
+The share is the easy way to get a binary in, but Windows has no execute bit,
+so everything here arrives in the guest as `-rw-rw-rw-` and running it in
+place gives `Permission denied`. Copy it into the guest first:
+
+```sh
+cp /mnt/shared/myprogram /root/ && chmod +x /root/myprogram
+/root/myprogram
+```
+
+Data files need none of that -- reading them from `/mnt/shared` is fine, which
+is what you want for anything large. The main README's
+[Running your own programs in the guest](../README.md#own-programs) covers
+cross-compiling for the guest, with the static linking that saves you from its
+glibc.

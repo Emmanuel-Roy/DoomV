@@ -720,6 +720,78 @@ instruction count as nanoseconds from 2024-01-01 -- and that time is written
 to the Windows file too. Inode numbers count up in the order the guest first
 sees each file, listings are sorted by name, and `df` reports a fixed 1 TiB.
 
+<a id="own-programs"></a>
+### Running your own programs in the guest
+
+The Ubuntu guest is a normal riscv64 Linux, so anything built for riscv64
+Linux runs on it. Building *in* the guest works but is slow — it is an emulated
+hart — so cross-compile on the host and hand the binary over through
+`shared/`.
+
+The cross-compiler lives in WSL, where the rest of the guest toolchain already
+is:
+
+```sh
+wsl -d Ubuntu -u root -- apt-get install -y gcc-riscv64-linux-gnu g++-riscv64-linux-gnu
+```
+
+Build **statically**. The guest has its own glibc and yours is not it; a static
+binary sidesteps the whole question:
+
+```sh
+riscv64-linux-gnu-gcc -O2 -static -march=rv64gc hello.c -o hello
+```
+
+For a CMake project, point it at the cross-compiler and turn off anything that
+assumes the build machine is the target:
+
+```sh
+cmake -B build-riscv \
+  -DCMAKE_SYSTEM_NAME=Linux -DCMAKE_SYSTEM_PROCESSOR=riscv64 \
+  -DCMAKE_C_COMPILER=riscv64-linux-gnu-gcc \
+  -DCMAKE_CXX_COMPILER=riscv64-linux-gnu-g++ \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_C_FLAGS="-march=rv64gc" -DCMAKE_CXX_FLAGS="-march=rv64gc" \
+  -DCMAKE_EXE_LINKER_FLAGS="-static"
+cmake --build build-riscv -j
+riscv64-linux-gnu-strip -o shared/myprogram build-riscv/myprogram
+```
+
+Then boot with the folder attached and, in the guest:
+
+```sh
+mkdir -p /mnt/shared
+mount -t 9p -o trans=virtio,version=9p2000.L shared /mnt/shared
+cp /mnt/shared/myprogram /root/ && chmod +x /root/myprogram
+/root/myprogram
+```
+
+The copy and the `chmod` are not optional. Windows has no execute bit, so
+everything on the share arrives `-rw-rw-rw-` and running it in place gives
+`Permission denied`. Data files are fine to read where they are — only the
+program needs moving. Give the guest room with `--ram` if it needs it; see
+[Building & running](#building--running).
+
+Three things that go wrong first:
+
+* **A static link fails on a library that is only shipped shared.** OpenMP is
+  the usual one: `libgomp` has no static cross build here, so turn the feature
+  off (`-DGGML_OPENMP=OFF` and equivalents) rather than falling back to dynamic
+  linking.
+* **`-march=native` or an autodetected ISA.** The host is x86; set
+  `-march=rv64gc` and switch off any "detect the CPU" option. The guest
+  supports far more than that — see [What's actually implemented](#whats-actually-implemented)
+  — so raise the baseline deliberately if you want it, including vector.
+* **Wall-clock assumptions.** The guest's clock comes from the instruction
+  count, so a program that measures its own throughput will report a number
+  about the emulated machine, not your CPU.
+
+Worked example, and a reasonable test of all of the above: llama.cpp
+cross-compiles this way with `-DGGML_NATIVE=OFF -DLLAMA_CURL=OFF
+-DGGML_OPENMP=OFF -DBUILD_SHARED_LIBS=OFF`, and its `llama` binary runs a
+GGUF model from the share inside the guest — a 0.8B Qwen at IQ2_XXS loads and
+generates, slowly, on `--ram 4G`.
+
 <a id="the-display"></a>
 ### The display
 
