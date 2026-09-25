@@ -421,8 +421,13 @@ last time that array's layout looked improvable.
 
 ## What is left
 
-[RESEARCH.md](RESEARCH.md) has the next round: a prototype fast-path loop, 2.57x
-on doom and 1.93x on linux with identical crash.logs, and what to do after it.
+[RESEARCH.md](RESEARCH.md) has the next round. Three changes from it have
+landed -- both framebuffers through the data caches, a decode cache with room
+for a kernel, and PGO as the default build -- and a fast-path loop, still a
+patch, takes the result to 2.63x on doom, 2.46x on linux and 2.98x on a
+workload that draws on the framebuffer console, with identical crash.logs. It
+also has the measurements behind not splitting fetch/decode and execution
+across two threads.
 
 The candidates the histograms point at now that fetch, loads and stores are
 cached. Nothing here is measured except where it says so.

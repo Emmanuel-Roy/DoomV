@@ -1,8 +1,8 @@
 diff --git a/src/doom_system.cpp b/src/doom_system.cpp
-index 519978f..cfda15d 100644
+index 519978f..b275f5e 100644
 --- a/src/doom_system.cpp
 +++ b/src/doom_system.cpp
-@@ -277,6 +277,223 @@ bool DoomSystem::interrupt_may_be_due()
+@@ -277,6 +277,220 @@ bool DoomSystem::interrupt_may_be_due()
  	return true;
  }
  
@@ -35,9 +35,6 @@ index 519978f..cfda15d 100644
 +// Prototype statistics: why runs end. Printed at -stopat with DOOMV_FASTSTATS.
 +static uint64_t fs_fast, fs_slow_entry, fs_deadline, fs_fetch, fs_decode, fs_op[256], fs_ld, fs_st, fs_budget;
 +static uint64_t fs_ext[64];
-+#include <unordered_map>
-+static std::unordered_map<uint64_t, uint64_t> fs_edge, fs_dmiss;
-+static uint64_t fs_dm_invalid, fs_dm_addr, fs_dm_raw, fs_dm_epoch;
 +void DoomSystem::run_fast(uint64_t n)
 +{
 +	Timer &timer = memory.get_timer();
@@ -45,6 +42,7 @@ index 519978f..cfda15d 100644
 +	while (n > 0 && !debugger.halted) {
 +		// Conditions under which no step can be simple. step() for all of them.
 +		if (debugger.may_halt() || memory.tohost_addr || core.access_log || memory.store_log
++		    || decoder.cache_epoch != ExtensionsEpoch
 +		    || !Extensions.C || !Extensions.XLEN64 || Extensions.ZICFILP
 +		    || core.wait_request != RiscvCore::Wait::None
 +		    || regs.state_gen + ExtensionsEpoch != counter_key
@@ -63,7 +61,6 @@ index 519978f..cfda15d 100644
 +			if (steps < limit) limit = steps;
 +		}
 +		const uint64_t key = regs.state_gen + mmu_tlb_generation() + ExtensionsEpoch;
-+		const uint32_t epoch = ExtensionsEpoch;
 +		regs.minstret_increment = counts_instret;
 +
 +		uint64_t pc = regs.get_pc();
@@ -93,7 +90,7 @@ index 519978f..cfda15d 100644
 +					// A 4-byte instruction across the page boundary: the two
 +					// halfword fetches fetch16 would make, both from cached pages.
 +					const FetchPage &n2 = fetch_cache[(vpage + 1) & (FETCH_CACHE_SIZE - 1)];
-+					if (!(n2.vpage == vpage + 1 && n2.key == key)) { fs_fetch++; fs_edge[pc]++; break; }
++					if (!(n2.vpage == vpage + 1 && n2.key == key)) { fs_fetch++; break; }
 +					uint16_t h2; std::memcpy(&h2, n2.host, 2);
 +					raw |= (uint32_t)h2 << 16;
 +				}
@@ -102,16 +99,16 @@ index 519978f..cfda15d 100644
 +			}
 +			const bool comp = (raw & 3) != 3;
 +			const uint32_t tag = comp ? (raw & 0xFFFF) : raw;
-+			const Decoder::CacheEntry &ce = dcache[Decoder::index(pc)];
-+			if (!(ce.valid && ce.addr == pc && ce.raw_instr == tag && ce.epoch == epoch)) { fs_decode++; fs_dmiss[pc]++;
-+				if (!ce.valid) fs_dm_invalid++; else if (ce.addr != pc) fs_dm_addr++; else if (ce.raw_instr != tag) fs_dm_raw++; else fs_dm_epoch++;
-+				break; }
-+			const DecodedInstruction &d = ce.decoded;
++			// Found as decode_and_dispatch finds it, by byte offset.
++			const Decoder::CacheEntry &ce = *reinterpret_cast<const Decoder::CacheEntry *>(
++				reinterpret_cast<const char *>(dcache.data()) + ((pc << 4) & ((uint64_t)Decoder::CACHE_MASK << 5)));
++			if (!(ce.addr == pc && ce.decoded.raw == tag)) { fs_decode++; break; }
++			const DecodedOp &d = ce.decoded;
 +			const uint64_t len = d.length;
 +			const uint64_t a = regs.read_x(d.rs1), b = regs.read_x(d.rs2);
 +			const uint64_t imm = (uint64_t)d.imm;
 +			uint64_t next = pc + len;
-+			switch ((FastOp)ce.fop) {
++			switch ((FastOp)d.fast_op) {
 +			case FOP_SLOW: fs_ext[(int)d.ext & 63]++; fs_op[d.opcode]++; goto out;
 +			case FOP_LUI:   regs.write_x(d.rd, imm); break;
 +			case FOP_AUIPC: regs.write_x(d.rd, pc + imm); break;
@@ -126,14 +123,14 @@ index 519978f..cfda15d 100644
 +			case FOP_LB: case FOP_LH: case FOP_LW: case FOP_LD:
 +			case FOP_LBU: case FOP_LHU: case FOP_LWU: {
 +				static const uint8_t w[] = {0,0,0,0,0,0,0,0,0,0,0, 1,2,4,8,1,2,4};
-+				const unsigned size = w[ce.fop];
++				const unsigned size = w[d.fast_op];
 +				const uint64_t addr = a + imm;
 +				if (((addr + size - 1) >> 12) != (addr >> 12)) goto out;
 +				const RiscvCore::DataPage &e = core.load_cache[(addr >> 12) & (RiscvCore::DATA_CACHE_SIZE - 1)];
 +				if (!(e.vpage == (addr >> 12) && e.key == key)) { fs_ld++; goto out; }
 +				uint64_t v = 0;
 +				std::memcpy(&v, e.host + (addr & 0xFFF), size);
-+				switch (ce.fop) {
++				switch (d.fast_op) {
 +				case FOP_LB: v = (uint64_t)(int64_t)(int8_t)v; break;
 +				case FOP_LH: v = (uint64_t)(int64_t)(int16_t)v; break;
 +				case FOP_LW: v = (uint64_t)(int64_t)(int32_t)v; break;
@@ -143,13 +140,13 @@ index 519978f..cfda15d 100644
 +				break;
 +			}
 +			case FOP_SB: case FOP_SH: case FOP_SW: case FOP_SD: {
-+				const unsigned size = 1u << (ce.fop - FOP_SB);
++				const unsigned size = 1u << (d.fast_op - FOP_SB);
 +				const uint64_t addr = a + imm;
 +				if (((addr + size - 1) >> 12) != (addr >> 12)) goto out;
 +				const RiscvCore::DataPage &e = core.store_cache[(addr >> 12) & (RiscvCore::DATA_CACHE_SIZE - 1)];
 +				if (!(e.vpage == (addr >> 12) && e.key == key)) { fs_st++; goto out; }
 +				std::memcpy(e.host + (addr & 0xFFF), &b, size);
-+				if (e.fb) memory.fb_stored(size);
++				if (e.backing != Memory::Backing::Ram) memory.framebuffer_stored(e.backing, size);
 +				break;
 +			}
 +			case FOP_ADDI:  regs.write_x(d.rd, a + imm); break;
@@ -226,22 +223,15 @@ index 519978f..cfda15d 100644
  void DoomSystem::step()
  {
  	const uint64_t before = memory.instruction_count();
-@@ -794,6 +1011,42 @@ void DoomSystem::stop_at_limit()
+@@ -794,6 +1008,32 @@ void DoomSystem::stop_at_limit()
  	console_drain();
  		debugger.dump_log(regs, memory, "crash.log");
  	std::cout << "stopped after instruction " << n << "; state in crash.log" << std::endl;
 +	if (std::getenv("DOOMV_FASTSTATS")) {
-+		std::printf("fast steps %llu (%.1f%%)\nslow at run entry (irq/state checks) %llu\nruns ended by irq deadline %llu\nfetch miss %llu\ndecode miss %llu\nload miss %llu\nstore miss %llu\n",
++		std::printf("fast steps %llu (%.1f%%)\nslow at run entry (irq/state checks) %llu\nruns ended by irq deadline %llu\n"
++		            "fetch miss %llu\ndecode miss %llu\nload miss %llu\nstore miss %llu\n",
 +			(unsigned long long)fs_fast, 100.0 * fs_fast / n, (unsigned long long)fs_slow_entry, (unsigned long long)fs_deadline,
 +			(unsigned long long)fs_fetch, (unsigned long long)fs_decode, (unsigned long long)fs_ld, (unsigned long long)fs_st);
-+		extern uint64_t g_csr_writes[4096], g_priv_changes;
-+		uint64_t tot = 0; for (int i = 0; i < 4096; i++) tot += g_csr_writes[i];
-+		std::printf("csr writes %llu, priv changes %llu, tlb flushes %llu\n", (unsigned long long)tot, (unsigned long long)g_priv_changes, (unsigned long long)mmu_tlb_generation());
-+		for (int i = 0; i < 4096; i++) if (g_csr_writes[i] > tot / 100) std::printf("  csr 0x%03x: %llu\n", i, (unsigned long long)g_csr_writes[i]);
-+		{ uint64_t once = 0, rep = 0; for (auto &kv : fs_dmiss) { if (kv.second == 1) once++; else rep += kv.second; }
-+		  std::printf("decode miss distinct pcs %zu, missed once %llu, misses at repeat pcs %llu\n", fs_dmiss.size(), (unsigned long long)once, (unsigned long long)rep); }
-+		std::printf("decode miss kinds: empty %llu, other pc %llu, same pc other bytes %llu, epoch %llu\n", (unsigned long long)fs_dm_invalid, (unsigned long long)fs_dm_addr, (unsigned long long)fs_dm_raw, (unsigned long long)fs_dm_epoch);
-+		for (auto &kv : fs_edge) if (kv.second > 1000) std::printf("page-edge 4-byte fetch pc=%llx x%llu\n", (unsigned long long)kv.first, (unsigned long long)kv.second);
 +		for (int i = 0; i < 64; i++) if (fs_ext[i]) std::printf("slow op ext %d: %llu\n", i, (unsigned long long)fs_ext[i]);
 +		for (int i = 0; i < 128; i++) if (fs_op[i]) std::printf("slow op opcode 0x%02x: %llu\n", i, (unsigned long long)fs_op[i]);
 +	}
@@ -249,10 +239,7 @@ index 519978f..cfda15d 100644
 +	if (std::getenv("DOOMV_STATEDUMP")) {
 +		uint64_t h = 1469598103934665603ull;
 +		const uint8_t *ram = memory.ram_data();
-+		for (uint64_t i = 0; i + 8 <= Memory::RAM_SPAN; i += 8) {
-+			uint64_t w; std::memcpy(&w, ram + i, 8);
-+			h = (h ^ w) * 1099511628211ull;
-+		}
++		for (uint64_t i = 0; i + 8 <= Memory::RAM_SPAN; i += 8) { uint64_t w; std::memcpy(&w, ram + i, 8); h = (h ^ w) * 1099511628211ull; }
 +		uint64_t fh = 1469598103934665603ull;
 +		const uint8_t *fbp = memory.framebuffer();
 +		for (uint32_t i = 0; i < Memory::FB_SIZE; i++) fh = (fh ^ fbp[i]) * 1099511628211ull;
@@ -260,16 +247,16 @@ index 519978f..cfda15d 100644
 +		for (uint64_t i = 0; i < Memory::LFB_SIZE; i++) fh = (fh ^ lfbp[i]) * 1099511628211ull;
 +		std::ofstream f("statedump.log");
 +		f << std::hex << "fb " << fh << " fb_gen " << memory.fb_generation() << " lfb_gen " << memory.lfb_generation()
-+		  << " fb_writes " << memory.take_fb_write_count() << "\n";
-+		f << std::hex << "minstret " << regs.read_csr(0xB02) << "\nmcycle " << regs.read_csr(0xB00)
++		  << " fb_writes " << memory.take_fb_write_count() << "\nminstret " << regs.read_csr(0xB02) << "\nmcycle " << regs.read_csr(0xB00)
 +		  << "\nmtime " << memory.get_timer().get_mtime() << "\ntick_phase " << tick_phase
 +		  << "\nmmio_tick " << memory.read32(Memory::MMIO_TICK) << "\nsteps " << n
 +		  << "\npc " << regs.get_pc() << "\nram " << h << "\n";
 +	}
++
  	run_finished = true;
  }
  
-@@ -855,7 +1108,8 @@ void DoomSystem::cpu_loop()
+@@ -855,7 +1095,8 @@ void DoomSystem::cpu_loop()
  				uint64_t n = INPUT_PERIOD - (before & (INPUT_PERIOD - 1));
  				if (stop_at) n = std::min<uint64_t>(n, stop_at > before ? stop_at - before : 1);
  				n = std::min<uint64_t>(n, (uint64_t)budget);
@@ -303,124 +290,26 @@ index 271692b..4a39963 100644
  	FetchPage fetch_cache[FETCH_CACHE_SIZE];
  	bool fetch16(uint64_t vaddr, uint16_t &out);
  	// A whole instruction, in one cache lookup where that is exactly
-diff --git a/src/extensions/ext_zicsr.cpp b/src/extensions/ext_zicsr.cpp
-index fea1bb1..5532f29 100644
---- a/src/extensions/ext_zicsr.cpp
-+++ b/src/extensions/ext_zicsr.cpp
-@@ -6,6 +6,7 @@
- #include "ext_sscofpmf.hpp"
- #include <cstdio>
- #include <cstdlib>
-+static bool doomv_coarse() { static const bool c = std::getenv("DOOMV_COARSE") != nullptr; return c; }
- #include "ext_ssstateen.hpp"
- #include "ext_zicfilp.hpp"
- #include "ext_zicfiss.hpp"
-@@ -468,6 +469,7 @@ static void write_misa(uint64_t value, uint64_t next_pc)
- 	const ExtensionConfig &s = SupportedExtensions;
- 	if (s.C && !has('C') && (next_pc & 2)) return;
- 
-+	const ExtensionConfig before = Extensions;
- 	const bool f = s.F && has('F');
- 	const bool d = s.D && has('D') && has('F');
- 	Extensions.A = s.A && has('A');
-@@ -483,7 +485,14 @@ static void write_misa(uint64_t value, uint64_t next_pc)
- 	Extensions.ZFH = s.ZFH && f;
- 	Extensions.ZFHMIN = s.ZFHMIN && f;
- 	Extensions.ZCMOP = s.ZCMOP && Extensions.C;
--	ExtensionsEpoch++;
-+	// Prototype: the epoch says "decodes made before this may be wrong", and
-+	// they are only wrong if the set changed. A csrr of misa comes through
-+	// here with the value it already holds -- OpenSBI does that on its trap
-+	// path -- and used to throw the whole decode cache away each time. The
-+	// TLB flush below is kept as it was: unlike the decode cache, a guest that
-+	// edits a PTE without sfence.vma could tell the difference.
-+	if (std::memcmp(&before, &Extensions, sizeof before) != 0 || doomv_coarse())
-+		ExtensionsEpoch++;
- 	bump_event_gen();
- 	mmu_tlb_flush();
- }
-@@ -1176,7 +1185,11 @@ static void remember_data_page(Registers &regs, Memory &mem, RiscvCore::DataPage
-                                uint64_t vpage, uint64_t key, uint64_t paddr, int access)
- {
- 	const uint64_t ppage = paddr & ~0xFFFull;
--	if (!Memory::in_ram(ppage, 0x1000)) return;
-+	// A whole page of DOOM's framebuffer, for stores only, is as plain as RAM
-+	// but for the two host-side counters a store bumps.
-+	const bool fb = access == pmp::ACC_STORE && ppage >= Memory::MMIO_FB
-+	             && ppage + 0x1000 <= Memory::MMIO_FB + Memory::FB_SIZE;
-+	if (!fb && !Memory::in_ram(ppage, 0x1000)) return;
- 	if (Extensions.H && regs.get_virt()) return;
- 	if (regs.read_csr(CSR_MSTATUS) & MSTATUS_MPRV) return;
- 	if (Extensions.SMPMP && !pmp::page_permits(regs, ppage, access, (uint8_t)regs.get_priv())) return;
-@@ -1186,7 +1199,8 @@ static void remember_data_page(Registers &regs, Memory &mem, RiscvCore::DataPage
- 	e.vpage = vpage;
- 	e.key = key;
- 	e.ppage = ppage;
--	e.host = mem.ram_data_mut() + (ppage - Memory::RAM_BASE);
-+	e.host = fb ? mem.fb_data_mut() + (ppage - Memory::MMIO_FB) : mem.ram_data_mut() + (ppage - Memory::RAM_BASE);
-+	e.fb = fb;
- }
- 
- bool RiscvCore::load_virtual(Registers &regs, Memory &mem, uint64_t vaddr,
-@@ -1248,6 +1262,7 @@ bool RiscvCore::store_virtual(Registers &regs, Memory &mem, uint64_t vaddr,
- 			const unsigned offset = (unsigned)(vaddr & 0xFFF);
- 			const uint64_t paddr = e.ppage | offset;
- 			std::memcpy(e.host + offset, &value, size);
-+			if (e.fb) mem.fb_stored(size);
- 			if (access_log)
- 				access_log->push_back({vaddr, paddr, (uint8_t)size, true});
- 			// The bytes, as StoreCapture records them for a store that goes
-diff --git a/src/memory.hpp b/src/memory.hpp
-index 130a74b..1fdb622 100644
---- a/src/memory.hpp
-+++ b/src/memory.hpp
-@@ -338,6 +338,15 @@ public:
- 	void tick_clock() { timer.tick(1); }
- 
- 	const uint8_t *framebuffer() const { return fb.data(); }
-+	// Prototype: the store cache can hold DOOM's framebuffer pages. A byte
-+	// stored there through write8 does exactly this besides storing, and
-+	// neither counter is visible to the guest.
-+	uint8_t *fb_data_mut() { return fb.data(); }
-+	void fb_stored(unsigned n)
-+	{
-+		fb_write_count += n;
-+		fb_gen.store(fb_gen.load(std::memory_order_relaxed) + n, std::memory_order_relaxed);
-+	}
- 	const uint8_t *linux_framebuffer() const { return lfb.data(); }
- 	// Bumped on every store into the matching framebuffer. The display
- 	// thread reads them to tell a frame the guest is still drawing from one
 diff --git a/src/registers.cpp b/src/registers.cpp
-index 49156bf..781173c 100644
+index 49156bf..945fe40 100644
 --- a/src/registers.cpp
 +++ b/src/registers.cpp
-@@ -1,3 +1,5 @@
+@@ -1,3 +1,4 @@
 +#include <cstdlib>
-+static bool doomv_coarse() { static const bool c = std::getenv("DOOMV_COARSE") != nullptr; return c; }
  #include "registers.hpp"
  #include "event_gen.hpp"
  #include <cstring>
-@@ -46,8 +48,10 @@ uint8_t *Registers::write_v(int i)
- 
- 
- 
-+uint64_t g_csr_writes[4096], g_priv_changes;
- void Registers::set_priv(PrivMode mode)
- {
-+	g_priv_changes++;
- 	priv = mode;
- 	state_gen++;
- 	bump_event_gen();
-@@ -57,6 +61,23 @@ void Registers::set_priv(PrivMode mode)
+@@ -57,6 +58,24 @@ void Registers::set_priv(PrivMode mode)
  
  void Registers::write_csr(uint16_t addr, uint64_t value)
  {
-+	g_csr_writes[addr]++;
 +	// Prototype: an mstatus write that changes none of the bits translation,
 +	// PMP or the counter enables depend on -- the interrupt enables, FS/VS/XS
 +	// and the like -- leaves every cache keyed on state_gen valid. EventGen
 +	// still moves, since the interrupt enables are exactly what it is for.
-+	if (addr == 0x300 && !doomv_coarse()) {
++	// DOOMV_COARSE=1 restores the old behaviour, for comparison.
++	static const bool coarse = std::getenv("DOOMV_COARSE") != nullptr;
++	if (addr == 0x300 && !coarse) {
 +		constexpr uint64_t KEYED = (1ull << 17) /*MPRV*/ | (3ull << 11) /*MPP*/ | (1ull << 18) /*SUM*/
 +		                         | (1ull << 19) /*MXR*/ | (1ull << 20) /*TVM*/ | (1ull << 6) /*UBE*/
 +		                         | (1ull << 36) /*SBE*/ | (1ull << 37) /*MBE*/ | (1ull << 38) /*GVA*/
@@ -449,14 +338,12 @@ index c1070a0..f8896eb 100644
  	// it runs, from mcountinhibit.IR and minstretcfg, and cleared by a write
  	// to minstret, which then holds the value written: Sail's
 diff --git a/src/riscv_core.hpp b/src/riscv_core.hpp
-index c186df5..ba67c23 100644
+index ee55ee9..0d84122 100644
 --- a/src/riscv_core.hpp
 +++ b/src/riscv_core.hpp
-@@ -56,8 +56,9 @@ public:
- 		uint64_t key = ~0ull;
- 		uint64_t ppage = 0;      // what the translation produced, for the access log
- 		uint8_t *host = nullptr;
-+		bool fb = false;         // a DOOM framebuffer page: Memory::fb_stored after each store
+@@ -62,7 +62,7 @@ public:
+ 		// a cached store bumps the same way -- see Memory::framebuffer_stored.
+ 		Memory::Backing backing = Memory::Backing::Ram;
  	};
 -	static constexpr unsigned DATA_CACHE_SIZE = 256;
 +	static constexpr unsigned DATA_CACHE_SIZE = 4096;
@@ -464,35 +351,25 @@ index c186df5..ba67c23 100644
  	DataPage store_cache[DATA_CACHE_SIZE];
  	void raise_virtual_instruction(Registers &regs, uint64_t tval) { enter_trap(regs, 22, tval); }
 diff --git a/src/riscv_decoder.cpp b/src/riscv_decoder.cpp
-index e6c5d01..3494389 100644
+index 6fd6b90..8b34d4e 100644
 --- a/src/riscv_decoder.cpp
 +++ b/src/riscv_decoder.cpp
-@@ -379,7 +379,7 @@ DispatchResult Decoder::decode_and_dispatch(uint64_t pc, uint32_t raw_word)
- 	// Indexed by halfword, not word: compressed instructions can start on
- 	// either 2-byte-aligned half of a 4-byte slot, so >>2 would alias two
- 	// unrelated addresses into one cache line half the time.
--	CacheEntry &entry = cache[(pc >> 1) & CACHE_MASK];
-+	CacheEntry &entry = cache[index(pc)];
- 
- 	if (!(entry.valid && entry.addr == pc && entry.raw_instr == tag && entry.epoch == ExtensionsEpoch)) {
- 		DecodedInstruction instr;
-@@ -432,7 +432,7 @@ DispatchResult Decoder::decode_and_dispatch(uint64_t pc, uint32_t raw_word)
- 		       || (instr.ext == Extension::SVINVAL && Extensions.SVINVAL)
- 		       || (instr.ext == Extension::H && Extensions.H);
- 
--		entry = {true, pc, tag, instr, enabled, ExtensionsEpoch};
-+		entry = {true, pc, tag, instr, enabled, enabled ? classify_fast(instr) : FOP_SLOW, ExtensionsEpoch};
- 	}
- 	// The instruction is used from the cache entry itself, not copied out of
- 	// it. Nothing between here and the return decodes, so the entry cannot
-@@ -571,3 +571,70 @@ DispatchResult Decoder::decode_and_dispatch(uint64_t pc, uint32_t raw_word)
+@@ -462,6 +462,7 @@ DispatchResult Decoder::decode_and_dispatch(uint64_t pc, uint32_t raw_word)
+ 		// the cache is emptied when the extension set changes. The decode of a
+ 		// disabled extension's instruction is only ever used for its length.
+ 		if (!extension_enabled(instr.ext)) instr.ext = Extension::ILLEGAL;
++		instr.fast_op = classify_fast(instr);   // FOP_SLOW for anything ILLEGAL
+ 		// The name stays behind: only the operation is cached.
+ 		entry.addr = pc;
+ 		entry.decoded = instr;
+@@ -603,3 +604,70 @@ DispatchResult Decoder::decode_and_dispatch(uint64_t pc, uint32_t raw_word)
  
  	return {false, &instr};
  }
 +
 +// Prototype. The same predicates exec_32I uses to choose an operation, made
 +// once when the entry is filled. Anything not listed is FOP_SLOW.
-+FastOp classify_fast(const DecodedInstruction &d)
++FastOp classify_fast(const DecodedOp &d)
 +{
 +	if (!Extensions.XLEN64) return FOP_SLOW;
 +	if (d.ext == Extension::M) return FOP_MEXT;
@@ -557,13 +434,30 @@ index e6c5d01..3494389 100644
 +	}
 +}
 diff --git a/src/riscv_decoder.hpp b/src/riscv_decoder.hpp
-index 95dff3c..bfa25d9 100644
+index cbaa823..b1f2e0d 100644
 --- a/src/riscv_decoder.hpp
 +++ b/src/riscv_decoder.hpp
-@@ -71,7 +71,23 @@ struct DispatchResult {
- 	const DecodedInstruction *decoded;
+@@ -57,9 +57,12 @@ struct DecodedOp {
+ 	                // report the encoding that was refused; filled in centrally by
+ 	                // decode_and_dispatch so no per-extension decode has to remember to.
+ 	uint8_t length; // 2 or 4 bytes
+-	bool word_op;   // true for the *W-suffixed RV64 forms (ADDIW, SLLW, MULW, ...) -- 32-bit op, sign-extend result to 64
+-	bool op_64;     // true for the .D-suffixed RV64A forms (LR.D/SC.D/AMO*.D) -- selects 64-bit vs 32-bit memory width
+-	bool fp_double; // true for F-extension instructions operating on double (D) instead of single (F) precision
++	bool word_op : 1;   // true for the *W-suffixed RV64 forms (ADDIW, SLLW, MULW, ...) -- 32-bit op, sign-extend result to 64
++	bool op_64 : 1;     // true for the .D-suffixed RV64A forms (LR.D/SC.D/AMO*.D) -- selects 64-bit vs 32-bit memory width
++	bool fp_double : 1; // true for F-extension instructions operating on double (D) instead of single (F) precision
++	// Prototype: the flat operation DoomSystem::run_fast executes this as, set
++	// when the decode is cached; 0 (FOP_SLOW) means "take the ordinary step".
++	uint8_t fast_op;
+ };
+ static_assert(sizeof(DecodedOp) == 24, "DecodedOp is sized to make a decode cache entry 32 bytes");
+ 
+@@ -83,7 +86,24 @@ struct DispatchResult {
+ 	const DecodedOp *decoded;
  };
  
++// Prototype: the operations DoomSystem::run_fast runs itself.
 +enum FastOp : uint8_t {
 +	FOP_SLOW = 0,
 +	FOP_LUI, FOP_AUIPC, FOP_JAL, FOP_JALR,
@@ -574,26 +468,13 @@ index 95dff3c..bfa25d9 100644
 +	FOP_ADDIW, FOP_SLLIW, FOP_SRLIW, FOP_SRAIW,
 +	FOP_ADD, FOP_SUB, FOP_SLL, FOP_SLT, FOP_SLTU, FOP_XOR, FOP_SRL, FOP_SRA, FOP_OR, FOP_AND,
 +	FOP_ADDW, FOP_SUBW, FOP_SLLW, FOP_SRLW, FOP_SRAW,
-+	FOP_FENCE,
-+	FOP_MEXT,
++	FOP_FENCE,  // also PAUSE: both only advance pc
++	FOP_MEXT,   // any M instruction: exec_32M, which neither traps nor touches memory
 +};
-+FastOp classify_fast(const DecodedInstruction &d);
++FastOp classify_fast(const DecodedOp &d);
 +
  class Decoder {
 +	friend class DoomSystem;
  public:
  	Decoder(RiscvCore &core, Registers &regs, Memory &mem);
  
-@@ -156,10 +172,12 @@ private:
- 		uint32_t raw_instr = 0;
- 		DecodedInstruction decoded{};
- 		bool enabled = false;
-+		uint8_t fop = FOP_SLOW;
- 		uint32_t epoch = 0;   // ExtensionsEpoch the entry was decoded under
- 	};
- 	static constexpr uint32_t CACHE_BITS = 17;
- 	static constexpr uint32_t CACHE_SIZE = 1u << CACHE_BITS;
- 	static constexpr uint32_t CACHE_MASK = CACHE_SIZE - 1;
-+	static uint32_t index(uint64_t pc) { return (uint32_t)((pc >> 1) & CACHE_MASK); }
- 	std::vector<CacheEntry> cache;
- };

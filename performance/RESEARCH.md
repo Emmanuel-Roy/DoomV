@@ -18,6 +18,113 @@ unmodified emulator's and found identical.
 | **speed-up** | **2.57x** | **1.93x** |
 | crash.log | identical | identical |
 
+Three of the follow-ups below have since landed on their own -- the
+framebuffers through the data caches, a decode cache sized for a kernel, and
+PGO as the default build (see [What has landed](#what-has-landed)) -- and the
+patch has been refreshed on top of them. Against the same unmodified build:
+
+| build (Clang, PGO + ThinLTO) | doom 1000M | linux 300M | fbcon 1500M |
+|---|---:|---:|---:|
+| unmodified `8387f26` | 40.1 MIPS | 28.0 MIPS | 30.5 MIPS |
+| `3771294`, the three landed changes | 40.5 (1.01x) | 28.5 (1.02x) | 33.6 (1.10x) |
+| `3771294` + `patches/fast-loop.patch` | **105.4 (2.63x)** | **69.0 (2.46x)** | **91.0 (2.98x)** |
+| crash.log | identical | identical | identical |
+
+`fbcon` is described under [What has landed](#what-has-landed). The fast loop is
+worth more on Linux now than it was (2.46x against 1.93x) because the landed
+changes remove misses it used to fall back on.
+
+<a id="what-has-landed"></a>
+## What has landed
+
+Three commits, each measured against the one before it on the same Linux host,
+in interleaved runs, and each checked to leave crash.log -- and guest RAM, both
+framebuffers, their counters, `minstret`, `mcycle`, `mtime` and the MMIO tick
+counter -- identical to the unmodified emulator's.
+
+**Framebuffer loads and stores through the data caches** (`c3015b9`). Change 3
+of the prototype, for both framebuffers. The data caches admit a whole page of
+either, and a cached store bumps the host-side counters the uncached path
+would -- DOOM's by the store's size, Linux's once per `write8` and once per
+`write32` -- so even those come out the same. 1.05x on doom, 1.03x on linux
+under PGO, and 1.16x (plain) on a workload that draws: the BusyBox boot on a
+kernel built with the framebuffer console, then `dmesg > /dev/tty0` six times
+from a stdin file, 123M framebuffer stores in 1.5G steps. The linux figures
+here were measured with the kernel `Image` committed under `tools/linux/linux/`,
+which predates `FB_SIMPLE` and never draws; the one `scripts/build.py` builds,
+which `bench.py` boots, draws its boot log, so its linux workload should show
+some of this too. The Ubuntu desktops draw through the same aperture, and were
+not measured.
+
+**The decode cache** (`9af6be5`). Change 5 of the prototype, a read of `misa`
+no longer emptying the cache, plus 32-byte entries (the mnemonic, a third of
+every entry, only ever came from `Decoder::describe`) and 2^19 of them. A
+BusyBox boot's decode misses in 300M steps went from 8.14M to 0.65M. On today's
+step loop that is worth nothing measurable -- linux 1.00x under PGO, doom 0.99x
+plain and 0.95x under PGO, the last with fewer instructions per step and more
+simulated mispredictions, which points at code layout -- because at ~220 host
+instructions a step the misses were a couple of per cent. Under the fast loop,
+where a step is under 90, it is the main difference between the patch's 1.93x
+on linux before and 2.46x now. It is in its own commit so that it can be
+judged on its own.
+
+**PGO by default** (`3771294`). Under Clang, `pgo.py` keeps its profile as
+`build/pgo/doomv.profdata`, every `make` builds with it, and
+`scripts/build.py` trains one the first time it has a guest to train on, so
+the fastest build is the one that runs and the one the gate tests. 1.44x over
+ThinLTO alone on doom here.
+
+<a id="threads"></a>
+## A fetch/decode thread feeding an execute thread
+
+The idea: one thread fetches and decodes instructions and hands them over,
+another executes them. It was measured rather than built, because two numbers
+decide it.
+
+**What decoding costs now.** A handoff can take work off the executing thread
+only if that work does not depend on execution. Fetch does -- the next pc is a
+result of the instruction before it, and so are traps, interrupts and every CSR
+write that changes translation -- so a fetch thread would have to predict the
+path, and the executing thread would still have to check each instruction it
+is handed against its own pc and page state. That check is exactly what the
+fetch and decode caches do today. What moves is the decode itself, on a miss,
+and after the decode cache commit a linux boot spends **0.12% of its time**
+decoding (`decode_i`, `decode_compressed`, `classify` and the rest, by `perf`).
+That is the most a decode thread could save.
+
+**What a handoff costs.** A single-producer, single-consumer ring of 32-byte
+records, on this 4-core host:
+
+| | per record |
+|---|---:|
+| written and read on one thread | 1.5 ns |
+| handed over, index published per record | 3.1 ns |
+| handed over, published every 8 / 64 / 512 | 1.9 / 1.9 / 1.8 ns |
+| a round trip, one thread waiting for the other | **593 ns** |
+
+Streaming is cheap. The round trip is the problem: every time execution goes
+somewhere the fetch thread did not predict -- a mispredicted branch, a trap,
+an interrupt, a write to `satp` -- the fetch thread has to be told and start
+again, and the executing thread waits for it. This host is virtualized; on
+bare metal a round trip is typically nearer 100 ns. Either way it is many
+steps' worth, at 10-35 ns a step. A 300M-step linux boot spends under 20 ms
+decoding in total, and runs 32.7M conditional branches, 29.9M taken branches
+and jumps and 12.7K traps and interrupts. A fetch thread that guessed 99% of
+those branches right would still be redirected 330K times: 0.19 s at this
+host's round trip, 33 ms at 100 ns, either way more than the decoding
+it would take away.
+
+**Determinism** would survive it, with care: a decode is a pure function of
+the bytes and the extension set, so which thread computed it cannot matter as
+long as entries are published atomically and still checked by tag. The cost is
+the reason not to, not the risk.
+
+**What does work** is the same idea kept on one thread: decode ahead of
+execution, then execute without per-instruction checks. That is the fast loop,
+and the next step after it, pre-decoded blocks (below). They split the work the
+way the question suggests -- decoding once, executing many times -- without a
+thread boundary in the middle of every branch.
+
 ## What determinism asks of an optimization
 
 Every speed-up so far in [README.md](README.md) was a cache of an answer the
@@ -124,6 +231,9 @@ and 39% of all indirect jumps; that model is much weaker than a real TAGE-style
 predictor and should not be read as the hardware number.)
 
 ## The prototype
+
+(3) and (5) have since landed on their own, and the refreshed patch carries
+(1), (2) and (4); the numbers in this section are from the first version.
 
 `patches/fast-loop.patch`, five changes. The first is the structural one and
 (2) is part of it; (3) to (5) are cache changes that help the old loop too, but
@@ -284,11 +394,11 @@ column says why.
 
 | # | change | expected | why it stays deterministic |
 |---|---|---|---|
-| 1 | Adopt the fast-path loop, (1)-(5) above | 1.9-2.6x, measured | every skipped check is one simple steps cannot change; everything else runs through `step()` |
-| 2 | The same store-cache treatment for the Linux framebuffer | large for the Ubuntu desktops (unmeasured) | only host-side counters are involved, bumped exactly as the byte path does |
+| 1 | Adopt the fast-path loop, (1), (2) and (4) above | 2.4-3.0x, measured | every skipped check is one simple steps cannot change; everything else runs through `step()` |
+| 2 | ~~The same store-cache treatment for the Linux framebuffer~~ landed, `c3015b9` | 1.16x on fbcon, measured | only host-side counters are involved, bumped exactly as the byte path does |
 | 3 | Pre-decoded blocks with per-block counting | est. 1.5-2x more | QEMU's icount model: counts are exact because the budget is checked before a block runs and a block that will not fit runs a step at a time |
-| 4 | A decode cache big enough for a kernel, with smaller entries | 7% on Linux, measured at 4x size | it is a cache tagged on pc and bytes; any size or layout is exact |
-| 5 | PGO + ThinLTO as the build people actually run | 1.44x, measured | same sources; crash.log identical, as README.md already shows |
+| 4 | ~~A decode cache big enough for a kernel, with smaller entries~~ landed, `9af6be5` | none on today's loop; part of the fast loop's 2.46x on linux | it is a cache tagged on pc and bytes; any size or layout is exact |
+| 5 | ~~PGO + ThinLTO as the build people actually run~~ landed, `3771294` | 1.44x, measured | same sources; crash.log identical, as README.md already shows |
 | 6 | Snapshots, to resume a booted machine | minutes to seconds for anything past boot | a snapshot is the whole machine state; restored and run on, it must match a straight run |
 | 7 | Superinstructions, `musttail` dispatch, BOLT | small, each needs measuring | pure host-code changes |
 | 8 | A JIT | the largest ceiling | possible with icount-style budgets, but the largest verification surface |
@@ -384,14 +494,14 @@ For completeness, the tempting things that do not keep the invariant:
 
 ## Adopting the prototype
 
-1. `git apply performance/patches/fast-loop.patch` against `8387f26` (add
+1. `git apply performance/patches/fast-loop.patch` against `3771294` (add
    `--ignore-whitespace` if the sources and the patch disagree about CRLF), and
    decide whether to keep the switches. The A/B switch and the state dump are
    cheap and useful for checking later changes.
 2. `python performance/bench.py doom --compare build/perf-baseline/riscv_doom.exe`,
    and the same for `linux` and `ubuntu`: the hashes must match.
 3. `python tools/verification/lockstep_sail.py`. Lock-step keeps the old
-   step-by-step loop, so this checks (3) to (5) rather than `run_fast` itself.
+   step-by-step loop, so this checks (4) rather than `run_fast` itself.
    That is also why (4)'s mask needs a review against every reader of
    `state_gen` before it lands.
 4. `python scripts/ci.py`.
