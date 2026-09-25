@@ -94,6 +94,8 @@ public:
 	std::vector<uint16_t> *csr_log = nullptr;
 	// A counter's own increment: not a write, so not logged.
 	void bump_csr(uint16_t addr) { csr[addr]++; }
+	// n increments at once (DoomSystem::run_fast).
+	void csr_add(uint16_t addr, uint64_t n) { csr[addr] += n; }
 	// Whether minstret counts the instruction now executing. Decided before
 	// it runs, from mcountinhibit.IR and minstretcfg, and cleared by a write
 	// to minstret, which then holds the value written: Sail's

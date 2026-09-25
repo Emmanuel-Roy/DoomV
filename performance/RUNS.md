@@ -154,3 +154,15 @@ and nothing else.
 | 20260924-192547 | ubuntu 3000M | ubuntu boot: PGO+ThinLTO vs plain make | 8387f26 | 75.61 | 39.7 | `74c11f512233` |  |
 | 20260924-224320 | ubuntu 3000M | make fast (PGO+ThinLTO default) vs plain (reference) | 8387f26+ | 53.97 | 55.6 | `74c11f512233` |  |
 | 20260924-224417 | ubuntu 3000M | make fast (PGO+ThinLTO default) vs plain | 8387f26+ | 75.89 | 39.5 | `74c11f512233` |  |
+| 20260925-111034 | doom 1000M | W: merged branch, plain build vs pre-merge plain (reference) | 1b59d58+ | 80.67 | 12.4 | `3d73dac132f3` |  |
+| 20260925-111046 | doom 1000M | W: merged branch, plain build vs pre-merge plain | 1b59d58+ | 83.71 | 11.9 | `3d73dac132f3` |  |
+| 20260925-111309 | ubuntu 3000M | X: merged branch PGO vs pre-merge PGO, ubuntu boot (reference) | 1b59d58+ | 73.43 | 40.9 | `74c11f512233` |  |
+| 20260925-111352 | ubuntu 3000M | X: merged branch PGO vs pre-merge PGO, ubuntu boot | 1b59d58+ | 81.53 | 36.8 | `74c11f512233` |  |
+| 20260925-113922 | doom 1000M | Y: fast loop vs merged, doom (reference) | 288b1df+ | 126.17 | 7.9 | `3d73dac132f3` |  |
+| 20260925-113930 | doom 1000M | Y: fast loop vs merged, doom | 288b1df+ | 247.92 | 4.0 | `3d73dac132f3` |  |
+| 20260925-114051 | doom 1000M | Z: fast loop + retrained PGO vs merged (reference) | 288b1df+ | 125.73 | 8.0 | `3d73dac132f3` |  |
+| 20260925-114059 | doom 1000M | Z: fast loop + retrained PGO vs merged | 288b1df+ | 281.44 | 3.6 | `3d73dac132f3` |  |
+| 20260925-114102 | linux 300M | Z: fast loop + retrained PGO vs merged (reference) | 288b1df+ | 93.63 | 3.2 | `f5894f934a68` |  |
+| 20260925-114106 | linux 300M | Z: fast loop + retrained PGO vs merged | 288b1df+ | 204.08 | 1.5 | `f5894f934a68` |  |
+| 20260925-114107 | ubuntu 3000M | Z: fast loop + retrained PGO vs merged (reference) | 288b1df+ | 81.45 | 36.8 | `74c11f512233` |  |
+| 20260925-114146 | ubuntu 3000M | Z: fast loop + retrained PGO vs merged | 288b1df+ | 161.68 | 18.6 | `74c11f512233` |  |

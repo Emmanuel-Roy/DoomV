@@ -227,6 +227,10 @@ private:
 	// clock moves -- Sail logs a CSR write before its clock ticks.
 	void step_execute();
 	void end_step();
+	// Prototype: exactly `n` steps, as n calls to step() would run them, with
+	// the steps that cannot change anything a check depends on run without
+	// the checks. See run_fast.
+	void run_fast(uint64_t n);
 	// Sail's clock: mtime advances once every INSNS_PER_TICK steps, and on
 	// every tick of a wait, which lasts at most MAX_WAIT_TICKS.
 	static constexpr uint32_t INSNS_PER_TICK = 2;   // rva23s64.json platform.instructions_per_tick
@@ -253,7 +257,7 @@ private:
 		uint64_t key = ~0ull;
 		const uint8_t *host = nullptr;
 	};
-	static constexpr unsigned FETCH_CACHE_SIZE = 256;
+	static constexpr unsigned FETCH_CACHE_SIZE = 4096;
 	FetchPage fetch_cache[FETCH_CACHE_SIZE];
 	bool fetch16(uint64_t vaddr, uint16_t &out);
 	// A whole instruction, in one cache lookup where that is exactly

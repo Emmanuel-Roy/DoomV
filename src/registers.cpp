@@ -1,3 +1,4 @@
+#include <cstdlib>
 #include "registers.hpp"
 #include "event_gen.hpp"
 #include <cstring>
@@ -57,6 +58,24 @@ void Registers::set_priv(PrivMode mode)
 
 void Registers::write_csr(uint16_t addr, uint64_t value)
 {
+	// Prototype: an mstatus write that changes none of the bits translation,
+	// PMP or the counter enables depend on -- the interrupt enables, FS/VS/XS
+	// and the like -- leaves every cache keyed on state_gen valid. EventGen
+	// still moves, since the interrupt enables are exactly what it is for.
+	// DOOMV_COARSE=1 restores the old behaviour, for comparison.
+	static const bool coarse = std::getenv("DOOMV_COARSE") != nullptr;
+	if (addr == 0x300 && !coarse) {
+		constexpr uint64_t KEYED = (1ull << 17) /*MPRV*/ | (3ull << 11) /*MPP*/ | (1ull << 18) /*SUM*/
+		                         | (1ull << 19) /*MXR*/ | (1ull << 20) /*TVM*/ | (1ull << 6) /*UBE*/
+		                         | (1ull << 36) /*SBE*/ | (1ull << 37) /*MBE*/ | (1ull << 38) /*GVA*/
+		                         | (1ull << 39) /*MPV*/;
+		const uint64_t diff = csr[addr] ^ value;
+		csr[addr] = value;
+		if (diff & KEYED) state_gen++;
+		bump_event_gen();
+		if (csr_log) csr_log->push_back(addr);
+		return;
+	}
 	csr[addr] = value;
 	state_gen++;
 	bump_event_gen();

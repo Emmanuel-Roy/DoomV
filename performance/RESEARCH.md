@@ -492,6 +492,34 @@ For completeness, the tempting things that do not keep the invariant:
   constant, and the input checkpoints are on counts; a "run until 16 ms have
   passed" loop would reintroduce exactly what those removed.
 
+## Adopted
+
+The fast loop landed. Measured on Windows with Clang, PGO and ThinLTO on both
+sides, against the merge that preceded it, with the profile retrained because
+the hot code moved:
+
+| workload | before | after | |
+|---|---:|---:|---|
+| doom 1000M | 125.73 | 281.44 MIPS | 2.239x |
+| linux 300M | 93.63 | 204.08 MIPS | 2.180x |
+| ubuntu 3000M | 81.45 | 161.68 MIPS | 1.985x |
+
+`crash.log` identical on all three. And, because lock-step keeps the
+step-by-step loop and so cannot check `run_fast` itself, the same binary was
+run with `DOOMV_FAST=0` and `DOOMV_FAST=1`: identical on doom (1000M) and linux
+(300M). That is the comparison that tests the fast path, and it is worth
+keeping as the check for anything that touches it.
+
+The `state_gen` mask in (4) was reviewed against every reader before it landed,
+as this document asked. There are two: the fetch and data cache keys, which
+depend on translation and PMP -- and `mmu.cpp` reads exactly `MPRV`, `MPV`,
+`SUM`, `MXR` and `MPP`, all five in the mask -- and `counter_key`, which reads
+`mcountinhibit`, the two filter CSRs and the privilege, no `mstatus` bit at
+all. `FS` and `VS` are correctly outside the mask: the FP and vector enables
+are checked live on every execution, deliberately after the decode cache, so
+nothing caches them. The interrupt enables are outside it too and must be:
+`EventGen` still moves on every `mstatus` write.
+
 ## Adopting the prototype
 
 1. `git apply performance/patches/fast-loop.patch` against `3771294` (add

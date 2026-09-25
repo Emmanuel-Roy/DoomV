@@ -462,6 +462,7 @@ DispatchResult Decoder::decode_and_dispatch(uint64_t pc, uint32_t raw_word)
 		// the cache is emptied when the extension set changes. The decode of a
 		// disabled extension's instruction is only ever used for its length.
 		if (!extension_enabled(instr.ext)) instr.ext = Extension::ILLEGAL;
+		instr.fast_op = classify_fast(instr);   // FOP_SLOW for anything ILLEGAL
 		// The name stays behind: only the operation is cached.
 		entry.addr = pc;
 		entry.decoded = instr;
@@ -602,4 +603,71 @@ DispatchResult Decoder::decode_and_dispatch(uint64_t pc, uint32_t raw_word)
 	}
 
 	return {false, &instr};
+}
+
+// Prototype. The same predicates exec_32I uses to choose an operation, made
+// once when the entry is filled. Anything not listed is FOP_SLOW.
+FastOp classify_fast(const DecodedOp &d)
+{
+	if (!Extensions.XLEN64) return FOP_SLOW;
+	if (d.ext == Extension::M) return FOP_MEXT;
+	if (d.ext == Extension::ZIHINTPAUSE) return FOP_FENCE;   // exec_ZIHINTPAUSE only advances pc
+	if (d.ext != Extension::I && d.ext != Extension::C) return FOP_SLOW;
+	const unsigned f3 = d.funct3;
+	switch (d.opcode) {
+	case 0b0110111: return FOP_LUI;
+	case 0b0010111: return FOP_AUIPC;
+	case 0b1101111: return FOP_JAL;
+	case 0b1100111: return FOP_JALR;
+	case 0b1100011: {
+		static const FastOp b[8] = {FOP_BEQ, FOP_BNE, FOP_SLOW, FOP_SLOW, FOP_BLT, FOP_BGE, FOP_BLTU, FOP_BGEU};
+		return b[f3 & 7];
+	}
+	case 0b0000011: {
+		static const FastOp l[8] = {FOP_LB, FOP_LH, FOP_LW, FOP_LD, FOP_LBU, FOP_LHU, FOP_LWU, FOP_SLOW};
+		return l[f3 & 7];
+	}
+	case 0b0100011: {
+		static const FastOp st[8] = {FOP_SB, FOP_SH, FOP_SW, FOP_SD, FOP_SLOW, FOP_SLOW, FOP_SLOW, FOP_SLOW};
+		return st[f3 & 7];
+	}
+	case 0b0010011:
+		switch (f3) {
+		case 0b000: return FOP_ADDI;
+		case 0b010: return FOP_SLTI;
+		case 0b011: return FOP_SLTIU;
+		case 0b100: return FOP_XORI;
+		case 0b110: return FOP_ORI;
+		case 0b111: return FOP_ANDI;
+		case 0b001: return FOP_SLLI;
+		default:    return (d.funct7 & 0x7E) == 0b0100000 ? FOP_SRAI : FOP_SRLI;
+		}
+	case 0b0011011:
+		switch (f3) {
+		case 0b000: return FOP_ADDIW;
+		case 0b001: return FOP_SLLIW;
+		case 0b101: return d.funct7 == 0b0100000 ? FOP_SRAIW : FOP_SRLIW;
+		default:    return FOP_SLOW;
+		}
+	case 0b0110011:
+		switch (f3) {
+		case 0b000: return d.funct7 == 0b0100000 ? FOP_SUB : FOP_ADD;
+		case 0b001: return FOP_SLL;
+		case 0b010: return FOP_SLT;
+		case 0b011: return FOP_SLTU;
+		case 0b100: return FOP_XOR;
+		case 0b101: return d.funct7 == 0b0100000 ? FOP_SRA : FOP_SRL;
+		case 0b110: return FOP_OR;
+		default:    return FOP_AND;
+		}
+	case 0b0111011:
+		switch (f3) {
+		case 0b000: return d.funct7 == 0b0100000 ? FOP_SUBW : FOP_ADDW;
+		case 0b001: return FOP_SLLW;
+		case 0b101: return d.funct7 == 0b0100000 ? FOP_SRAW : FOP_SRLW;
+		default:    return FOP_SLOW;
+		}
+	case 0b0001111: return FOP_FENCE;
+	default: return FOP_SLOW;
+	}
 }

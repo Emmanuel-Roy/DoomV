@@ -277,6 +277,220 @@ bool DoomSystem::interrupt_may_be_due()
 	return true;
 }
 
+// Prototype switch, so one binary can run both loops: DOOMV_FAST=0 disables.
+static bool fast_enabled()
+{
+	static const bool on = [] { const char *e = std::getenv("DOOMV_FAST"); return !(e && e[0] == '0'); }();
+	return on;
+}
+
+// Exactly what n calls to step() do, faster.
+//
+// A run of "simple" steps -- an I/C/M instruction that is not a CSR or system
+// op, fetched from a cached code page, whose load or store (if any) hits the
+// data caches -- can change the x registers, pc and plain RAM, and nothing
+// else. In particular it cannot change anything the per-step checks depend on:
+// no CSR write, no privilege change, no TLB flush, no device register, so
+// EventGen, state_gen, the TLB generation and ExtensionsEpoch all stay put, and
+// so do the fetch and data cache keys, the counter enables and the interrupt
+// decision -- except for mtime, which the steps themselves advance. So the
+// checks are made once at the start of a run, mtime's deadline is turned into
+// a step count, and the bookkeeping every step does to things no simple step
+// can observe (the step count, minstret, mtime, mcycle) is added up and
+// applied once at the end of the run. The instruction history is still written
+// per step.
+//
+// Anything else -- a cache miss, a device access, a CSR, a trap -- ends the run
+// before that step has changed anything, and the step is taken by step(), the
+// definition of what a step does. Then a new run starts.
+// Prototype statistics: why runs end. Printed at -stopat with DOOMV_FASTSTATS.
+static uint64_t fs_fast, fs_slow_entry, fs_deadline, fs_fetch, fs_decode, fs_op[256], fs_ld, fs_st, fs_budget;
+static uint64_t fs_ext[64];
+void DoomSystem::run_fast(uint64_t n)
+{
+	Timer &timer = memory.get_timer();
+	auto &dcache = decoder.cache;
+	while (n > 0 && !debugger.halted) {
+		// Conditions under which no step can be simple. step() for all of them.
+		if (debugger.may_halt() || memory.tohost_addr || core.access_log || memory.store_log
+		    || decoder.cache_epoch != ExtensionsEpoch
+		    || !Extensions.C || !Extensions.XLEN64 || Extensions.ZICFILP
+		    || core.wait_request != RiscvCore::Wait::None
+		    || regs.state_gen + ExtensionsEpoch != counter_key
+		    || EventGen != irq_key || timer.get_mtime() >= irq_deadline) {
+			fs_slow_entry++;
+			step();
+			n--;
+			continue;
+		}
+		// How many steps before mtime reaches the interrupt deadline: step j
+		// of this run sees mtime + (tick_phase + j) / 2, which must stay below it.
+		uint64_t limit = n;
+		if (irq_deadline != ~0ull) {
+			const uint64_t d = irq_deadline - timer.get_mtime();
+			const uint64_t steps = (d > (~0ull >> 2)) ? ~0ull : 2 * d - tick_phase;
+			if (steps < limit) limit = steps;
+		}
+		const uint64_t key = regs.state_gen + mmu_tlb_generation() + ExtensionsEpoch;
+		regs.minstret_increment = counts_instret;
+
+		uint64_t pc = regs.get_pc();
+		uint64_t done = 0;
+		uint32_t last_insn = 0;
+		uint8_t last_len = 4;
+		uint64_t code_vpage = ~0ull;
+		const uint8_t *code = nullptr;
+		while (done < limit) {
+			// Fetch: the code page stays valid for the whole run.
+			const uint64_t vpage = pc >> 12;
+			const unsigned off = (unsigned)(pc & 0xFFF);
+			if (vpage != code_vpage) {
+				const FetchPage &e = fetch_cache[vpage & (FETCH_CACHE_SIZE - 1)];
+				if (!(e.vpage == vpage && e.key == key)) { fs_fetch++; break; }
+				code_vpage = vpage;
+				code = e.host;
+			}
+			// A compressed instruction in the last halfword of the page is
+			// fetched as the two bytes it is; only a 4-byte one there needs
+			// the next page, and so the ordinary step.
+			uint32_t raw;
+			if (off > 0xFFC) {
+				uint16_t h; std::memcpy(&h, code + off, 2);
+				raw = h;
+				if ((h & 3) == 3) {
+					// A 4-byte instruction across the page boundary: the two
+					// halfword fetches fetch16 would make, both from cached pages.
+					const FetchPage &n2 = fetch_cache[(vpage + 1) & (FETCH_CACHE_SIZE - 1)];
+					if (!(n2.vpage == vpage + 1 && n2.key == key)) { fs_fetch++; break; }
+					uint16_t h2; std::memcpy(&h2, n2.host, 2);
+					raw |= (uint32_t)h2 << 16;
+				}
+			} else {
+				std::memcpy(&raw, code + off, 4);
+			}
+			const bool comp = (raw & 3) != 3;
+			const uint32_t tag = comp ? (raw & 0xFFFF) : raw;
+			// Found as decode_and_dispatch finds it, by byte offset.
+			const Decoder::CacheEntry &ce = *reinterpret_cast<const Decoder::CacheEntry *>(
+				reinterpret_cast<const char *>(dcache.data()) + ((pc << 4) & ((uint64_t)Decoder::CACHE_MASK << 5)));
+			if (!(ce.addr == pc && ce.decoded.raw == tag)) { fs_decode++; break; }
+			const DecodedOp &d = ce.decoded;
+			const uint64_t len = d.length;
+			const uint64_t a = regs.read_x(d.rs1), b = regs.read_x(d.rs2);
+			const uint64_t imm = (uint64_t)d.imm;
+			uint64_t next = pc + len;
+			switch ((FastOp)d.fast_op) {
+			case FOP_SLOW: fs_ext[(int)d.ext & 63]++; fs_op[d.opcode]++; goto out;
+			case FOP_LUI:   regs.write_x(d.rd, imm); break;
+			case FOP_AUIPC: regs.write_x(d.rd, pc + imm); break;
+			case FOP_JAL:   regs.write_x(d.rd, next); next = pc + imm; break;
+			case FOP_JALR: { const uint64_t t = (a + imm) & ~1ull; regs.write_x(d.rd, next); next = t; break; }
+			case FOP_BEQ:  if (a == b) next = pc + imm; break;
+			case FOP_BNE:  if (a != b) next = pc + imm; break;
+			case FOP_BLT:  if ((int64_t)a < (int64_t)b) next = pc + imm; break;
+			case FOP_BGE:  if ((int64_t)a >= (int64_t)b) next = pc + imm; break;
+			case FOP_BLTU: if (a < b) next = pc + imm; break;
+			case FOP_BGEU: if (a >= b) next = pc + imm; break;
+			case FOP_LB: case FOP_LH: case FOP_LW: case FOP_LD:
+			case FOP_LBU: case FOP_LHU: case FOP_LWU: {
+				static const uint8_t w[] = {0,0,0,0,0,0,0,0,0,0,0, 1,2,4,8,1,2,4};
+				const unsigned size = w[d.fast_op];
+				const uint64_t addr = a + imm;
+				if (((addr + size - 1) >> 12) != (addr >> 12)) goto out;
+				const RiscvCore::DataPage &e = core.load_cache[(addr >> 12) & (RiscvCore::DATA_CACHE_SIZE - 1)];
+				if (!(e.vpage == (addr >> 12) && e.key == key)) { fs_ld++; goto out; }
+				uint64_t v = 0;
+				std::memcpy(&v, e.host + (addr & 0xFFF), size);
+				switch (d.fast_op) {
+				case FOP_LB: v = (uint64_t)(int64_t)(int8_t)v; break;
+				case FOP_LH: v = (uint64_t)(int64_t)(int16_t)v; break;
+				case FOP_LW: v = (uint64_t)(int64_t)(int32_t)v; break;
+				default: break;
+				}
+				regs.write_x(d.rd, v);
+				break;
+			}
+			case FOP_SB: case FOP_SH: case FOP_SW: case FOP_SD: {
+				const unsigned size = 1u << (d.fast_op - FOP_SB);
+				const uint64_t addr = a + imm;
+				if (((addr + size - 1) >> 12) != (addr >> 12)) goto out;
+				const RiscvCore::DataPage &e = core.store_cache[(addr >> 12) & (RiscvCore::DATA_CACHE_SIZE - 1)];
+				if (!(e.vpage == (addr >> 12) && e.key == key)) { fs_st++; goto out; }
+				std::memcpy(e.host + (addr & 0xFFF), &b, size);
+				if (e.backing != Memory::Backing::Ram) memory.framebuffer_stored(e.backing, size);
+				break;
+			}
+			case FOP_ADDI:  regs.write_x(d.rd, a + imm); break;
+			case FOP_SLTI:  regs.write_x(d.rd, (int64_t)a < d.imm); break;
+			case FOP_SLTIU: regs.write_x(d.rd, a < imm); break;
+			case FOP_XORI:  regs.write_x(d.rd, a ^ imm); break;
+			case FOP_ORI:   regs.write_x(d.rd, a | imm); break;
+			case FOP_ANDI:  regs.write_x(d.rd, a & imm); break;
+			case FOP_SLLI:  regs.write_x(d.rd, a << (d.imm & 0x3F)); break;
+			case FOP_SRLI:  regs.write_x(d.rd, a >> (d.imm & 0x3F)); break;
+			case FOP_SRAI:  regs.write_x(d.rd, (uint64_t)((int64_t)a >> (d.imm & 0x3F))); break;
+			case FOP_ADDIW: regs.write_x(d.rd, sext32((uint32_t)a + (uint32_t)d.imm)); break;
+			case FOP_SLLIW: regs.write_x(d.rd, sext32((uint32_t)a << (d.imm & 0x1F))); break;
+			case FOP_SRLIW: regs.write_x(d.rd, sext32((uint32_t)a >> (d.imm & 0x1F))); break;
+			case FOP_SRAIW: regs.write_x(d.rd, sext32((uint32_t)((int32_t)(uint32_t)a >> (d.imm & 0x1F)))); break;
+			case FOP_ADD:  regs.write_x(d.rd, a + b); break;
+			case FOP_SUB:  regs.write_x(d.rd, a - b); break;
+			case FOP_SLL:  regs.write_x(d.rd, a << (b & 0x3F)); break;
+			case FOP_SLT:  regs.write_x(d.rd, (int64_t)a < (int64_t)b); break;
+			case FOP_SLTU: regs.write_x(d.rd, a < b); break;
+			case FOP_XOR:  regs.write_x(d.rd, a ^ b); break;
+			case FOP_SRL:  regs.write_x(d.rd, a >> (b & 0x3F)); break;
+			case FOP_SRA:  regs.write_x(d.rd, (uint64_t)((int64_t)a >> (b & 0x3F))); break;
+			case FOP_OR:   regs.write_x(d.rd, a | b); break;
+			case FOP_AND:  regs.write_x(d.rd, a & b); break;
+			case FOP_ADDW: regs.write_x(d.rd, sext32((uint32_t)a + (uint32_t)b)); break;
+			case FOP_SUBW: regs.write_x(d.rd, sext32((uint32_t)a - (uint32_t)b)); break;
+			case FOP_SLLW: regs.write_x(d.rd, sext32((uint32_t)a << (b & 0x1F))); break;
+			case FOP_SRLW: regs.write_x(d.rd, sext32((uint32_t)a >> (b & 0x1F))); break;
+			case FOP_SRAW: regs.write_x(d.rd, sext32((uint32_t)((int32_t)(uint32_t)a >> (b & 0x1F)))); break;
+			case FOP_FENCE: break;
+			case FOP_MEXT:
+				// exec_32M reads pc from regs and sets it itself.
+				regs.set_pc(pc);
+				core.exec_32M(d, regs, memory);
+				next = regs.get_pc();
+				break;
+			}
+			regs.record_history(pc, tag);
+			pc = next;
+			last_insn = tag;
+			last_len = (uint8_t)len;
+			done++;
+		}
+	out:
+		regs.set_pc(pc);
+		fs_fast += done;
+		if (done == limit && limit < n) fs_deadline++;
+		if (done) {
+			// What the `done` steps' end_step and step_instructions would have
+			// done, one step at a time.
+			memory.step_instructions((uint32_t)done);
+			if (regs.minstret_increment) regs.csr_add(0xB02, done);
+			const uint64_t ticks = (tick_phase + done) / INSNS_PER_TICK;
+			tick_phase = (uint32_t)((tick_phase + done) % INSNS_PER_TICK);
+			if (ticks) {
+				if (counts_cycle) regs.csr_add(0xB00, ticks);
+				timer.tick((uint32_t)ticks);
+			}
+			step_committed = true;
+			step_decoded = true;
+			step_insn = last_insn;
+			step_insn_len = last_len;
+			n -= done;
+		}
+		// The step that ended the run, if it was not the budget.
+		if (done < limit && n > 0 && !debugger.halted) {
+			step();
+			n--;
+		}
+	}
+}
+
 void DoomSystem::step()
 {
 	const uint64_t before = memory.instruction_count();
@@ -794,6 +1008,32 @@ void DoomSystem::stop_at_limit()
 	console_drain();
 		debugger.dump_log(regs, memory, "crash.log");
 	std::cout << "stopped after instruction " << n << "; state in crash.log" << std::endl;
+	if (std::getenv("DOOMV_FASTSTATS")) {
+		std::printf("fast steps %llu (%.1f%%)\nslow at run entry (irq/state checks) %llu\nruns ended by irq deadline %llu\n"
+		            "fetch miss %llu\ndecode miss %llu\nload miss %llu\nstore miss %llu\n",
+			(unsigned long long)fs_fast, 100.0 * fs_fast / n, (unsigned long long)fs_slow_entry, (unsigned long long)fs_deadline,
+			(unsigned long long)fs_fetch, (unsigned long long)fs_decode, (unsigned long long)fs_ld, (unsigned long long)fs_st);
+		for (int i = 0; i < 64; i++) if (fs_ext[i]) std::printf("slow op ext %d: %llu\n", i, (unsigned long long)fs_ext[i]);
+		for (int i = 0; i < 128; i++) if (fs_op[i]) std::printf("slow op opcode 0x%02x: %llu\n", i, (unsigned long long)fs_op[i]);
+	}
+	// Prototype check: what crash.log leaves out, for comparing the two loops.
+	if (std::getenv("DOOMV_STATEDUMP")) {
+		uint64_t h = 1469598103934665603ull;
+		const uint8_t *ram = memory.ram_data();
+		for (uint64_t i = 0; i + 8 <= Memory::RAM_SPAN; i += 8) { uint64_t w; std::memcpy(&w, ram + i, 8); h = (h ^ w) * 1099511628211ull; }
+		uint64_t fh = 1469598103934665603ull;
+		const uint8_t *fbp = memory.framebuffer();
+		for (uint32_t i = 0; i < Memory::FB_SIZE; i++) fh = (fh ^ fbp[i]) * 1099511628211ull;
+		const uint8_t *lfbp = memory.linux_framebuffer();
+		for (uint64_t i = 0; i < Memory::LFB_SIZE; i++) fh = (fh ^ lfbp[i]) * 1099511628211ull;
+		std::ofstream f("statedump.log");
+		f << std::hex << "fb " << fh << " fb_gen " << memory.fb_generation() << " lfb_gen " << memory.lfb_generation()
+		  << " fb_writes " << memory.take_fb_write_count() << "\nminstret " << regs.read_csr(0xB02) << "\nmcycle " << regs.read_csr(0xB00)
+		  << "\nmtime " << memory.get_timer().get_mtime() << "\ntick_phase " << tick_phase
+		  << "\nmmio_tick " << memory.read32(Memory::MMIO_TICK) << "\nsteps " << n
+		  << "\npc " << regs.get_pc() << "\nram " << h << "\n";
+	}
+
 	run_finished = true;
 }
 
@@ -855,7 +1095,8 @@ void DoomSystem::cpu_loop()
 				uint64_t n = INPUT_PERIOD - (before & (INPUT_PERIOD - 1));
 				if (stop_at) n = std::min<uint64_t>(n, stop_at > before ? stop_at - before : 1);
 				n = std::min<uint64_t>(n, (uint64_t)budget);
-				for (uint64_t k = 0; k < n && !debugger.halted; k++) step();
+				if (fast_enabled()) run_fast(n);
+				else for (uint64_t k = 0; k < n && !debugger.halted; k++) step();
 				budget -= (int)n;
 			}
 			const uint64_t now = memory.instruction_count();

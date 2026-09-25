@@ -62,7 +62,7 @@ public:
 		// a cached store bumps the same way -- see Memory::framebuffer_stored.
 		Memory::Backing backing = Memory::Backing::Ram;
 	};
-	static constexpr unsigned DATA_CACHE_SIZE = 256;
+	static constexpr unsigned DATA_CACHE_SIZE = 4096;
 	DataPage load_cache[DATA_CACHE_SIZE];
 	DataPage store_cache[DATA_CACHE_SIZE];
 	void raise_virtual_instruction(Registers &regs, uint64_t tval) { enter_trap(regs, 22, tval); }

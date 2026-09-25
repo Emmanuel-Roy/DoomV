@@ -57,9 +57,12 @@ struct DecodedOp {
 	                // report the encoding that was refused; filled in centrally by
 	                // decode_and_dispatch so no per-extension decode has to remember to.
 	uint8_t length; // 2 or 4 bytes
-	bool word_op;   // true for the *W-suffixed RV64 forms (ADDIW, SLLW, MULW, ...) -- 32-bit op, sign-extend result to 64
-	bool op_64;     // true for the .D-suffixed RV64A forms (LR.D/SC.D/AMO*.D) -- selects 64-bit vs 32-bit memory width
-	bool fp_double; // true for F-extension instructions operating on double (D) instead of single (F) precision
+	bool word_op : 1;   // true for the *W-suffixed RV64 forms (ADDIW, SLLW, MULW, ...) -- 32-bit op, sign-extend result to 64
+	bool op_64 : 1;     // true for the .D-suffixed RV64A forms (LR.D/SC.D/AMO*.D) -- selects 64-bit vs 32-bit memory width
+	bool fp_double : 1; // true for F-extension instructions operating on double (D) instead of single (F) precision
+	// Prototype: the flat operation DoomSystem::run_fast executes this as, set
+	// when the decode is cached; 0 (FOP_SLOW) means "take the ordinary step".
+	uint8_t fast_op;
 };
 static_assert(sizeof(DecodedOp) == 24, "DecodedOp is sized to make a decode cache entry 32 bytes");
 
@@ -83,7 +86,24 @@ struct DispatchResult {
 	const DecodedOp *decoded;
 };
 
+// Prototype: the operations DoomSystem::run_fast runs itself.
+enum FastOp : uint8_t {
+	FOP_SLOW = 0,
+	FOP_LUI, FOP_AUIPC, FOP_JAL, FOP_JALR,
+	FOP_BEQ, FOP_BNE, FOP_BLT, FOP_BGE, FOP_BLTU, FOP_BGEU,
+	FOP_LB, FOP_LH, FOP_LW, FOP_LD, FOP_LBU, FOP_LHU, FOP_LWU,
+	FOP_SB, FOP_SH, FOP_SW, FOP_SD,
+	FOP_ADDI, FOP_SLTI, FOP_SLTIU, FOP_XORI, FOP_ORI, FOP_ANDI, FOP_SLLI, FOP_SRLI, FOP_SRAI,
+	FOP_ADDIW, FOP_SLLIW, FOP_SRLIW, FOP_SRAIW,
+	FOP_ADD, FOP_SUB, FOP_SLL, FOP_SLT, FOP_SLTU, FOP_XOR, FOP_SRL, FOP_SRA, FOP_OR, FOP_AND,
+	FOP_ADDW, FOP_SUBW, FOP_SLLW, FOP_SRLW, FOP_SRAW,
+	FOP_FENCE,  // also PAUSE: both only advance pc
+	FOP_MEXT,   // any M instruction: exec_32M, which neither traps nor touches memory
+};
+FastOp classify_fast(const DecodedOp &d);
+
 class Decoder {
+	friend class DoomSystem;
 public:
 	Decoder(RiscvCore &core, Registers &regs, Memory &mem);
 
