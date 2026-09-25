@@ -60,7 +60,7 @@ RiscvCore::RiscvCore() : reservation_valid(false), reservation_addr(0)
 {
 }
 
-void RiscvCore::exec_32A(const DecodedInstruction &instr, Registers &regs, Memory &mem)
+void RiscvCore::exec_32A(const DecodedOp &instr, Registers &regs, Memory &mem)
 {
 	uint64_t pc = regs.get_pc();
 	uint64_t addr = regs.read_x(instr.rs1);

@@ -49,7 +49,7 @@ DecodedInstruction Decoder::decode_zicbom(uint32_t raw_instr) const
 // block is the unit that gets checked.
 constexpr uint64_t CBOM_BLOCK_SIZE = 64;
 
-void RiscvCore::exec_ZICBOM(const DecodedInstruction &instr, Registers &regs, Memory &mem)
+void RiscvCore::exec_ZICBOM(const DecodedOp &instr, Registers &regs, Memory &mem)
 {
 	// Having no cache makes the *effect* of these instructions trivial, and
 	// that is what the original implementation modelled: retire, do nothing.

@@ -58,7 +58,7 @@ DecodedInstruction Decoder::decode_zba(uint32_t raw_instr) const
 	return instr;
 }
 
-void RiscvCore::exec_ZBA(const DecodedInstruction &instr, Registers &regs, Memory &mem)
+void RiscvCore::exec_ZBA(const DecodedOp &instr, Registers &regs, Memory &mem)
 {
 	(void)mem;
 	uint64_t pc = regs.get_pc();

@@ -28,7 +28,7 @@ DecodedInstruction Decoder::decode_zicond(uint32_t raw_instr) const
 	return instr;
 }
 
-void RiscvCore::exec_ZICOND(const DecodedInstruction &instr, Registers &regs, Memory &mem)
+void RiscvCore::exec_ZICOND(const DecodedOp &instr, Registers &regs, Memory &mem)
 {
 	(void)mem;
 	uint64_t pc = regs.get_pc();

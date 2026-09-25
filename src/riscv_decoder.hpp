@@ -2,7 +2,8 @@
 #include <cstdint>
 #include <vector>
 
-enum class Extension {
+// One byte, so that it packs with the register fields in DecodedOp below.
+enum class Extension : uint8_t {
 	I,
 	M,
 	A,
@@ -40,7 +41,11 @@ enum class Extension {
 	ILLEGAL,
 };
 
-struct DecodedInstruction {
+// What executing an instruction needs to know about it: everything a decode
+// produces except its name. This is what the decode cache holds and what every
+// exec_* function takes. 24 bytes, so that a cache entry -- this and the pc it
+// was decoded at -- is 32 and never straddles a cache line.
+struct DecodedOp {
 	Extension ext;
 	uint8_t opcode;
 	uint8_t rd, rs1, rs2;
@@ -55,6 +60,13 @@ struct DecodedInstruction {
 	bool word_op;   // true for the *W-suffixed RV64 forms (ADDIW, SLLW, MULW, ...) -- 32-bit op, sign-extend result to 64
 	bool op_64;     // true for the .D-suffixed RV64A forms (LR.D/SC.D/AMO*.D) -- selects 64-bit vs 32-bit memory width
 	bool fp_double; // true for F-extension instructions operating on double (D) instead of single (F) precision
+};
+static_assert(sizeof(DecodedOp) == 24, "DecodedOp is sized to make a decode cache entry 32 bytes");
+
+// A decode as the decoders produce it: the operation, and its name for the
+// dashboard. Only a fresh decode (Decoder::describe) is ever displayed, so the
+// name stays out of the decode cache, where it was a third of every entry.
+struct DecodedInstruction : DecodedOp {
 	const char *mnemonic = "???"; // e.g. "ADDI" -- static string, name only, no operands. Defaulted so a
 	                               // default-constructed DecodedInstruction (e.g. HistoryEntry's initial fill) is never a null pointer.
 };
@@ -68,7 +80,7 @@ struct DispatchResult {
 	// The decode, in the decoder's cache: valid until the next
 	// decode_and_dispatch. A pointer rather than a copy, because this is
 	// returned for every instruction.
-	const DecodedInstruction *decoded;
+	const DecodedOp *decoded;
 };
 
 class Decoder {
@@ -145,21 +157,38 @@ private:
 	// Hot loops (Doom's render/tic loop, memcpy-ish helpers, ...) execute
 	// the same handful of addresses millions of times, redoing identical
 	// classify()+decode() bitfield work every time. Direct-mapped cache
-	// keyed by (addr, raw_instr): the raw_instr tag means a stale entry
-	// from self-modified code just misses and re-decodes instead of
-	// silently executing wrong bytes -- no separate invalidation needed.
-	// raw_instr holds just the tagged bytes (16 bits for a compressed
-	// entry, 32 for a standard one).
+	// keyed by (addr, raw): the raw tag means a stale entry from
+	// self-modified code just misses and re-decodes instead of silently
+	// executing wrong bytes -- no separate invalidation needed. The tag is
+	// the decode's own `raw`, which holds just the tagged bytes (16 bits for
+	// a compressed entry, 32 for a standard one).
+	//
+	// An entry is 32 bytes, the pc and the DecodedOp, and an odd pc marks an
+	// empty one, since no instruction starts at an odd address. The extension
+	// set the decodes were made under is kept once for the whole cache
+	// (cache_epoch) rather than in every entry, and when the set changes -- a
+	// write to misa that actually changes it -- the cache is emptied. That is
+	// also what lets an entry say whether its instruction may execute without
+	// a flag of its own: one whose extension is disabled is cached with ext
+	// ILLEGAL, and stays right for exactly as long as the entry does.
+	//
+	// 2^19 entries, 16 MB, covering a megabyte of code. A Linux boot runs
+	// more distinct code than the 2^17 entries this used to have could hold:
+	// 300M steps of the BusyBox boot missed 2.06M times at 2^17 and 0.65M at
+	// 2^19, almost all of the difference an entry evicted by another pc.
+	// Consecutive instructions take consecutive slots, and only the slots a
+	// guest actually runs are ever touched, so DOOM pays nothing for the size.
 	struct CacheEntry {
-		bool valid = false;
-		uint64_t addr = 0;
-		uint32_t raw_instr = 0;
-		DecodedInstruction decoded{};
-		bool enabled = false;
-		uint32_t epoch = 0;   // ExtensionsEpoch the entry was decoded under
+		uint64_t addr = EMPTY;
+		DecodedOp decoded{};
 	};
-	static constexpr uint32_t CACHE_BITS = 17;
+	static constexpr uint64_t EMPTY = 1;
+	static_assert(sizeof(CacheEntry) == 32, "one decode cache entry, half a cache line");
+	static constexpr uint32_t CACHE_BITS = 19;
 	static constexpr uint32_t CACHE_SIZE = 1u << CACHE_BITS;
 	static constexpr uint32_t CACHE_MASK = CACHE_SIZE - 1;
 	std::vector<CacheEntry> cache;
+	uint32_t cache_epoch = ~0u;   // the ExtensionsEpoch the cache holds decodes for
+	// The extension set changed: empty the cache.
+	void sync_extensions();
 };

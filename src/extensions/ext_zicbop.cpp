@@ -42,7 +42,7 @@ DecodedInstruction Decoder::decode_zicbop(uint32_t raw_instr) const
 	return instr;
 }
 
-void RiscvCore::exec_ZICBOP(const DecodedInstruction &instr, Registers &regs, Memory &mem)
+void RiscvCore::exec_ZICBOP(const DecodedOp &instr, Registers &regs, Memory &mem)
 {
 	(void)mem;
 	regs.set_pc(regs.get_pc() + instr.length);

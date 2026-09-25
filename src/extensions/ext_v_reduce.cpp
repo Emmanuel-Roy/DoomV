@@ -13,7 +13,7 @@ using namespace vcommon;
 
 namespace vcommon {
 
-void exec_v_reduce(const DecodedInstruction &instr, Registers &regs)
+void exec_v_reduce(const DecodedOp &instr, Registers &regs)
 {
 	VType vt = decode_vtype(regs.get_vtype());
 	int sew = vt.sew;

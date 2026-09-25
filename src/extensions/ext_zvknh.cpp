@@ -87,7 +87,7 @@ inline uint64_t eg(const Registers &regs, int base, int sew, uint64_t g, int k)
 
 } // namespace
 
-void exec_zvknh(const DecodedInstruction &instr, Registers &regs)
+void exec_zvknh(const DecodedOp &instr, Registers &regs)
 {
 	const VType vt = decode_vtype(regs.get_vtype());
 	const int sew = vt.sew;

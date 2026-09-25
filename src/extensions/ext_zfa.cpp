@@ -167,7 +167,7 @@ DecodedInstruction Decoder::decode_zfa(uint32_t raw_instr) const
 	return instr;
 }
 
-void RiscvCore::exec_ZFA(const DecodedInstruction &instr, Registers &regs, Memory &mem)
+void RiscvCore::exec_ZFA(const DecodedOp &instr, Registers &regs, Memory &mem)
 {
 	(void)mem;
 	uint8_t extra_flags = 0;

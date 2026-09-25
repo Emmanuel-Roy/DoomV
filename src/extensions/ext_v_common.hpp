@@ -232,22 +232,22 @@ inline __int128 vxrm_round(__int128 v, int shift, uint8_t vxrm)
 // from instr.funct6 (via op_v_funct6 above)/instr.rs1/rs2/rd, matching the
 // project-wide "self-sufficient re-extraction, no shared prelude" decode
 // convention -- exec_V's job is purely routing, not field extraction.
-void exec_v_config(const DecodedInstruction &instr, Registers &regs);
+void exec_v_config(const DecodedOp &instr, Registers &regs);
 // Returns false if a page fault happened partway through (pc has already
 // been redirected into the trap handler by then -- the caller must not
 // then overwrite it by advancing pc normally).
-bool exec_v_ldst(const DecodedInstruction &instr, Registers &regs, Memory &mem, RiscvCore &core);
-void exec_v_int(const DecodedInstruction &instr, Registers &regs);
-void exec_zvbb(const DecodedInstruction &instr, Registers &regs);       // Zvbb, ext_zvbb.cpp
-void exec_zvbb_unary(const DecodedInstruction &instr, Registers &regs); // Zvbb's OPMVV funct6=0x12 group
-void exec_zvbc(const DecodedInstruction &instr, Registers &regs);
-void exec_zvkned(const DecodedInstruction &instr, Registers &regs);   // Zvkned/Zvkg, opcode 0x77
-void exec_zvknh(const DecodedInstruction &instr, Registers &regs);     // Zvknha/Zvknhb, ditto
-void exec_zvksm(const DecodedInstruction &instr, Registers &regs);     // Zvksed/Zvksh, ditto       // Zvbc, ext_zvbb.cpp
-void exec_v_muldiv(const DecodedInstruction &instr, Registers &regs);
-void exec_v_mask(const DecodedInstruction &instr, Registers &regs);
-void exec_v_perm(const DecodedInstruction &instr, Registers &regs);
-void exec_v_reduce(const DecodedInstruction &instr, Registers &regs);
-void exec_v_fp(const DecodedInstruction &instr, Registers &regs);
+bool exec_v_ldst(const DecodedOp &instr, Registers &regs, Memory &mem, RiscvCore &core);
+void exec_v_int(const DecodedOp &instr, Registers &regs);
+void exec_zvbb(const DecodedOp &instr, Registers &regs);       // Zvbb, ext_zvbb.cpp
+void exec_zvbb_unary(const DecodedOp &instr, Registers &regs); // Zvbb's OPMVV funct6=0x12 group
+void exec_zvbc(const DecodedOp &instr, Registers &regs);
+void exec_zvkned(const DecodedOp &instr, Registers &regs);   // Zvkned/Zvkg, opcode 0x77
+void exec_zvknh(const DecodedOp &instr, Registers &regs);     // Zvknha/Zvknhb, ditto
+void exec_zvksm(const DecodedOp &instr, Registers &regs);     // Zvksed/Zvksh, ditto       // Zvbc, ext_zvbb.cpp
+void exec_v_muldiv(const DecodedOp &instr, Registers &regs);
+void exec_v_mask(const DecodedOp &instr, Registers &regs);
+void exec_v_perm(const DecodedOp &instr, Registers &regs);
+void exec_v_reduce(const DecodedOp &instr, Registers &regs);
+void exec_v_fp(const DecodedOp &instr, Registers &regs);
 
 } // namespace vcommon

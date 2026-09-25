@@ -37,12 +37,15 @@ inlined into. It needs nothing installed and no special build.
 
 **`pgo.py`** builds `riscv_doom.exe` with profile-guided optimization: an
 instrumented build, training on the two workloads, then the optimized build.
-`make` stays the plain build, because this one runs the emulator in the middle
-and takes a few minutes.
+Under Clang it keeps the profile as `build/pgo/doomv.profdata`, and the
+Makefile uses it from then on, so every `make` is the PGO build; training is
+the only slow part, and it happens here rather than in `make`.
+`scripts/build.py` runs it the first time there is a guest to train on.
 
 ```sh
-python performance/pgo.py            # riscv_doom.exe, PGO
+python performance/pgo.py            # train, keep the profile, build riscv_doom.exe
 python performance/pgo.py --bench    # ...and record it against the baseline
+make PROFILE=                        # a build without the profile
 ```
 
 `build/perf-baseline/` holds the emulator from before this work (`eaa9628`),
@@ -417,6 +420,14 @@ replace a mask. See the per-page pre-decode entry below for what happened the
 last time that array's layout looked improvable.
 
 ## What is left
+
+[RESEARCH.md](RESEARCH.md) has the next round. Three changes from it have
+landed -- both framebuffers through the data caches, a decode cache with room
+for a kernel, and PGO as the default build -- and a fast-path loop, still a
+patch, takes the result to 2.63x on doom, 2.46x on linux and 2.98x on a
+workload that draws on the framebuffer console, with identical crash.logs. It
+also has the measurements behind not splitting fetch/decode and execution
+across two threads.
 
 The candidates the histograms point at now that fetch, loads and stores are
 cached. Nothing here is measured except where it says so.

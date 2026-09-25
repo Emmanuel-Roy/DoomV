@@ -24,7 +24,7 @@ DecodedInstruction Decoder::decode_zcmop(uint16_t raw16) const
 	return instr;
 }
 
-void RiscvCore::exec_ZCMOP(const DecodedInstruction &instr, Registers &regs, Memory &mem)
+void RiscvCore::exec_ZCMOP(const DecodedOp &instr, Registers &regs, Memory &mem)
 {
 	(void)mem;
 	regs.set_pc(regs.get_pc() + instr.length);

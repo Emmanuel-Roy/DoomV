@@ -33,7 +33,7 @@
 #include "memory.hpp"
 #include <cstdint>
 
-void RiscvCore::exec_SVINVAL(const DecodedInstruction &instr, Registers &regs, Memory &mem)
+void RiscvCore::exec_SVINVAL(const DecodedOp &instr, Registers &regs, Memory &mem)
 {
 	(void)mem;
 

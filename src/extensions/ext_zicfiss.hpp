@@ -76,17 +76,17 @@ inline bool denial_is_virtual(Registers &regs)
 // Anything else in those encodings stays an ordinary may-be-operation, and
 // so does all of it when the extension is off -- which is the property that
 // lets a shadow-stack binary run on a hart without shadow stacks.
-inline bool is_sspush(const DecodedInstruction &i)
+inline bool is_sspush(const DecodedOp &i)
 {
 	return i.funct7 == 0x67 && i.rd == 0 && i.rs1 == 0;
 }
 
-inline bool is_sspopchk(const DecodedInstruction &i)
+inline bool is_sspopchk(const DecodedOp &i)
 {
 	return i.funct7 == 0x66 && i.rs2 == 28 && i.rd == 0 && i.rs1 != 0;
 }
 
-inline bool is_ssrdp(const DecodedInstruction &i)
+inline bool is_ssrdp(const DecodedOp &i)
 {
 	return i.funct7 == 0x66 && i.rs2 == 28 && i.rd != 0 && i.rs1 == 0;
 }

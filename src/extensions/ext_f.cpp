@@ -117,7 +117,7 @@ DecodedInstruction Decoder::decode_f(uint32_t raw_instr) const
 	return instr;
 }
 
-void RiscvCore::exec_F(const DecodedInstruction &instr, Registers &regs, Memory &mem)
+void RiscvCore::exec_F(const DecodedOp &instr, Registers &regs, Memory &mem)
 {
 	uint64_t pc = regs.get_pc();
 

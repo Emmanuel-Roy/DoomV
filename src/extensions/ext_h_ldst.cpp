@@ -75,7 +75,7 @@ DecodedInstruction Decoder::decode_h_ldst(uint32_t raw_instr) const
 	return instr;
 }
 
-void RiscvCore::exec_H(const DecodedInstruction &instr, Registers &regs, Memory &mem)
+void RiscvCore::exec_H(const DecodedOp &instr, Registers &regs, Memory &mem)
 {
 	// The fences have nothing to invalidate on a machine that re-walks the
 	// page tables for every access.

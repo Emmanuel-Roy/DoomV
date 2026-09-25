@@ -161,7 +161,7 @@ DecodedInstruction Decoder::decode_i(uint32_t raw_instr, Extension ext) const
 	return instr;
 }
 
-void RiscvCore::exec_32I(const DecodedInstruction &instr, Registers &regs, Memory &mem)
+void RiscvCore::exec_32I(const DecodedOp &instr, Registers &regs, Memory &mem)
 {
 	uint64_t pc = regs.get_pc();
 	uint64_t next_pc = pc + instr.length;

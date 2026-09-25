@@ -507,7 +507,7 @@ uint64_t gclassify(double v, int sew)
 
 namespace vcommon {
 
-void exec_v_fp(const DecodedInstruction &instr, Registers &regs)
+void exec_v_fp(const DecodedOp &instr, Registers &regs)
 {
 	VType vt = decode_vtype(regs.get_vtype());
 	int sew = vt.sew;

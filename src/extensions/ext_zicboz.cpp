@@ -49,7 +49,7 @@ DecodedInstruction Decoder::decode_zicboz(uint32_t raw_instr) const
 	return instr;
 }
 
-void RiscvCore::exec_ZICBOZ(const DecodedInstruction &instr, Registers &regs, Memory &mem)
+void RiscvCore::exec_ZICBOZ(const DecodedOp &instr, Registers &regs, Memory &mem)
 {
 	// cbo.zero answers to CBZE in the same envcfg chain the other cache-
 	// block instructions use, and for the same reason: this one actually

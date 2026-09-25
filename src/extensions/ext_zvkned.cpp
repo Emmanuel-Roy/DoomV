@@ -229,7 +229,7 @@ U128 ghash_mul(const U128 &s_in, const U128 &h_in)
 
 } // namespace
 
-void exec_zvkned(const DecodedInstruction &instr, Registers &regs)
+void exec_zvkned(const DecodedOp &instr, Registers &regs)
 {
 	VType vt = decode_vtype(regs.get_vtype());
 	// Every instruction here is defined for SEW=32 only: the element group

@@ -41,7 +41,7 @@ DecodedInstruction Decoder::decode_zimop(uint32_t raw_instr) const
 	return instr;
 }
 
-void RiscvCore::exec_ZIMOP(const DecodedInstruction &instr, Registers &regs, Memory &mem)
+void RiscvCore::exec_ZIMOP(const DecodedOp &instr, Registers &regs, Memory &mem)
 {
 	// Zicfiss claims three of these encodings, but only while it is
 	// enabled for the current mode. When it is not -- because the hart
