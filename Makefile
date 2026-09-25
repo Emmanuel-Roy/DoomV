@@ -51,9 +51,12 @@ endif
 #
 # A profile is only advice about which branches are hot. A stale one makes the
 # code less well arranged, never different in what it does, so edits after
-# training cost speed and nothing else; Clang's per-file warnings about stale
-# or missing data are silenced rather than repeated for seventy files, and
-# re-running pgo.py refreshes the profile. `make PROFILE=` builds without one.
+# training cost speed and nothing else -- but they can cost a lot of it: a
+# profile three commits old kept 1.18-1.20x of a fresh one's 1.37-1.41x. So
+# Clang's per-file warnings are silenced rather than repeated for seventy
+# files, and instead the build says once, when the sources differ from the ones
+# the profile was trained on, which files changed (pgo.py --stale).
+# `make PROFILE=` builds without a profile.
 #
 # Clang only. GCC keeps a .gcda per object, tied to the path it was built for,
 # so a GCC profile is used by pgo.py's own build and not reused here.
@@ -66,6 +69,9 @@ ifneq ($(findstring clang,$(CXX)),)
     endif
   endif
 endif
+# pgo.py --stale, run only when the emulator is being linked with the profile.
+PYTHON ?= $(if $(shell command -v python 2>/dev/null),python,python3)
+PGO_STALE = $(if $(PGO),$(shell $(PYTHON) performance/pgo.py --stale 2>/dev/null))
 
 # -frounding-math is for GCC; Clang accepts and ignores it, which is harmless
 # here because nothing depends on the compiler preserving the FP environment
@@ -130,6 +136,7 @@ $(SOFTFLOAT_OBJDIR)/%.o: $(SOFTFLOAT_DIR)/%.c
 # relinked, so nothing depended on this being right.
 HEADERS = $(wildcard src/*.hpp src/extensions/*.hpp src/include/*.h)
 $(OUT): $(SOFTFLOAT_OBJS) $(SRCS) $(HEADERS) $(PGO_DEP)
+	$(if $(PGO_STALE),@echo note: $(PGO_STALE))
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -o $(OUT) $(SRCS) $(SOFTFLOAT_OBJS) $(LIBS)
 
 # Portable file deletion. GNU Make's built-in $(RM) is hardcoded to `rm -f`,

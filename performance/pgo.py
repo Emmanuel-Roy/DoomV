@@ -5,8 +5,9 @@ GCC optimizes better when it knows which branches the interpreter takes and
 which calls are hot, and a profile of real runs tells it. Three steps:
 
   1. an instrumented build, into build/pgo/gen/
-  2. training: the same two workloads bench.py measures, run to the same
-     step counts, which write .gcda profiles into build/pgo/data/
+  2. training: the two workloads bench.py measures, which write profiles
+     into build/pgo/data/ -- DOOM to 300M steps rather than bench.py's 1000M
+     (see TRAIN_STEPS)
   3. the final build with -fprofile-use, copied to riscv_doom.exe
 
 Both builds go to the same path under build/pgo/gen/, because GCC 11 and later
@@ -36,6 +37,16 @@ next `make` replaces it with a plain one.
 
   python performance/pgo.py              # train, keep the profile, build riscv_doom.exe
   python performance/pgo.py --bench      # ...then record it against the baseline
+  python performance/pgo.py --stale      # one line if the sources changed since training
+
+A profile goes stale as the code it was trained on changes: Clang matches it
+to functions by a hash of their control flow, and a function whose hash no
+longer matches builds as though there were no profile. How much that costs
+depends on what changed -- a profile from three commits back, across the
+framebuffer and decode-cache changes, kept 1.18-1.20x of a fresh one's
+1.37-1.41x -- so pgo.py records what it trained on, per file, and --stale
+compares. The Makefile prints that line when it builds with a stale profile,
+and scripts/build.py retrains.
 
 Two things this toolchain (MinGW GCC 8.1) needs, found the hard way:
   * The profiling runtime cannot write to a Git Bash path like /z/Code/...,
@@ -46,6 +57,8 @@ Two things this toolchain (MinGW GCC 8.1) needs, found the hard way:
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 import os
 import shutil
 import subprocess
@@ -62,6 +75,18 @@ GEN = PGO / "gen"
 DATA = PGO / "data"
 # The Clang profile `make` picks up -- the Makefile's PROFILE.
 PROFILE = PGO / "doomv.profdata"
+# What PROFILE was trained on: a hash of every source file make compiles.
+TRAINED_ON = PGO / "doomv.profdata.sources"
+
+# Training runs DOOM to 300M steps where bench.py measures 1000M. The profile
+# is no worse for it -- on a Linux host, doom and linux built with it measured
+# 1.32x and 1.40x over ThinLTO alone against 1.33x and 1.41x -- and training
+# takes half as long, which matters because a profile has to be retrained as
+# the code changes. What the profile captures is the interpreter's own shape,
+# not the guest's: a DOOM-only profile gives the linux workload 1.34x, a
+# linux-only one gives doom 1.30x, and a workload no profile was trained on,
+# fbcon, gets the same 1.37x as the ones that were.
+TRAIN_STEPS = {"doom": 300_000_000}
 
 # The Makefile's flags without CXXFLAGS' optimization choices changed -- the
 # profile flags are added to them, nothing is taken away.
@@ -95,6 +120,42 @@ def missing_inputs(args: list[str]) -> list[str]:
         if value and not Path(value).exists():
             missing.append(value)
     return missing
+
+
+def source_hashes() -> dict[str, str]:
+    """A hash of each source file make compiles, by path.
+
+    Line endings are normalised, so that the same sources checked out with
+    core.autocrlf on or off have the same hashes.
+    """
+    out = {}
+    for pattern in ("src/*.cpp", "src/*.hpp", "src/extensions/*.cpp", "src/extensions/*.hpp"):
+        for f in ROOT.glob(pattern):
+            out[f.relative_to(ROOT).as_posix()] = hashlib.sha256(f.read_bytes().replace(b"\r\n", b"\n")).hexdigest()
+    return dict(sorted(out.items()))
+
+
+def stale_note() -> str:
+    """One line saying the profile is stale and why, or nothing.
+
+    Nothing when there is no profile, since make then builds without one, or
+    when the sources are the ones it was trained on.
+    """
+    if not PROFILE.exists():
+        return ""
+    try:
+        trained = json.loads(TRAINED_ON.read_text())
+    except (OSError, ValueError):
+        return ("the PGO profile does not record what it was trained on, so it may be stale -- "
+                "python performance/pgo.py retrains it")
+    now = source_hashes()
+    changed = sorted(f for f in set(trained) | set(now) if trained.get(f) != now.get(f))
+    if not changed:
+        return ""
+    named = ", ".join(changed[:3]) + (f" and {len(changed) - 3} more" if len(changed) > 3 else "")
+    return (f"the PGO profile predates changes to {len(changed)} source file{'s' if len(changed) != 1 else ''}, "
+            f"{named} -- what changed builds without profile data, "
+            f"python performance/pgo.py retrains it")
 
 
 def windows_path(p: Path) -> str:
@@ -155,10 +216,19 @@ def main():
     ap.add_argument("--baseline", type=Path, default=ROOT / "build" / "perf-baseline" / "riscv_doom.exe")
     ap.add_argument("--cxx", help="build with this C++ compiler instead of the Makefile's")
     ap.add_argument("--cc", help="...and this C compiler, for SoftFloat (defaults beside --cxx's gcc)")
+    ap.add_argument("--stale", action="store_true",
+                    help="print one line if the kept profile predates the sources, nothing otherwise, and exit")
     ap.add_argument("--lto", action="store_true",
                     help="add -flto to GCC's builds and the instrumented one (Clang's final build has ThinLTO "
                          "regardless); needs a compiler whose LTO works: not GCC 8.1")
     args = ap.parse_args()
+    if args.stale:
+        # For the Makefile, which runs this on every build that uses the
+        # profile: quick, and quiet unless there is something to say.
+        note = stale_note()
+        if note:
+            print(note)
+        return 0
     # An explicit --cxx wins; otherwise resolve what make would use, so the
     # profile flow below matches the compiler that actually does the building.
     explicit_cxx = args.cxx is not None
@@ -180,6 +250,9 @@ def main():
     shutil.rmtree(DATA, ignore_errors=True)
     GEN.mkdir(parents=True)
     DATA.mkdir(parents=True)
+    # Taken before the instrumented build, so it describes the sources that
+    # build was made from even if they are edited while training runs.
+    sources = source_hashes()
     # Both stages build to this one path: GCC 11 and later name each profile
     # after the output it was compiled for, so two different paths means the
     # final build looks for profiles that were never written.
@@ -223,7 +296,7 @@ def main():
             print(f"    {name}: skipped, not built: {', '.join(missing)}", flush=True)
             continue
         trained += 1
-        cmd = [str(staged)] + spec["args"]() + [f"-stopat={spec['steps']}"]
+        cmd = [str(staged)] + spec["args"]() + [f"-stopat={TRAIN_STEPS.get(name, spec['steps'])}"]
         with (PGO / f"train-{name}.log").open("wb") as f:
             r = subprocess.run(cmd, cwd=GEN, env=env, stdin=subprocess.DEVNULL, stdout=f, stderr=subprocess.STDOUT)
         print(f"    {name}: exit {r.returncode}", flush=True)
@@ -233,6 +306,7 @@ def main():
         raise RuntimeError("no workload to train on: build a guest first (scripts/build.py doom)")
     if clang:
         shutil.copy2(merge_profraw(args.cxx, DATA), PROFILE)
+        TRAINED_ON.write_text(json.dumps(sources, indent=1) + "\n")
     else:
         profiles = sorted(DATA.rglob("*.gcda"))
         if not profiles:

@@ -45,8 +45,14 @@ the only slow part, and it happens here rather than in `make`.
 ```sh
 python performance/pgo.py            # train, keep the profile, build riscv_doom.exe
 python performance/pgo.py --bench    # ...and record it against the baseline
+python performance/pgo.py --stale    # one line if the sources changed since training
 make PROFILE=                        # a build without the profile
 ```
+
+A profile goes stale as the code changes, and a stale one gives up a good part
+of what PGO is worth, so `make` says when it links with one and
+`scripts/build.py` retrains it -- see [What else a profile can be made to
+do](#what-else-a-profile-can-be-made-to-do).
 
 `build/perf-baseline/` holds the emulator from before this work (`eaa9628`),
 which every comparison below ran against. `build/` is not committed, so to
@@ -277,6 +283,77 @@ python performance/pgo.py --lto --cxx $TC/clang++.exe --cc $TC/clang.exe
 Clang built these sources without a single error or new warning on the first
 attempt, which is some evidence the code is not leaning on GCC-specific
 behaviour anywhere.
+
+### What else a profile can be made to do
+
+With PGO the default, the next question was whether the profile could be put to
+better use. Everything below was measured on a Linux host with Clang 18, each
+variant against the default profile *in the same session* (the host's absolute
+speed drifted between sessions), in interleaved runs of 3-5, where noise is about
+±3%. The default itself -- IR instrumentation, trained on doom and linux, with
+ThinLTO -- measured 1.32-1.37x over ThinLTO alone on doom, 1.38-1.41x on linux,
+1.36-1.37x on fbcon and 1.29-1.30x on a 500M-step doom `-input` session. fbcon
+is the framebuffer-console workload from [RESEARCH.md](RESEARCH.md); it and the
+`-input` session were never trained on.
+
+| variant, against the default profile | doom | linux | fbcon | doom -input |
+|---|---:|---:|---:|---:|
+| doom trained to 300M steps, not 1000M | 0.99 | 1.00 | | |
+| trained on doom only | 0.99 | 0.95 | | |
+| trained on linux only | 0.98 | 0.97 | | |
+| fbcon added to the training | 0.98 | 0.97 | 0.98 | 1.02 |
+| frontend instrumentation (`-fprofile-instr-generate`) | 1.03-1.04 | 1.02-1.04 | 1.00 | 1.04 |
+| ...the same, with the fast-loop patch applied | 0.89 | 0.99 | | |
+| ExtTSP block layout (`-enable-ext-tsp-block-placement`) | 1.01 | 1.03 | 0.98 | 1.01 |
+| hot/cold splitting (`-hot-cold-split`) | 1.00 | 1.02 | | |
+| `-mllvm -pgso=false` | 1.01 | 0.98 | | |
+| `-O2` instead of `-O3` | **0.96** | **0.96** | | |
+| context-sensitive PGO (`-fcs-profile-generate`) | **0.85** | **0.84** | **0.85** | **0.87** |
+| a profile three commits old | **0.87** | **0.85** | | |
+
+Crash.log was the same as the plain build's for every one. What it says:
+
+* **What is trained on hardly matters.** A doom-only profile runs linux within 5%
+  of a linux-trained one and the other way round, and a workload no profile saw
+  -- fbcon -- gains as much as the trained ones. The profile describes the
+  interpreter's branches, not the guest's program. So training now runs doom to
+  300M steps instead of 1000M: the same profile, in half the training time
+  (19 s instead of 37 s here).
+* **Staleness is what matters.** A profile trained three commits back -- before
+  the framebuffer and decode-cache changes -- kept 1.18-1.20x over ThinLTO where
+  a fresh one had 1.37-1.41x: it lost half of what PGO is worth. Clang matches a
+  profile to each function by a hash of its control flow, and a function that
+  changed builds as though it had none, silently, since the Makefile hides
+  Clang's per-file warnings. So `pgo.py` now records a hash of every source file
+  it trained on (`build/pgo/doomv.profdata.sources`), `pgo.py --stale` compares,
+  the Makefile prints one line naming the changed files when it links with a
+  stale profile, and `scripts/build.py` retrains. The check is by content, so
+  touching a file, or coming back to the sources it was trained on, does not
+  trip it; it takes about 40 ms.
+* **Context-sensitive PGO is 15% slower**, on every workload. It is the one
+  variant that is clearly worse, and not because it made the code bigger: the
+  run loop, one function with everything inlined into it, comes out at 52.5 KB
+  against 51.1 KB, and the binary as a whole is smaller. Where the time goes
+  was not established; it is not worth pursuing at -15%.
+* **Frontend instrumentation is not a consistent win.** It is 3-4% ahead on
+  today's loop and 11% behind on doom with the fast-loop patch, so the default
+  stays IR instrumentation, which is also what LLVM recommends.
+* **Layout and splitting passes are noise.** ExtTSP layout and hot/cold
+  splitting move nothing outside ±3%, and `-O2` is 4% slower.
+* **With the fast-loop patch, PGO is worth much less**: 1.07x on doom and 1.17x on
+  linux over ThinLTO, against 1.37-1.41x today, and a stale profile keeps about
+  half of that. Most of what PGO does for today's loop is arrange its rarely-taken
+  per-step checks, and the fast loop takes those checks out of the loop.
+
+Two things were not measured. Training runs headless, so the window, dashboard
+and display code never runs under it, and Clang treats code with no counts as
+cold and optimizes it for size: `Gui::poll_input` is 1 KB in the PGO build and
+3.7 KB without it, and `dashboard_loop` and `display_loop` shrink too. That
+cannot slow the emulation, which is a thread of its own, and whether it slows
+the window was not measured -- a windowed training run would settle it. And
+the post-link and sampling tools, BOLT and AutoFDO, do not apply here: BOLT
+rewrites ELF binaries only, not the Windows executable, and AutoFDO needs
+hardware branch sampling this project has no way to collect on Windows.
 
 ### The workloads
 

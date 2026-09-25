@@ -393,9 +393,12 @@ Under Clang it is also profile-guided, once there is a profile. PGO on top of
 ThinLTO is the fastest build there is, so it is the one that gets run:
 `scripts/build.py` trains a profile the first time it has a guest to train on
 (a few minutes -- it runs the benchmark workloads), keeps it as
-`build/pgo/doomv.profdata`, and from then on every `make` uses it. Training
-again is one command, worth running after changing the hot path; a profile
-that has gone stale costs speed, never correctness:
+`build/pgo/doomv.profdata`, and from then on every `make` uses it. A profile
+goes stale as the sources change, which costs speed, never correctness -- but
+it can be a lot of speed: one from before three commits that reworked the hot
+path had lost half of what PGO is worth -- so `make` prints a line naming the
+files that changed when it builds with a stale one, and `scripts/build.py`
+retrains it. By hand:
 
 ```
 python performance/pgo.py            # (re)train, then build with the new profile
