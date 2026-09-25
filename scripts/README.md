@@ -10,14 +10,18 @@ powershell -ExecutionPolicy Bypass -File scripts/install_dependencies.ps1
 # Ubuntu WSL packages, the RISC-V newlib compiler, and optional Sail/ACT tools
 powershell -ExecutionPolicy Bypass -File scripts/toolchain.ps1
 
-# Build only DoomV; build Linux; or build both. `all` finishes by rebuilding
-# the emulator with PGO and ThinLTO (~1.4x over plain `make`), since by then
-# the guests it trains on exist. --no-pgo stops at the plain build.
+# Build only DoomV; build Linux; or build both. The first build that has a
+# guest to train on also trains a PGO profile (a few minutes), which is kept
+# in build/pgo/ and which every later `make` then builds with -- PGO on top of
+# ThinLTO is ~1.4x over an unprofiled build. --no-pgo stops at the plain one.
 python scripts/build.py doom
 python scripts/build.py linux
 python scripts/build.py all
 python scripts/build.py all --no-pgo
-make fast                          # the optimized emulator alone, guests already built
+
+# Retrain the profile after changing the hot path; stale costs speed, never
+# correctness. `make PROFILE=` builds without one.
+python performance/pgo.py
 
 # Boot a guest. Linux --smoke exits after BusyBox proves userspace runs;
 # Ubuntu --login logs in through the emulated keyboard and exits.

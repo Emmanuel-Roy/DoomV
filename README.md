@@ -786,11 +786,11 @@ Three things that go wrong first:
   count, so a program that measures its own throughput will report a number
   about the emulated machine, not your CPU.
 
-Worked example, and a reasonable test of all of the above: llama.cpp
-cross-compiles this way with `-DGGML_NATIVE=OFF -DLLAMA_CURL=OFF
--DGGML_OPENMP=OFF -DBUILD_SHARED_LIBS=OFF`, and its `llama` binary runs a
-GGUF model from the share inside the guest — a 0.8B Qwen at IQ2_XXS loads and
-generates, slowly, on `--ram 4G`.
+Worked example, and a reasonable test of all of the above:
+[tools/llama/](tools/llama/README.md) cross-compiles llama.cpp and runs a GGUF
+model from the share inside the guest — `bash tools/llama/build.sh` for the
+binary, and a script that boots, runs the model and powers off unattended. A
+0.8B Qwen at IQ2_XXS generates on `--ram 4G`, slowly.
 
 <a id="the-display"></a>
 ### The display
