@@ -41,23 +41,22 @@ quantisation than IQ2_XXS will talk more sense.
 ## Run it unattended
 
 ```sh
-cp ubuntu.img build/llama-ubuntu.img
-
-./riscv_doom.exe -ng -ram=4G \
-  -opensbi=build/linux/fw_jump.elf -kernel=build/linux/Image \
-  -dtb=build/linux/ubuntu.dtb -disk=build/llama-ubuntu.img \
-  -drives= -shared=shared \
-  -expect="doomv login:" -input=tools/llama/run-qwen.script \
-  | tee build/llama-run.log
+bash tools/llama/run.sh shared/Qwen3.5-0.8B-UD-IQ2_XXS.gguf
+bash tools/llama/run.sh shared/model.gguf "Once upon a time" 32
+RAM=8G bash tools/llama/run.sh shared/bigger.gguf
 ```
 
-`run-qwen.script` logs in, mounts the share, copies the binary in, runs the
-model and powers the machine off, so the emulator exits on its own. Edit the
-model name and the prompt on its `completion` line.
+Takes any GGUF, an optional prompt and an optional token count; `RAM=` and
+`IMAGE=` override the guest size and the disk image. It boots Ubuntu, mounts
+the share, copies the binary in, runs the model, powers the machine off -- so
+the run ends by itself -- then prints what the model generated, leaving the full
+console log in `build/llama/`.
 
-On a copy of the image, because a run writes to the disk and the copy is what
-keeps the next run comparable -- see the determinism note in
-[scripts/README.md](../../scripts/README.md).
+It generates the `-input` script rather than keeping one per model, because the
+model name and the prompt are text typed into the guest's shell and so are part
+of that script. It also works on a *copy* of the image: a boot writes to the
+disk, and a throwaway run should not be what the real image has been through --
+see the determinism note in [scripts/README.md](../../scripts/README.md).
 
 ## Run it by hand
 
