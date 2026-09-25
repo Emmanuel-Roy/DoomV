@@ -14,10 +14,11 @@ name each profile after the *output* they were compiled for; building the two
 stages to different paths leaves the final build looking for profiles that do
 not exist (it says so, per file, as -Wmissing-profile).
 
---cxx/--cc build with another compiler, and --lto adds -flto. Neither is the
-default: the installed GCC 8.1 cannot link this project with -flto at all, and
-a newer GCC is not assumed to be present. See performance/README.md for what
-each combination measured.
+Clang and LTO are both the default, because that is the fastest combination
+measured and the one the recorded numbers use -- 1.358x on an Ubuntu boot over
+the plain build. --cxx/--cc pick another compiler and --no-lto turns LTO off,
+which is what the installed GCC 8.1 needs: its LTO plugin cannot link this
+project at all. See performance/README.md for what each combination measured.
 
 It changes how fast the code runs, not what it does -- the sources are the
 same, and bench.py's crash.log comparison is the check. `make` stays the plain
@@ -128,7 +129,11 @@ def main():
     ap.add_argument("--baseline", type=Path, default=ROOT / "build" / "perf-baseline" / "riscv_doom.exe")
     ap.add_argument("--cxx", help="build with this C++ compiler instead of the Makefile's")
     ap.add_argument("--cc", help="...and this C compiler, for SoftFloat (defaults beside --cxx's gcc)")
-    ap.add_argument("--lto", action="store_true", help="add -flto (needs a compiler whose LTO works: not GCC 8.1)")
+    # LTO on by default: with Clang it works, is measured faster in every
+    # configuration tried, and is what the recorded numbers use. --no-lto is
+    # there for GCC, whose 8.1 cannot link this project with -flto at all.
+    ap.add_argument("--lto", action=argparse.BooleanOptionalAction, default=True,
+                    help="link-time optimization (default: on; --no-lto for GCC 8.1, which cannot)")
     args = ap.parse_args()
     # An explicit --cxx wins; otherwise resolve what make would use, so the
     # profile flow below matches the compiler that actually does the building.

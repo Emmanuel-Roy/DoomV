@@ -387,16 +387,25 @@ make clean
 ```
 
 Under Clang the default build uses ThinLTO; under GCC it does not, because
-GCC 8.1 cannot link this project with LTO at all. For the fastest binary, add
-a profile — this runs both benchmark workloads to train on, so it takes a few
-minutes:
+GCC 8.1 cannot link this project with LTO at all.
+
+**The fastest build is Clang with PGO and ThinLTO**, and it is what
+`scripts/build.py all` leaves you with — worth ~1.4x over plain `make` on both
+an Ubuntu boot and DOOM, for the same behaviour. It is a separate step rather
+than what `make` does, because training means *running* both benchmark
+workloads, so it needs the guests built; plain `make` has to work on a checkout
+with nothing in `build/` at all, and is also what the test gate compiles.
 
 ```
-python performance/pgo.py            # PGO, with the compiler make would use
-python performance/pgo.py --lto      # ...and LTO
+python scripts/build.py all       # guests, then the optimized emulator
+python scripts/build.py all --no-pgo
+make fast                         # just the optimized emulator, guests already built
+python performance/pgo.py --no-lto    # for GCC, which cannot link with LTO
 ```
 
-It overwrites `riscv_doom.exe`; a plain `make` puts the ordinary build back.
+`make fast` and `pgo.py` overwrite `riscv_doom.exe`; a plain `make` puts the
+ordinary build back. Both default to Clang, PGO and ThinLTO now, so there is
+nothing to pass for the fast path.
 
 `DOOM1.WAD` (the shareware IWAD) is the only WAD checked into this repo —
 it's free to redistribute. Point it at your own `DOOM.WAD`/`DOOM2.WAD` if

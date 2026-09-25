@@ -10,10 +10,14 @@ powershell -ExecutionPolicy Bypass -File scripts/install_dependencies.ps1
 # Ubuntu WSL packages, the RISC-V newlib compiler, and optional Sail/ACT tools
 powershell -ExecutionPolicy Bypass -File scripts/toolchain.ps1
 
-# Build only DoomV; build Linux; or build both
+# Build only DoomV; build Linux; or build both. `all` finishes by rebuilding
+# the emulator with PGO and ThinLTO (~1.4x over plain `make`), since by then
+# the guests it trains on exist. --no-pgo stops at the plain build.
 python scripts/build.py doom
 python scripts/build.py linux
 python scripts/build.py all
+python scripts/build.py all --no-pgo
+make fast                          # the optimized emulator alone, guests already built
 
 # Boot a guest. Linux --smoke exits after BusyBox proves userspace runs;
 # Ubuntu --login logs in through the emulated keyboard and exits.

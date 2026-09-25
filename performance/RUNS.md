@@ -150,3 +150,7 @@ and nothing else.
 | 20260924-181608 | linux 300M | V: linux hash check after -ram work | d54fa5e | 59.50 | 5.0 | `e76932b2b713` |  |
 | 20260924-185543 | ubuntu 3000M | ubuntu-xfce boot, first | cfd8034 | 54.30 | 55.2 | `2ca0ac5022e1` |  |
 | 20260924-185639 | ubuntu 3000M | ubuntu-xfce boot, repeat | cfd8034 | 53.61 | 56.0 | `2ca0ac5022e1` |  |
+| 20260924-192452 | ubuntu 3000M | ubuntu boot: PGO+ThinLTO vs plain make (reference) | 8387f26 | 55.70 | 53.9 | `74c11f512233` |  |
+| 20260924-192547 | ubuntu 3000M | ubuntu boot: PGO+ThinLTO vs plain make | 8387f26 | 75.61 | 39.7 | `74c11f512233` |  |
+| 20260924-224320 | ubuntu 3000M | make fast (PGO+ThinLTO default) vs plain (reference) | 8387f26+ | 53.97 | 55.6 | `74c11f512233` |  |
+| 20260924-224417 | ubuntu 3000M | make fast (PGO+ThinLTO default) vs plain | 8387f26+ | 75.89 | 39.5 | `74c11f512233` |  |

@@ -121,5 +121,14 @@ else
   RMF = rm -f
 endif
 
+# The optimized build: Clang, PGO and ThinLTO, ~1.36x on an Ubuntu boot over
+# plain `make`. Not the default target, and cannot be: training runs both
+# benchmark workloads, so it needs the guests built, while plain `make` has to
+# work on a checkout with nothing in build/ -- it is also what the test gate
+# compiles. `scripts/build.py all` ends with this step for the same reason.
+.PHONY: fast
+fast:
+	python performance/pgo.py
+
 clean:
 	-$(RMF) $(OUT)

@@ -1,0 +1,15 @@
+{
+  "time": "20260924-192547",
+  "label": "ubuntu boot: PGO+ThinLTO vs plain make",
+  "workload": "ubuntu",
+  "steps": 3000000000,
+  "seconds": 39.676,
+  "mips": 75.612,
+  "crash_log_sha256": "74c11f5122339d9d191e6e2ad4e3e11f4e2d8343b6f94327167b38231d40930b",
+  "exe": "build\\clang-pgo-lto-fixed.exe",
+  "exe_sha256": "086b08728ae89937ede114b13c5e134e88011f75cefdf397abf391e804f20754",
+  "commit": "8387f26",
+  "dirty": false,
+  "host": "AMD64 Family 25 Model 97 Stepping 2, AuthenticAMD / Windows 10",
+  "profiled": false
+}
