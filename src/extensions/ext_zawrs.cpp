@@ -25,7 +25,7 @@
 #include "memory.hpp"
 #include <cstdint>
 
-void RiscvCore::exec_ZAWRS(const DecodedInstruction &instr, Registers &regs, Memory &mem)
+void RiscvCore::exec_ZAWRS(const DecodedOp &instr, Registers &regs, Memory &mem)
 {
 	(void)regs;
 	(void)mem;

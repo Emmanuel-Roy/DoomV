@@ -76,32 +76,32 @@ public:
 	// returning -- advanced by the instruction's length for straight-line
 	// code, or set to the branch/jump target. No separate auto-increment
 	// step exists elsewhere.
-	void exec_32I(const DecodedInstruction &instr, Registers &regs, Memory &mem);
-	void exec_32M(const DecodedInstruction &instr, Registers &regs, Memory &mem);
-	void exec_32A(const DecodedInstruction &instr, Registers &regs, Memory &mem);
-	void exec_32ZICSR(const DecodedInstruction &instr, Registers &regs, Memory &mem);
-	void exec_F(const DecodedInstruction &instr, Registers &regs, Memory &mem);
-	void exec_D(const DecodedInstruction &instr, Registers &regs, Memory &mem);
-	void exec_V(const DecodedInstruction &instr, Registers &regs, Memory &mem);
-	void exec_ZBA(const DecodedInstruction &instr, Registers &regs, Memory &mem);
-	void exec_ZBB(const DecodedInstruction &instr, Registers &regs, Memory &mem);
-	void exec_ZBS(const DecodedInstruction &instr, Registers &regs, Memory &mem);
-	void exec_ZBKB(const DecodedInstruction &instr, Registers &regs, Memory &mem);
-	void exec_ZFH(const DecodedInstruction &instr, Registers &regs, Memory &mem);
-	void exec_ZICOND(const DecodedInstruction &instr, Registers &regs, Memory &mem);
-	void exec_ZIHINTPAUSE(const DecodedInstruction &instr, Registers &regs, Memory &mem);
-	void exec_ZIHINTNTL(const DecodedInstruction &instr, Registers &regs, Memory &mem);
-	void exec_ZIMOP(const DecodedInstruction &instr, Registers &regs, Memory &mem);
-	void exec_ZCMOP(const DecodedInstruction &instr, Registers &regs, Memory &mem);
-	void exec_ZICBOM(const DecodedInstruction &instr, Registers &regs, Memory &mem);
-	void exec_ZICBOP(const DecodedInstruction &instr, Registers &regs, Memory &mem);
-	void exec_ZICBOZ(const DecodedInstruction &instr, Registers &regs, Memory &mem);
-	void exec_ZAWRS(const DecodedInstruction &instr, Registers &regs, Memory &mem);
-	void exec_ZFA(const DecodedInstruction &instr, Registers &regs, Memory &mem);
-	void exec_ZFHMIN(const DecodedInstruction &instr, Registers &regs, Memory &mem);
-	void exec_SVINVAL(const DecodedInstruction &instr, Registers &regs, Memory &mem);
-	void exec_H(const DecodedInstruction &instr, Registers &regs, Memory &mem);
-	void exec_ZIFENCEI(const DecodedInstruction &instr, Registers &regs, Memory &mem);
+	void exec_32I(const DecodedOp &instr, Registers &regs, Memory &mem);
+	void exec_32M(const DecodedOp &instr, Registers &regs, Memory &mem);
+	void exec_32A(const DecodedOp &instr, Registers &regs, Memory &mem);
+	void exec_32ZICSR(const DecodedOp &instr, Registers &regs, Memory &mem);
+	void exec_F(const DecodedOp &instr, Registers &regs, Memory &mem);
+	void exec_D(const DecodedOp &instr, Registers &regs, Memory &mem);
+	void exec_V(const DecodedOp &instr, Registers &regs, Memory &mem);
+	void exec_ZBA(const DecodedOp &instr, Registers &regs, Memory &mem);
+	void exec_ZBB(const DecodedOp &instr, Registers &regs, Memory &mem);
+	void exec_ZBS(const DecodedOp &instr, Registers &regs, Memory &mem);
+	void exec_ZBKB(const DecodedOp &instr, Registers &regs, Memory &mem);
+	void exec_ZFH(const DecodedOp &instr, Registers &regs, Memory &mem);
+	void exec_ZICOND(const DecodedOp &instr, Registers &regs, Memory &mem);
+	void exec_ZIHINTPAUSE(const DecodedOp &instr, Registers &regs, Memory &mem);
+	void exec_ZIHINTNTL(const DecodedOp &instr, Registers &regs, Memory &mem);
+	void exec_ZIMOP(const DecodedOp &instr, Registers &regs, Memory &mem);
+	void exec_ZCMOP(const DecodedOp &instr, Registers &regs, Memory &mem);
+	void exec_ZICBOM(const DecodedOp &instr, Registers &regs, Memory &mem);
+	void exec_ZICBOP(const DecodedOp &instr, Registers &regs, Memory &mem);
+	void exec_ZICBOZ(const DecodedOp &instr, Registers &regs, Memory &mem);
+	void exec_ZAWRS(const DecodedOp &instr, Registers &regs, Memory &mem);
+	void exec_ZFA(const DecodedOp &instr, Registers &regs, Memory &mem);
+	void exec_ZFHMIN(const DecodedOp &instr, Registers &regs, Memory &mem);
+	void exec_SVINVAL(const DecodedOp &instr, Registers &regs, Memory &mem);
+	void exec_H(const DecodedOp &instr, Registers &regs, Memory &mem);
+	void exec_ZIFENCEI(const DecodedOp &instr, Registers &regs, Memory &mem);
 
 	// Sv39 address translation, shared by every load/store/AMO/FP-load/
 	// vector-load call site and by DoomSystem::step()'s instruction fetch.

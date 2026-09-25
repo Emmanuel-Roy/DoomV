@@ -149,7 +149,7 @@ inline uint32_t eg32(const Registers &regs, int base, uint64_t g, int n, int k)
 
 } // namespace
 
-void exec_zvksm(const DecodedInstruction &instr, Registers &regs)
+void exec_zvksm(const DecodedOp &instr, Registers &regs)
 {
 	const VType vt = decode_vtype(regs.get_vtype());
 	if (vt.sew != 32) return;   // both extensions are SEW=32 only

@@ -26,7 +26,7 @@ DecodedInstruction Decoder::decode_zihintpause(uint32_t raw_instr) const
 	return instr;
 }
 
-void RiscvCore::exec_ZIHINTPAUSE(const DecodedInstruction &instr, Registers &regs, Memory &mem)
+void RiscvCore::exec_ZIHINTPAUSE(const DecodedOp &instr, Registers &regs, Memory &mem)
 {
 	(void)mem;
 	regs.set_pc(regs.get_pc() + instr.length);

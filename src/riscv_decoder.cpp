@@ -5,6 +5,7 @@
 #include "registers.hpp"
 #include "memory.hpp"
 #include "extensions.hpp"
+#include <algorithm>
 
 Decoder::Decoder(RiscvCore &core, Registers &regs, Memory &mem)
 	: core(core), regs(regs), mem(mem), cache(CACHE_SIZE)
@@ -367,8 +368,57 @@ DecodedInstruction Decoder::describe(uint32_t raw) const
 	return instr;
 }
 
+// Whether an instruction of extension `e` may execute with Extensions as they
+// are now.
+static bool extension_enabled(Extension e)
+{
+	switch (e) {
+	case Extension::I:           return Extensions.I;
+	case Extension::M:           return Extensions.M;
+	case Extension::A:           return Extensions.A;
+	case Extension::C:           return Extensions.C;
+	case Extension::ZICSR:       return Extensions.ZICSR;
+	case Extension::ZIFENCEI:    return Extensions.ZIFENCEI;
+	case Extension::F:           return Extensions.F;
+	case Extension::D:           return Extensions.D;
+	case Extension::V:           return Extensions.V;
+	case Extension::ZBA:         return Extensions.ZBA;
+	case Extension::ZBB:         return Extensions.ZBB;
+	case Extension::ZBS:         return Extensions.ZBS;
+	case Extension::ZFH:         return Extensions.ZFH;
+	case Extension::ZBC:         return Extensions.ZBC;
+	case Extension::ZBKB:        return Extensions.ZBKB;
+	case Extension::ZBKX:        return Extensions.ZBKX;
+	case Extension::ZICOND:      return Extensions.ZICOND;
+	case Extension::ZIHINTPAUSE: return Extensions.ZIHINTPAUSE;
+	case Extension::ZIHINTNTL:   return Extensions.ZIHINTNTL;
+	case Extension::ZIMOP:       return Extensions.ZIMOP;
+	case Extension::ZCMOP:       return Extensions.ZCMOP;
+	case Extension::ZICBOM:      return Extensions.ZICBOM;
+	case Extension::ZICBOP:      return Extensions.ZICBOP;
+	case Extension::ZICBOZ:      return Extensions.ZICBOZ;
+	case Extension::ZAWRS:       return Extensions.ZAWRS;
+	case Extension::ZFA:         return Extensions.ZFA;
+	case Extension::ZFHMIN:      return Extensions.ZFHMIN;
+	case Extension::SVINVAL:     return Extensions.SVINVAL;
+	case Extension::H:           return Extensions.H;
+	default:                     return false;   // ILLEGAL
+	}
+}
+
+void Decoder::sync_extensions()
+{
+	std::fill(cache.begin(), cache.end(), CacheEntry{});
+	cache_epoch = ExtensionsEpoch;
+}
+
 DispatchResult Decoder::decode_and_dispatch(uint64_t pc, uint32_t raw_word)
 {
+	// Decodes depend on the extension set, so a cache made under another one
+	// is thrown away whole. This is rare: misa is written by a test now and
+	// then and by an OS never, and a read of it no longer counts as a change.
+	if (cache_epoch != ExtensionsEpoch) sync_extensions();
+
 	// Bit[1:0] of the first halfword being != 0b11 is what marks an
 	// instruction as compressed -- checked before touching the cache, since
 	// compressed instructions only need (and are only tagged by) their
@@ -379,11 +429,18 @@ DispatchResult Decoder::decode_and_dispatch(uint64_t pc, uint32_t raw_word)
 	// Indexed by halfword, not word: compressed instructions can start on
 	// either 2-byte-aligned half of a 4-byte slot, so >>2 would alias two
 	// unrelated addresses into one cache line half the time.
-	CacheEntry &entry = cache[(pc >> 1) & CACHE_MASK];
+	//
+	// Found by byte offset rather than by index. x86 can scale an index by 8
+	// and no further, so with 32-byte entries an index has to be shifted to
+	// address a field, and with everything inlined into the run loop the
+	// compiler re-did that shift before every field it read rather than keep
+	// the result in a register, which cost DOOM 2-3% under PGO. An offset
+	// needs no scaling, so there is nothing to redo.
+	const uint64_t offset = (pc << 4) & ((uint64_t)CACHE_MASK << 5);   // ((pc >> 1) & CACHE_MASK) * 32
+	CacheEntry &entry = *reinterpret_cast<CacheEntry *>(reinterpret_cast<char *>(cache.data()) + offset);
 
-	if (!(entry.valid && entry.addr == pc && entry.raw_instr == tag && entry.epoch == ExtensionsEpoch)) {
+	if (!(entry.addr == pc && entry.decoded.raw == tag)) {
 		DecodedInstruction instr;
-		bool enabled;
 		if (!Extensions.C && (raw_word & 0x3) != 0x3) {
 			// A 16-bit encoding while C is off: fetched as two bytes, as
 			// ever, and illegal, since nothing decodes it.
@@ -401,44 +458,19 @@ DispatchResult Decoder::decode_and_dispatch(uint64_t pc, uint32_t raw_word)
 			instr = decode(raw_word, ext);
 		}
 		instr.raw = tag;
-
-		enabled = (instr.ext == Extension::I && Extensions.I)
-		       || (instr.ext == Extension::M && Extensions.M)
-		       || (instr.ext == Extension::A && Extensions.A)
-		       || (instr.ext == Extension::C && Extensions.C)
-		       || (instr.ext == Extension::ZICSR && Extensions.ZICSR)
-		       || (instr.ext == Extension::ZIFENCEI && Extensions.ZIFENCEI)
-		       || (instr.ext == Extension::F && Extensions.F)
-		       || (instr.ext == Extension::D && Extensions.D)
-		       || (instr.ext == Extension::V && Extensions.V)
-		       || (instr.ext == Extension::ZBA && Extensions.ZBA)
-		       || (instr.ext == Extension::ZBB && Extensions.ZBB)
-		       || (instr.ext == Extension::ZBS && Extensions.ZBS)
-		       || (instr.ext == Extension::ZFH && Extensions.ZFH)
-		       || (instr.ext == Extension::ZBC && Extensions.ZBC)
-		       || (instr.ext == Extension::ZBKB && Extensions.ZBKB)
-		       || (instr.ext == Extension::ZBKX && Extensions.ZBKX)
-		       || (instr.ext == Extension::ZICOND && Extensions.ZICOND)
-		       || (instr.ext == Extension::ZIHINTPAUSE && Extensions.ZIHINTPAUSE)
-		       || (instr.ext == Extension::ZIHINTNTL && Extensions.ZIHINTNTL)
-		       || (instr.ext == Extension::ZIMOP && Extensions.ZIMOP)
-		       || (instr.ext == Extension::ZCMOP && Extensions.ZCMOP)
-		       || (instr.ext == Extension::ZICBOM && Extensions.ZICBOM)
-		       || (instr.ext == Extension::ZICBOP && Extensions.ZICBOP)
-		       || (instr.ext == Extension::ZICBOZ && Extensions.ZICBOZ)
-		       || (instr.ext == Extension::ZAWRS && Extensions.ZAWRS)
-		       || (instr.ext == Extension::ZFA && Extensions.ZFA)
-		       || (instr.ext == Extension::ZFHMIN && Extensions.ZFHMIN)
-		       || (instr.ext == Extension::SVINVAL && Extensions.SVINVAL)
-		       || (instr.ext == Extension::H && Extensions.H);
-
-		entry = {true, pc, tag, instr, enabled, ExtensionsEpoch};
+		// Whether it may execute, decided now for as long as the entry lives:
+		// the cache is emptied when the extension set changes. The decode of a
+		// disabled extension's instruction is only ever used for its length.
+		if (!extension_enabled(instr.ext)) instr.ext = Extension::ILLEGAL;
+		// The name stays behind: only the operation is cached.
+		entry.addr = pc;
+		entry.decoded = instr;
 	}
 	// The instruction is used from the cache entry itself, not copied out of
 	// it. Nothing between here and the return decodes, so the entry cannot
 	// change underneath it.
-	const DecodedInstruction &instr = entry.decoded;
-	const bool enabled = entry.enabled;
+	const DecodedOp &instr = entry.decoded;
+	const bool enabled = instr.ext != Extension::ILLEGAL;
 
 
 	// Zicfilp: with the expectation armed, the only instruction that may

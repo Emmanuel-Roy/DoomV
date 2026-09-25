@@ -117,7 +117,7 @@ DecodedInstruction Decoder::decode_zfh(uint32_t raw_instr) const
 	return instr;
 }
 
-void RiscvCore::exec_ZFH(const DecodedInstruction &instr, Registers &regs, Memory &mem)
+void RiscvCore::exec_ZFH(const DecodedOp &instr, Registers &regs, Memory &mem)
 {
 	(void)mem;
 	const uint8_t frm = regs.get_frm();

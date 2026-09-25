@@ -123,7 +123,7 @@ namespace vcommon {
 // The OPMVV funct6=0x12 unary group. Split out because its operand shape
 // differs from everything else here: there is no second operand at all, and
 // vs1 is an opcode extension rather than a register number.
-void exec_zvbb_unary(const DecodedInstruction &instr, Registers &regs)
+void exec_zvbb_unary(const DecodedOp &instr, Registers &regs)
 {
 	VType vt = decode_vtype(regs.get_vtype());
 	int sew = vt.sew;
@@ -147,7 +147,7 @@ void exec_zvbb_unary(const DecodedInstruction &instr, Registers &regs)
 	});
 }
 
-void exec_zvbb(const DecodedInstruction &instr, Registers &regs)
+void exec_zvbb(const DecodedOp &instr, Registers &regs)
 {
 	VType vt = decode_vtype(regs.get_vtype());
 	int sew = vt.sew;
@@ -256,7 +256,7 @@ uint64_t v_clmul_hi(uint64_t a, uint64_t b)
 
 } // namespace
 
-void exec_zvbc(const DecodedInstruction &instr, Registers &regs)
+void exec_zvbc(const DecodedOp &instr, Registers &regs)
 {
 	VType vt = decode_vtype(regs.get_vtype());
 	// SEW=64 only. Every other width is reserved, and the permissive stance

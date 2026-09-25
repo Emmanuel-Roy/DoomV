@@ -288,7 +288,7 @@ DecodedInstruction Decoder::decode_v(uint32_t raw_instr) const
 // here rather than duplicated into every category file. Table derived from
 // the authoritative riscv-opcodes rv_v encoding list, not recalled from
 // memory: https://github.com/riscv/riscv-opcodes/blob/master/extensions/rv_v
-void RiscvCore::exec_V(const DecodedInstruction &instr, Registers &regs, Memory &mem)
+void RiscvCore::exec_V(const DecodedOp &instr, Registers &regs, Memory &mem)
 {
 	uint64_t pc = regs.get_pc();
 

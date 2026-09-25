@@ -74,7 +74,7 @@ DecodedInstruction Decoder::decode_zfhmin(uint32_t raw_instr) const
 	return instr;
 }
 
-void RiscvCore::exec_ZFHMIN(const DecodedInstruction &instr, Registers &regs, Memory &mem)
+void RiscvCore::exec_ZFHMIN(const DecodedOp &instr, Registers &regs, Memory &mem)
 {
 	uint8_t flags = 0;
 

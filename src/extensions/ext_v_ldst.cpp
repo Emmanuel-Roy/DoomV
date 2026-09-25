@@ -63,7 +63,7 @@ void st_eew(Memory &mem, uint64_t addr, int eew, uint64_t value)
 
 namespace vcommon {
 
-bool exec_v_ldst(const DecodedInstruction &instr, Registers &regs, Memory &mem, RiscvCore &core)
+bool exec_v_ldst(const DecodedOp &instr, Registers &regs, Memory &mem, RiscvCore &core)
 {
 	bool is_load = (instr.opcode == 0b0000111);
 	AccessType access = is_load ? AccessType::Load : AccessType::Store;

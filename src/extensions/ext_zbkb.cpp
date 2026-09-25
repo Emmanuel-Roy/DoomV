@@ -123,7 +123,7 @@ DecodedInstruction Decoder::decode_zbkb(uint32_t raw_instr) const
 	return instr;
 }
 
-void RiscvCore::exec_ZBKB(const DecodedInstruction &instr, Registers &regs, Memory &mem)
+void RiscvCore::exec_ZBKB(const DecodedOp &instr, Registers &regs, Memory &mem)
 {
 	(void)mem;
 	const uint64_t a = regs.read_x(instr.rs1);

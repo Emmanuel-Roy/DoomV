@@ -468,6 +468,7 @@ static void write_misa(uint64_t value, uint64_t next_pc)
 	const ExtensionConfig &s = SupportedExtensions;
 	if (s.C && !has('C') && (next_pc & 2)) return;
 
+	const ExtensionConfig before = Extensions;
 	const bool f = s.F && has('F');
 	const bool d = s.D && has('D') && has('F');
 	Extensions.A = s.A && has('A');
@@ -483,7 +484,20 @@ static void write_misa(uint64_t value, uint64_t next_pc)
 	Extensions.ZFH = s.ZFH && f;
 	Extensions.ZFHMIN = s.ZFHMIN && f;
 	Extensions.ZCMOP = s.ZCMOP && Extensions.C;
-	ExtensionsEpoch++;
+	// The epoch tells the decode cache its decodes may be wrong, and they are
+	// only wrong if the set changed. A csrr of misa comes through here with the
+	// value misa already holds -- OpenSBI does that on its trap path, so on
+	// every timer interrupt -- and bumping regardless threw away every decode
+	// each time: 6.1M of a BusyBox boot's 8.1M decode misses in 300M steps.
+	// (memcmp rather than a defaulted ==, which GCC 8 cannot compile;
+	// ExtensionConfig is bools only, so it has no padding to compare.)
+	//
+	// The TLB flush below stays unconditional. The decode cache is invisible
+	// to the guest; the TLB is not, to a guest that edits a PTE without
+	// sfence.vma, so whether a read of misa flushes it is a question of
+	// matching Sail rather than of speed.
+	if (std::memcmp(&before, &Extensions, sizeof before) != 0)
+		ExtensionsEpoch++;
 	bump_event_gen();
 	mmu_tlb_flush();
 }
@@ -1730,7 +1744,7 @@ bool RiscvCore::wake_for_interrupt(Registers &regs, Memory &mem)
 	return (compute_mip(regs, mem) & regs.read_csr(CSR_MIE)) != 0;
 }
 
-void RiscvCore::exec_32ZICSR(const DecodedInstruction &instr, Registers &regs, Memory &mem)
+void RiscvCore::exec_32ZICSR(const DecodedOp &instr, Registers &regs, Memory &mem)
 {
 	uint64_t pc = regs.get_pc();
 

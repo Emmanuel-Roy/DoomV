@@ -17,7 +17,7 @@ namespace vcommon {
 // (extensions.V.elen_exp = 6) and RVA23's Zve64d.
 static constexpr int ELEN_POW = 6;
 
-void exec_v_config(const DecodedInstruction &instr, Registers &regs)
+void exec_v_config(const DecodedOp &instr, Registers &regs)
 {
 	uint8_t f7 = instr.funct7;
 	bool bit31 = (f7 >> 6) & 1;

@@ -31,7 +31,7 @@ DecodedInstruction Decoder::decode_zihintntl(uint16_t raw16) const
 	return instr;
 }
 
-void RiscvCore::exec_ZIHINTNTL(const DecodedInstruction &instr, Registers &regs, Memory &mem)
+void RiscvCore::exec_ZIHINTNTL(const DecodedOp &instr, Registers &regs, Memory &mem)
 {
 	(void)mem;
 	regs.set_pc(regs.get_pc() + instr.length);
