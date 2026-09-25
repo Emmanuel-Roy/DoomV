@@ -1,0 +1,599 @@
+diff --git a/src/doom_system.cpp b/src/doom_system.cpp
+index 519978f..cfda15d 100644
+--- a/src/doom_system.cpp
++++ b/src/doom_system.cpp
+@@ -277,6 +277,223 @@ bool DoomSystem::interrupt_may_be_due()
+ 	return true;
+ }
+ 
++// Prototype switch, so one binary can run both loops: DOOMV_FAST=0 disables.
++static bool fast_enabled()
++{
++	static const bool on = [] { const char *e = std::getenv("DOOMV_FAST"); return !(e && e[0] == '0'); }();
++	return on;
++}
++
++// Exactly what n calls to step() do, faster.
++//
++// A run of "simple" steps -- an I/C/M instruction that is not a CSR or system
++// op, fetched from a cached code page, whose load or store (if any) hits the
++// data caches -- can change the x registers, pc and plain RAM, and nothing
++// else. In particular it cannot change anything the per-step checks depend on:
++// no CSR write, no privilege change, no TLB flush, no device register, so
++// EventGen, state_gen, the TLB generation and ExtensionsEpoch all stay put, and
++// so do the fetch and data cache keys, the counter enables and the interrupt
++// decision -- except for mtime, which the steps themselves advance. So the
++// checks are made once at the start of a run, mtime's deadline is turned into
++// a step count, and the bookkeeping every step does to things no simple step
++// can observe (the step count, minstret, mtime, mcycle) is added up and
++// applied once at the end of the run. The instruction history is still written
++// per step.
++//
++// Anything else -- a cache miss, a device access, a CSR, a trap -- ends the run
++// before that step has changed anything, and the step is taken by step(), the
++// definition of what a step does. Then a new run starts.
++// Prototype statistics: why runs end. Printed at -stopat with DOOMV_FASTSTATS.
++static uint64_t fs_fast, fs_slow_entry, fs_deadline, fs_fetch, fs_decode, fs_op[256], fs_ld, fs_st, fs_budget;
++static uint64_t fs_ext[64];
++#include <unordered_map>
++static std::unordered_map<uint64_t, uint64_t> fs_edge, fs_dmiss;
++static uint64_t fs_dm_invalid, fs_dm_addr, fs_dm_raw, fs_dm_epoch;
++void DoomSystem::run_fast(uint64_t n)
++{
++	Timer &timer = memory.get_timer();
++	auto &dcache = decoder.cache;
++	while (n > 0 && !debugger.halted) {
++		// Conditions under which no step can be simple. step() for all of them.
++		if (debugger.may_halt() || memory.tohost_addr || core.access_log || memory.store_log
++		    || !Extensions.C || !Extensions.XLEN64 || Extensions.ZICFILP
++		    || core.wait_request != RiscvCore::Wait::None
++		    || regs.state_gen + ExtensionsEpoch != counter_key
++		    || EventGen != irq_key || timer.get_mtime() >= irq_deadline) {
++			fs_slow_entry++;
++			step();
++			n--;
++			continue;
++		}
++		// How many steps before mtime reaches the interrupt deadline: step j
++		// of this run sees mtime + (tick_phase + j) / 2, which must stay below it.
++		uint64_t limit = n;
++		if (irq_deadline != ~0ull) {
++			const uint64_t d = irq_deadline - timer.get_mtime();
++			const uint64_t steps = (d > (~0ull >> 2)) ? ~0ull : 2 * d - tick_phase;
++			if (steps < limit) limit = steps;
++		}
++		const uint64_t key = regs.state_gen + mmu_tlb_generation() + ExtensionsEpoch;
++		const uint32_t epoch = ExtensionsEpoch;
++		regs.minstret_increment = counts_instret;
++
++		uint64_t pc = regs.get_pc();
++		uint64_t done = 0;
++		uint32_t last_insn = 0;
++		uint8_t last_len = 4;
++		uint64_t code_vpage = ~0ull;
++		const uint8_t *code = nullptr;
++		while (done < limit) {
++			// Fetch: the code page stays valid for the whole run.
++			const uint64_t vpage = pc >> 12;
++			const unsigned off = (unsigned)(pc & 0xFFF);
++			if (vpage != code_vpage) {
++				const FetchPage &e = fetch_cache[vpage & (FETCH_CACHE_SIZE - 1)];
++				if (!(e.vpage == vpage && e.key == key)) { fs_fetch++; break; }
++				code_vpage = vpage;
++				code = e.host;
++			}
++			// A compressed instruction in the last halfword of the page is
++			// fetched as the two bytes it is; only a 4-byte one there needs
++			// the next page, and so the ordinary step.
++			uint32_t raw;
++			if (off > 0xFFC) {
++				uint16_t h; std::memcpy(&h, code + off, 2);
++				raw = h;
++				if ((h & 3) == 3) {
++					// A 4-byte instruction across the page boundary: the two
++					// halfword fetches fetch16 would make, both from cached pages.
++					const FetchPage &n2 = fetch_cache[(vpage + 1) & (FETCH_CACHE_SIZE - 1)];
++					if (!(n2.vpage == vpage + 1 && n2.key == key)) { fs_fetch++; fs_edge[pc]++; break; }
++					uint16_t h2; std::memcpy(&h2, n2.host, 2);
++					raw |= (uint32_t)h2 << 16;
++				}
++			} else {
++				std::memcpy(&raw, code + off, 4);
++			}
++			const bool comp = (raw & 3) != 3;
++			const uint32_t tag = comp ? (raw & 0xFFFF) : raw;
++			const Decoder::CacheEntry &ce = dcache[Decoder::index(pc)];
++			if (!(ce.valid && ce.addr == pc && ce.raw_instr == tag && ce.epoch == epoch)) { fs_decode++; fs_dmiss[pc]++;
++				if (!ce.valid) fs_dm_invalid++; else if (ce.addr != pc) fs_dm_addr++; else if (ce.raw_instr != tag) fs_dm_raw++; else fs_dm_epoch++;
++				break; }
++			const DecodedInstruction &d = ce.decoded;
++			const uint64_t len = d.length;
++			const uint64_t a = regs.read_x(d.rs1), b = regs.read_x(d.rs2);
++			const uint64_t imm = (uint64_t)d.imm;
++			uint64_t next = pc + len;
++			switch ((FastOp)ce.fop) {
++			case FOP_SLOW: fs_ext[(int)d.ext & 63]++; fs_op[d.opcode]++; goto out;
++			case FOP_LUI:   regs.write_x(d.rd, imm); break;
++			case FOP_AUIPC: regs.write_x(d.rd, pc + imm); break;
++			case FOP_JAL:   regs.write_x(d.rd, next); next = pc + imm; break;
++			case FOP_JALR: { const uint64_t t = (a + imm) & ~1ull; regs.write_x(d.rd, next); next = t; break; }
++			case FOP_BEQ:  if (a == b) next = pc + imm; break;
++			case FOP_BNE:  if (a != b) next = pc + imm; break;
++			case FOP_BLT:  if ((int64_t)a < (int64_t)b) next = pc + imm; break;
++			case FOP_BGE:  if ((int64_t)a >= (int64_t)b) next = pc + imm; break;
++			case FOP_BLTU: if (a < b) next = pc + imm; break;
++			case FOP_BGEU: if (a >= b) next = pc + imm; break;
++			case FOP_LB: case FOP_LH: case FOP_LW: case FOP_LD:
++			case FOP_LBU: case FOP_LHU: case FOP_LWU: {
++				static const uint8_t w[] = {0,0,0,0,0,0,0,0,0,0,0, 1,2,4,8,1,2,4};
++				const unsigned size = w[ce.fop];
++				const uint64_t addr = a + imm;
++				if (((addr + size - 1) >> 12) != (addr >> 12)) goto out;
++				const RiscvCore::DataPage &e = core.load_cache[(addr >> 12) & (RiscvCore::DATA_CACHE_SIZE - 1)];
++				if (!(e.vpage == (addr >> 12) && e.key == key)) { fs_ld++; goto out; }
++				uint64_t v = 0;
++				std::memcpy(&v, e.host + (addr & 0xFFF), size);
++				switch (ce.fop) {
++				case FOP_LB: v = (uint64_t)(int64_t)(int8_t)v; break;
++				case FOP_LH: v = (uint64_t)(int64_t)(int16_t)v; break;
++				case FOP_LW: v = (uint64_t)(int64_t)(int32_t)v; break;
++				default: break;
++				}
++				regs.write_x(d.rd, v);
++				break;
++			}
++			case FOP_SB: case FOP_SH: case FOP_SW: case FOP_SD: {
++				const unsigned size = 1u << (ce.fop - FOP_SB);
++				const uint64_t addr = a + imm;
++				if (((addr + size - 1) >> 12) != (addr >> 12)) goto out;
++				const RiscvCore::DataPage &e = core.store_cache[(addr >> 12) & (RiscvCore::DATA_CACHE_SIZE - 1)];
++				if (!(e.vpage == (addr >> 12) && e.key == key)) { fs_st++; goto out; }
++				std::memcpy(e.host + (addr & 0xFFF), &b, size);
++				if (e.fb) memory.fb_stored(size);
++				break;
++			}
++			case FOP_ADDI:  regs.write_x(d.rd, a + imm); break;
++			case FOP_SLTI:  regs.write_x(d.rd, (int64_t)a < d.imm); break;
++			case FOP_SLTIU: regs.write_x(d.rd, a < imm); break;
++			case FOP_XORI:  regs.write_x(d.rd, a ^ imm); break;
++			case FOP_ORI:   regs.write_x(d.rd, a | imm); break;
++			case FOP_ANDI:  regs.write_x(d.rd, a & imm); break;
++			case FOP_SLLI:  regs.write_x(d.rd, a << (d.imm & 0x3F)); break;
++			case FOP_SRLI:  regs.write_x(d.rd, a >> (d.imm & 0x3F)); break;
++			case FOP_SRAI:  regs.write_x(d.rd, (uint64_t)((int64_t)a >> (d.imm & 0x3F))); break;
++			case FOP_ADDIW: regs.write_x(d.rd, sext32((uint32_t)a + (uint32_t)d.imm)); break;
++			case FOP_SLLIW: regs.write_x(d.rd, sext32((uint32_t)a << (d.imm & 0x1F))); break;
++			case FOP_SRLIW: regs.write_x(d.rd, sext32((uint32_t)a >> (d.imm & 0x1F))); break;
++			case FOP_SRAIW: regs.write_x(d.rd, sext32((uint32_t)((int32_t)(uint32_t)a >> (d.imm & 0x1F)))); break;
++			case FOP_ADD:  regs.write_x(d.rd, a + b); break;
++			case FOP_SUB:  regs.write_x(d.rd, a - b); break;
++			case FOP_SLL:  regs.write_x(d.rd, a << (b & 0x3F)); break;
++			case FOP_SLT:  regs.write_x(d.rd, (int64_t)a < (int64_t)b); break;
++			case FOP_SLTU: regs.write_x(d.rd, a < b); break;
++			case FOP_XOR:  regs.write_x(d.rd, a ^ b); break;
++			case FOP_SRL:  regs.write_x(d.rd, a >> (b & 0x3F)); break;
++			case FOP_SRA:  regs.write_x(d.rd, (uint64_t)((int64_t)a >> (b & 0x3F))); break;
++			case FOP_OR:   regs.write_x(d.rd, a | b); break;
++			case FOP_AND:  regs.write_x(d.rd, a & b); break;
++			case FOP_ADDW: regs.write_x(d.rd, sext32((uint32_t)a + (uint32_t)b)); break;
++			case FOP_SUBW: regs.write_x(d.rd, sext32((uint32_t)a - (uint32_t)b)); break;
++			case FOP_SLLW: regs.write_x(d.rd, sext32((uint32_t)a << (b & 0x1F))); break;
++			case FOP_SRLW: regs.write_x(d.rd, sext32((uint32_t)a >> (b & 0x1F))); break;
++			case FOP_SRAW: regs.write_x(d.rd, sext32((uint32_t)((int32_t)(uint32_t)a >> (b & 0x1F)))); break;
++			case FOP_FENCE: break;
++			case FOP_MEXT:
++				// exec_32M reads pc from regs and sets it itself.
++				regs.set_pc(pc);
++				core.exec_32M(d, regs, memory);
++				next = regs.get_pc();
++				break;
++			}
++			regs.record_history(pc, tag);
++			pc = next;
++			last_insn = tag;
++			last_len = (uint8_t)len;
++			done++;
++		}
++	out:
++		regs.set_pc(pc);
++		fs_fast += done;
++		if (done == limit && limit < n) fs_deadline++;
++		if (done) {
++			// What the `done` steps' end_step and step_instructions would have
++			// done, one step at a time.
++			memory.step_instructions((uint32_t)done);
++			if (regs.minstret_increment) regs.csr_add(0xB02, done);
++			const uint64_t ticks = (tick_phase + done) / INSNS_PER_TICK;
++			tick_phase = (uint32_t)((tick_phase + done) % INSNS_PER_TICK);
++			if (ticks) {
++				if (counts_cycle) regs.csr_add(0xB00, ticks);
++				timer.tick((uint32_t)ticks);
++			}
++			step_committed = true;
++			step_decoded = true;
++			step_insn = last_insn;
++			step_insn_len = last_len;
++			n -= done;
++		}
++		// The step that ended the run, if it was not the budget.
++		if (done < limit && n > 0 && !debugger.halted) {
++			step();
++			n--;
++		}
++	}
++}
++
+ void DoomSystem::step()
+ {
+ 	const uint64_t before = memory.instruction_count();
+@@ -794,6 +1011,42 @@ void DoomSystem::stop_at_limit()
+ 	console_drain();
+ 		debugger.dump_log(regs, memory, "crash.log");
+ 	std::cout << "stopped after instruction " << n << "; state in crash.log" << std::endl;
++	if (std::getenv("DOOMV_FASTSTATS")) {
++		std::printf("fast steps %llu (%.1f%%)\nslow at run entry (irq/state checks) %llu\nruns ended by irq deadline %llu\nfetch miss %llu\ndecode miss %llu\nload miss %llu\nstore miss %llu\n",
++			(unsigned long long)fs_fast, 100.0 * fs_fast / n, (unsigned long long)fs_slow_entry, (unsigned long long)fs_deadline,
++			(unsigned long long)fs_fetch, (unsigned long long)fs_decode, (unsigned long long)fs_ld, (unsigned long long)fs_st);
++		extern uint64_t g_csr_writes[4096], g_priv_changes;
++		uint64_t tot = 0; for (int i = 0; i < 4096; i++) tot += g_csr_writes[i];
++		std::printf("csr writes %llu, priv changes %llu, tlb flushes %llu\n", (unsigned long long)tot, (unsigned long long)g_priv_changes, (unsigned long long)mmu_tlb_generation());
++		for (int i = 0; i < 4096; i++) if (g_csr_writes[i] > tot / 100) std::printf("  csr 0x%03x: %llu\n", i, (unsigned long long)g_csr_writes[i]);
++		{ uint64_t once = 0, rep = 0; for (auto &kv : fs_dmiss) { if (kv.second == 1) once++; else rep += kv.second; }
++		  std::printf("decode miss distinct pcs %zu, missed once %llu, misses at repeat pcs %llu\n", fs_dmiss.size(), (unsigned long long)once, (unsigned long long)rep); }
++		std::printf("decode miss kinds: empty %llu, other pc %llu, same pc other bytes %llu, epoch %llu\n", (unsigned long long)fs_dm_invalid, (unsigned long long)fs_dm_addr, (unsigned long long)fs_dm_raw, (unsigned long long)fs_dm_epoch);
++		for (auto &kv : fs_edge) if (kv.second > 1000) std::printf("page-edge 4-byte fetch pc=%llx x%llu\n", (unsigned long long)kv.first, (unsigned long long)kv.second);
++		for (int i = 0; i < 64; i++) if (fs_ext[i]) std::printf("slow op ext %d: %llu\n", i, (unsigned long long)fs_ext[i]);
++		for (int i = 0; i < 128; i++) if (fs_op[i]) std::printf("slow op opcode 0x%02x: %llu\n", i, (unsigned long long)fs_op[i]);
++	}
++	// Prototype check: what crash.log leaves out, for comparing the two loops.
++	if (std::getenv("DOOMV_STATEDUMP")) {
++		uint64_t h = 1469598103934665603ull;
++		const uint8_t *ram = memory.ram_data();
++		for (uint64_t i = 0; i + 8 <= Memory::RAM_SPAN; i += 8) {
++			uint64_t w; std::memcpy(&w, ram + i, 8);
++			h = (h ^ w) * 1099511628211ull;
++		}
++		uint64_t fh = 1469598103934665603ull;
++		const uint8_t *fbp = memory.framebuffer();
++		for (uint32_t i = 0; i < Memory::FB_SIZE; i++) fh = (fh ^ fbp[i]) * 1099511628211ull;
++		const uint8_t *lfbp = memory.linux_framebuffer();
++		for (uint64_t i = 0; i < Memory::LFB_SIZE; i++) fh = (fh ^ lfbp[i]) * 1099511628211ull;
++		std::ofstream f("statedump.log");
++		f << std::hex << "fb " << fh << " fb_gen " << memory.fb_generation() << " lfb_gen " << memory.lfb_generation()
++		  << " fb_writes " << memory.take_fb_write_count() << "\n";
++		f << std::hex << "minstret " << regs.read_csr(0xB02) << "\nmcycle " << regs.read_csr(0xB00)
++		  << "\nmtime " << memory.get_timer().get_mtime() << "\ntick_phase " << tick_phase
++		  << "\nmmio_tick " << memory.read32(Memory::MMIO_TICK) << "\nsteps " << n
++		  << "\npc " << regs.get_pc() << "\nram " << h << "\n";
++	}
+ 	run_finished = true;
+ }
+ 
+@@ -855,7 +1108,8 @@ void DoomSystem::cpu_loop()
+ 				uint64_t n = INPUT_PERIOD - (before & (INPUT_PERIOD - 1));
+ 				if (stop_at) n = std::min<uint64_t>(n, stop_at > before ? stop_at - before : 1);
+ 				n = std::min<uint64_t>(n, (uint64_t)budget);
+-				for (uint64_t k = 0; k < n && !debugger.halted; k++) step();
++				if (fast_enabled()) run_fast(n);
++				else for (uint64_t k = 0; k < n && !debugger.halted; k++) step();
+ 				budget -= (int)n;
+ 			}
+ 			const uint64_t now = memory.instruction_count();
+diff --git a/src/doom_system.hpp b/src/doom_system.hpp
+index 271692b..4a39963 100644
+--- a/src/doom_system.hpp
++++ b/src/doom_system.hpp
+@@ -227,6 +227,10 @@ private:
+ 	// clock moves -- Sail logs a CSR write before its clock ticks.
+ 	void step_execute();
+ 	void end_step();
++	// Prototype: exactly `n` steps, as n calls to step() would run them, with
++	// the steps that cannot change anything a check depends on run without
++	// the checks. See run_fast.
++	void run_fast(uint64_t n);
+ 	// Sail's clock: mtime advances once every INSNS_PER_TICK steps, and on
+ 	// every tick of a wait, which lasts at most MAX_WAIT_TICKS.
+ 	static constexpr uint32_t INSNS_PER_TICK = 2;   // rva23s64.json platform.instructions_per_tick
+@@ -253,7 +257,7 @@ private:
+ 		uint64_t key = ~0ull;
+ 		const uint8_t *host = nullptr;
+ 	};
+-	static constexpr unsigned FETCH_CACHE_SIZE = 256;
++	static constexpr unsigned FETCH_CACHE_SIZE = 4096;
+ 	FetchPage fetch_cache[FETCH_CACHE_SIZE];
+ 	bool fetch16(uint64_t vaddr, uint16_t &out);
+ 	// A whole instruction, in one cache lookup where that is exactly
+diff --git a/src/extensions/ext_zicsr.cpp b/src/extensions/ext_zicsr.cpp
+index fea1bb1..5532f29 100644
+--- a/src/extensions/ext_zicsr.cpp
++++ b/src/extensions/ext_zicsr.cpp
+@@ -6,6 +6,7 @@
+ #include "ext_sscofpmf.hpp"
+ #include <cstdio>
+ #include <cstdlib>
++static bool doomv_coarse() { static const bool c = std::getenv("DOOMV_COARSE") != nullptr; return c; }
+ #include "ext_ssstateen.hpp"
+ #include "ext_zicfilp.hpp"
+ #include "ext_zicfiss.hpp"
+@@ -468,6 +469,7 @@ static void write_misa(uint64_t value, uint64_t next_pc)
+ 	const ExtensionConfig &s = SupportedExtensions;
+ 	if (s.C && !has('C') && (next_pc & 2)) return;
+ 
++	const ExtensionConfig before = Extensions;
+ 	const bool f = s.F && has('F');
+ 	const bool d = s.D && has('D') && has('F');
+ 	Extensions.A = s.A && has('A');
+@@ -483,7 +485,14 @@ static void write_misa(uint64_t value, uint64_t next_pc)
+ 	Extensions.ZFH = s.ZFH && f;
+ 	Extensions.ZFHMIN = s.ZFHMIN && f;
+ 	Extensions.ZCMOP = s.ZCMOP && Extensions.C;
+-	ExtensionsEpoch++;
++	// Prototype: the epoch says "decodes made before this may be wrong", and
++	// they are only wrong if the set changed. A csrr of misa comes through
++	// here with the value it already holds -- OpenSBI does that on its trap
++	// path -- and used to throw the whole decode cache away each time. The
++	// TLB flush below is kept as it was: unlike the decode cache, a guest that
++	// edits a PTE without sfence.vma could tell the difference.
++	if (std::memcmp(&before, &Extensions, sizeof before) != 0 || doomv_coarse())
++		ExtensionsEpoch++;
+ 	bump_event_gen();
+ 	mmu_tlb_flush();
+ }
+@@ -1176,7 +1185,11 @@ static void remember_data_page(Registers &regs, Memory &mem, RiscvCore::DataPage
+                                uint64_t vpage, uint64_t key, uint64_t paddr, int access)
+ {
+ 	const uint64_t ppage = paddr & ~0xFFFull;
+-	if (!Memory::in_ram(ppage, 0x1000)) return;
++	// A whole page of DOOM's framebuffer, for stores only, is as plain as RAM
++	// but for the two host-side counters a store bumps.
++	const bool fb = access == pmp::ACC_STORE && ppage >= Memory::MMIO_FB
++	             && ppage + 0x1000 <= Memory::MMIO_FB + Memory::FB_SIZE;
++	if (!fb && !Memory::in_ram(ppage, 0x1000)) return;
+ 	if (Extensions.H && regs.get_virt()) return;
+ 	if (regs.read_csr(CSR_MSTATUS) & MSTATUS_MPRV) return;
+ 	if (Extensions.SMPMP && !pmp::page_permits(regs, ppage, access, (uint8_t)regs.get_priv())) return;
+@@ -1186,7 +1199,8 @@ static void remember_data_page(Registers &regs, Memory &mem, RiscvCore::DataPage
+ 	e.vpage = vpage;
+ 	e.key = key;
+ 	e.ppage = ppage;
+-	e.host = mem.ram_data_mut() + (ppage - Memory::RAM_BASE);
++	e.host = fb ? mem.fb_data_mut() + (ppage - Memory::MMIO_FB) : mem.ram_data_mut() + (ppage - Memory::RAM_BASE);
++	e.fb = fb;
+ }
+ 
+ bool RiscvCore::load_virtual(Registers &regs, Memory &mem, uint64_t vaddr,
+@@ -1248,6 +1262,7 @@ bool RiscvCore::store_virtual(Registers &regs, Memory &mem, uint64_t vaddr,
+ 			const unsigned offset = (unsigned)(vaddr & 0xFFF);
+ 			const uint64_t paddr = e.ppage | offset;
+ 			std::memcpy(e.host + offset, &value, size);
++			if (e.fb) mem.fb_stored(size);
+ 			if (access_log)
+ 				access_log->push_back({vaddr, paddr, (uint8_t)size, true});
+ 			// The bytes, as StoreCapture records them for a store that goes
+diff --git a/src/memory.hpp b/src/memory.hpp
+index 130a74b..1fdb622 100644
+--- a/src/memory.hpp
++++ b/src/memory.hpp
+@@ -338,6 +338,15 @@ public:
+ 	void tick_clock() { timer.tick(1); }
+ 
+ 	const uint8_t *framebuffer() const { return fb.data(); }
++	// Prototype: the store cache can hold DOOM's framebuffer pages. A byte
++	// stored there through write8 does exactly this besides storing, and
++	// neither counter is visible to the guest.
++	uint8_t *fb_data_mut() { return fb.data(); }
++	void fb_stored(unsigned n)
++	{
++		fb_write_count += n;
++		fb_gen.store(fb_gen.load(std::memory_order_relaxed) + n, std::memory_order_relaxed);
++	}
+ 	const uint8_t *linux_framebuffer() const { return lfb.data(); }
+ 	// Bumped on every store into the matching framebuffer. The display
+ 	// thread reads them to tell a frame the guest is still drawing from one
+diff --git a/src/registers.cpp b/src/registers.cpp
+index 49156bf..781173c 100644
+--- a/src/registers.cpp
++++ b/src/registers.cpp
+@@ -1,3 +1,5 @@
++#include <cstdlib>
++static bool doomv_coarse() { static const bool c = std::getenv("DOOMV_COARSE") != nullptr; return c; }
+ #include "registers.hpp"
+ #include "event_gen.hpp"
+ #include <cstring>
+@@ -46,8 +48,10 @@ uint8_t *Registers::write_v(int i)
+ 
+ 
+ 
++uint64_t g_csr_writes[4096], g_priv_changes;
+ void Registers::set_priv(PrivMode mode)
+ {
++	g_priv_changes++;
+ 	priv = mode;
+ 	state_gen++;
+ 	bump_event_gen();
+@@ -57,6 +61,23 @@ void Registers::set_priv(PrivMode mode)
+ 
+ void Registers::write_csr(uint16_t addr, uint64_t value)
+ {
++	g_csr_writes[addr]++;
++	// Prototype: an mstatus write that changes none of the bits translation,
++	// PMP or the counter enables depend on -- the interrupt enables, FS/VS/XS
++	// and the like -- leaves every cache keyed on state_gen valid. EventGen
++	// still moves, since the interrupt enables are exactly what it is for.
++	if (addr == 0x300 && !doomv_coarse()) {
++		constexpr uint64_t KEYED = (1ull << 17) /*MPRV*/ | (3ull << 11) /*MPP*/ | (1ull << 18) /*SUM*/
++		                         | (1ull << 19) /*MXR*/ | (1ull << 20) /*TVM*/ | (1ull << 6) /*UBE*/
++		                         | (1ull << 36) /*SBE*/ | (1ull << 37) /*MBE*/ | (1ull << 38) /*GVA*/
++		                         | (1ull << 39) /*MPV*/;
++		const uint64_t diff = csr[addr] ^ value;
++		csr[addr] = value;
++		if (diff & KEYED) state_gen++;
++		bump_event_gen();
++		if (csr_log) csr_log->push_back(addr);
++		return;
++	}
+ 	csr[addr] = value;
+ 	state_gen++;
+ 	bump_event_gen();
+diff --git a/src/registers.hpp b/src/registers.hpp
+index c1070a0..f8896eb 100644
+--- a/src/registers.hpp
++++ b/src/registers.hpp
+@@ -94,6 +94,8 @@ public:
+ 	std::vector<uint16_t> *csr_log = nullptr;
+ 	// A counter's own increment: not a write, so not logged.
+ 	void bump_csr(uint16_t addr) { csr[addr]++; }
++	// n increments at once (DoomSystem::run_fast).
++	void csr_add(uint16_t addr, uint64_t n) { csr[addr] += n; }
+ 	// Whether minstret counts the instruction now executing. Decided before
+ 	// it runs, from mcountinhibit.IR and minstretcfg, and cleared by a write
+ 	// to minstret, which then holds the value written: Sail's
+diff --git a/src/riscv_core.hpp b/src/riscv_core.hpp
+index c186df5..ba67c23 100644
+--- a/src/riscv_core.hpp
++++ b/src/riscv_core.hpp
+@@ -56,8 +56,9 @@ public:
+ 		uint64_t key = ~0ull;
+ 		uint64_t ppage = 0;      // what the translation produced, for the access log
+ 		uint8_t *host = nullptr;
++		bool fb = false;         // a DOOM framebuffer page: Memory::fb_stored after each store
+ 	};
+-	static constexpr unsigned DATA_CACHE_SIZE = 256;
++	static constexpr unsigned DATA_CACHE_SIZE = 4096;
+ 	DataPage load_cache[DATA_CACHE_SIZE];
+ 	DataPage store_cache[DATA_CACHE_SIZE];
+ 	void raise_virtual_instruction(Registers &regs, uint64_t tval) { enter_trap(regs, 22, tval); }
+diff --git a/src/riscv_decoder.cpp b/src/riscv_decoder.cpp
+index e6c5d01..3494389 100644
+--- a/src/riscv_decoder.cpp
++++ b/src/riscv_decoder.cpp
+@@ -379,7 +379,7 @@ DispatchResult Decoder::decode_and_dispatch(uint64_t pc, uint32_t raw_word)
+ 	// Indexed by halfword, not word: compressed instructions can start on
+ 	// either 2-byte-aligned half of a 4-byte slot, so >>2 would alias two
+ 	// unrelated addresses into one cache line half the time.
+-	CacheEntry &entry = cache[(pc >> 1) & CACHE_MASK];
++	CacheEntry &entry = cache[index(pc)];
+ 
+ 	if (!(entry.valid && entry.addr == pc && entry.raw_instr == tag && entry.epoch == ExtensionsEpoch)) {
+ 		DecodedInstruction instr;
+@@ -432,7 +432,7 @@ DispatchResult Decoder::decode_and_dispatch(uint64_t pc, uint32_t raw_word)
+ 		       || (instr.ext == Extension::SVINVAL && Extensions.SVINVAL)
+ 		       || (instr.ext == Extension::H && Extensions.H);
+ 
+-		entry = {true, pc, tag, instr, enabled, ExtensionsEpoch};
++		entry = {true, pc, tag, instr, enabled, enabled ? classify_fast(instr) : FOP_SLOW, ExtensionsEpoch};
+ 	}
+ 	// The instruction is used from the cache entry itself, not copied out of
+ 	// it. Nothing between here and the return decodes, so the entry cannot
+@@ -571,3 +571,70 @@ DispatchResult Decoder::decode_and_dispatch(uint64_t pc, uint32_t raw_word)
+ 
+ 	return {false, &instr};
+ }
++
++// Prototype. The same predicates exec_32I uses to choose an operation, made
++// once when the entry is filled. Anything not listed is FOP_SLOW.
++FastOp classify_fast(const DecodedInstruction &d)
++{
++	if (!Extensions.XLEN64) return FOP_SLOW;
++	if (d.ext == Extension::M) return FOP_MEXT;
++	if (d.ext == Extension::ZIHINTPAUSE) return FOP_FENCE;   // exec_ZIHINTPAUSE only advances pc
++	if (d.ext != Extension::I && d.ext != Extension::C) return FOP_SLOW;
++	const unsigned f3 = d.funct3;
++	switch (d.opcode) {
++	case 0b0110111: return FOP_LUI;
++	case 0b0010111: return FOP_AUIPC;
++	case 0b1101111: return FOP_JAL;
++	case 0b1100111: return FOP_JALR;
++	case 0b1100011: {
++		static const FastOp b[8] = {FOP_BEQ, FOP_BNE, FOP_SLOW, FOP_SLOW, FOP_BLT, FOP_BGE, FOP_BLTU, FOP_BGEU};
++		return b[f3 & 7];
++	}
++	case 0b0000011: {
++		static const FastOp l[8] = {FOP_LB, FOP_LH, FOP_LW, FOP_LD, FOP_LBU, FOP_LHU, FOP_LWU, FOP_SLOW};
++		return l[f3 & 7];
++	}
++	case 0b0100011: {
++		static const FastOp st[8] = {FOP_SB, FOP_SH, FOP_SW, FOP_SD, FOP_SLOW, FOP_SLOW, FOP_SLOW, FOP_SLOW};
++		return st[f3 & 7];
++	}
++	case 0b0010011:
++		switch (f3) {
++		case 0b000: return FOP_ADDI;
++		case 0b010: return FOP_SLTI;
++		case 0b011: return FOP_SLTIU;
++		case 0b100: return FOP_XORI;
++		case 0b110: return FOP_ORI;
++		case 0b111: return FOP_ANDI;
++		case 0b001: return FOP_SLLI;
++		default:    return (d.funct7 & 0x7E) == 0b0100000 ? FOP_SRAI : FOP_SRLI;
++		}
++	case 0b0011011:
++		switch (f3) {
++		case 0b000: return FOP_ADDIW;
++		case 0b001: return FOP_SLLIW;
++		case 0b101: return d.funct7 == 0b0100000 ? FOP_SRAIW : FOP_SRLIW;
++		default:    return FOP_SLOW;
++		}
++	case 0b0110011:
++		switch (f3) {
++		case 0b000: return d.funct7 == 0b0100000 ? FOP_SUB : FOP_ADD;
++		case 0b001: return FOP_SLL;
++		case 0b010: return FOP_SLT;
++		case 0b011: return FOP_SLTU;
++		case 0b100: return FOP_XOR;
++		case 0b101: return d.funct7 == 0b0100000 ? FOP_SRA : FOP_SRL;
++		case 0b110: return FOP_OR;
++		default:    return FOP_AND;
++		}
++	case 0b0111011:
++		switch (f3) {
++		case 0b000: return d.funct7 == 0b0100000 ? FOP_SUBW : FOP_ADDW;
++		case 0b001: return FOP_SLLW;
++		case 0b101: return d.funct7 == 0b0100000 ? FOP_SRAW : FOP_SRLW;
++		default:    return FOP_SLOW;
++		}
++	case 0b0001111: return FOP_FENCE;
++	default: return FOP_SLOW;
++	}
++}
+diff --git a/src/riscv_decoder.hpp b/src/riscv_decoder.hpp
+index 95dff3c..bfa25d9 100644
+--- a/src/riscv_decoder.hpp
++++ b/src/riscv_decoder.hpp
+@@ -71,7 +71,23 @@ struct DispatchResult {
+ 	const DecodedInstruction *decoded;
+ };
+ 
++enum FastOp : uint8_t {
++	FOP_SLOW = 0,
++	FOP_LUI, FOP_AUIPC, FOP_JAL, FOP_JALR,
++	FOP_BEQ, FOP_BNE, FOP_BLT, FOP_BGE, FOP_BLTU, FOP_BGEU,
++	FOP_LB, FOP_LH, FOP_LW, FOP_LD, FOP_LBU, FOP_LHU, FOP_LWU,
++	FOP_SB, FOP_SH, FOP_SW, FOP_SD,
++	FOP_ADDI, FOP_SLTI, FOP_SLTIU, FOP_XORI, FOP_ORI, FOP_ANDI, FOP_SLLI, FOP_SRLI, FOP_SRAI,
++	FOP_ADDIW, FOP_SLLIW, FOP_SRLIW, FOP_SRAIW,
++	FOP_ADD, FOP_SUB, FOP_SLL, FOP_SLT, FOP_SLTU, FOP_XOR, FOP_SRL, FOP_SRA, FOP_OR, FOP_AND,
++	FOP_ADDW, FOP_SUBW, FOP_SLLW, FOP_SRLW, FOP_SRAW,
++	FOP_FENCE,
++	FOP_MEXT,
++};
++FastOp classify_fast(const DecodedInstruction &d);
++
+ class Decoder {
++	friend class DoomSystem;
+ public:
+ 	Decoder(RiscvCore &core, Registers &regs, Memory &mem);
+ 
+@@ -156,10 +172,12 @@ private:
+ 		uint32_t raw_instr = 0;
+ 		DecodedInstruction decoded{};
+ 		bool enabled = false;
++		uint8_t fop = FOP_SLOW;
+ 		uint32_t epoch = 0;   // ExtensionsEpoch the entry was decoded under
+ 	};
+ 	static constexpr uint32_t CACHE_BITS = 17;
+ 	static constexpr uint32_t CACHE_SIZE = 1u << CACHE_BITS;
+ 	static constexpr uint32_t CACHE_MASK = CACHE_SIZE - 1;
++	static uint32_t index(uint64_t pc) { return (uint32_t)((pc >> 1) & CACHE_MASK); }
+ 	std::vector<CacheEntry> cache;
+ };

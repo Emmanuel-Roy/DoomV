@@ -418,6 +418,9 @@ last time that array's layout looked improvable.
 
 ## What is left
 
+[RESEARCH.md](RESEARCH.md) has the next round: a prototype fast-path loop, 2.57x
+on doom and 1.93x on linux with identical crash.logs, and what to do after it.
+
 The candidates the histograms point at now that fetch, loads and stores are
 cached. Nothing here is measured except where it says so.
 
