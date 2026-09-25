@@ -41,11 +41,37 @@ else
   LTO =
 endif
 
+# Profile-guided optimization, whenever there is a profile to use. PGO with
+# ThinLTO is the fastest this emulator builds -- 1.37-1.39x over ThinLTO alone
+# on the machine performance/README.md was measured on, 1.44x on another --
+# so once `python performance/pgo.py` has trained a profile, every `make`
+# builds with it: scripts/build.py, the gate and a bare `make` alike, which
+# makes the fast build the one that gets run and the one that gets tested.
+# `scripts/build.py` trains one itself the first time the guests exist.
+#
+# A profile is only advice about which branches are hot. A stale one makes the
+# code less well arranged, never different in what it does, so edits after
+# training cost speed and nothing else; Clang's per-file warnings about stale
+# or missing data are silenced rather than repeated for seventy files, and
+# re-running pgo.py refreshes the profile. `make PROFILE=` builds without one.
+#
+# Clang only. GCC keeps a .gcda per object, tied to the path it was built for,
+# so a GCC profile is used by pgo.py's own build and not reused here.
+PROFILE = build/pgo/doomv.profdata
+ifneq ($(findstring clang,$(CXX)),)
+  ifneq ($(PROFILE),)
+    ifneq ($(wildcard $(PROFILE)),)
+      PGO = -fprofile-use=$(PROFILE) -Wno-profile-instr-unprofiled -Wno-profile-instr-out-of-date -Wno-backend-plugin
+      PGO_DEP = $(PROFILE)
+    endif
+  endif
+endif
+
 # -frounding-math is for GCC; Clang accepts and ignores it, which is harmless
 # here because nothing depends on the compiler preserving the FP environment
 # across a call -- the flags are collected before the rounding mode is
 # restored, deliberately, see ext_fp_common.hpp's collect_fflags.
-CXXFLAGS = -std=c++2a -O3 -pthread $(LTO) -frounding-math -static-libgcc -static-libstdc++ -Wl,-Bstatic,--whole-archive -lwinpthread -Wl,--no-whole-archive,-Bdynamic
+CXXFLAGS = -std=c++2a -O3 -pthread $(LTO) $(PGO) -frounding-math -static-libgcc -static-libstdc++ -Wl,-Bstatic,--whole-archive -lwinpthread -Wl,--no-whole-archive,-Bdynamic
 
 # Include and Library paths
 #
@@ -103,7 +129,7 @@ $(SOFTFLOAT_OBJDIR)/%.o: $(SOFTFLOAT_DIR)/%.c
 # that was already fixed. Before SoftFloat, `all` was phony and always
 # relinked, so nothing depended on this being right.
 HEADERS = $(wildcard src/*.hpp src/extensions/*.hpp src/include/*.h)
-$(OUT): $(SOFTFLOAT_OBJS) $(SRCS) $(HEADERS)
+$(OUT): $(SOFTFLOAT_OBJS) $(SRCS) $(HEADERS) $(PGO_DEP)
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -o $(OUT) $(SRCS) $(SOFTFLOAT_OBJS) $(LIBS)
 
 # Portable file deletion. GNU Make's built-in $(RM) is hardcoded to `rm -f`,

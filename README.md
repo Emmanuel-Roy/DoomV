@@ -387,16 +387,23 @@ make clean
 ```
 
 Under Clang the default build uses ThinLTO; under GCC it does not, because
-GCC 8.1 cannot link this project with LTO at all. For the fastest binary, add
-a profile — this runs both benchmark workloads to train on, so it takes a few
-minutes:
+GCC 8.1 cannot link this project with LTO at all.
+
+Under Clang it is also profile-guided, once there is a profile. PGO on top of
+ThinLTO is the fastest build there is, so it is the one that gets run:
+`scripts/build.py` trains a profile the first time it has a guest to train on
+(a few minutes -- it runs the benchmark workloads), keeps it as
+`build/pgo/doomv.profdata`, and from then on every `make` uses it. Training
+again is one command, worth running after changing the hot path; a profile
+that has gone stale costs speed, never correctness:
 
 ```
-python performance/pgo.py            # PGO, with the compiler make would use
-python performance/pgo.py --lto      # ...and LTO
+python performance/pgo.py            # (re)train, then build with the new profile
+make PROFILE=                        # build without it
 ```
 
-It overwrites `riscv_doom.exe`; a plain `make` puts the ordinary build back.
+Under GCC, `pgo.py` still builds a PGO binary, but its profile is tied to that
+build and the next `make` is an ordinary one.
 
 `DOOM1.WAD` (the shareware IWAD) is the only WAD checked into this repo —
 it's free to redistribute. Point it at your own `DOOM.WAD`/`DOOM2.WAD` if

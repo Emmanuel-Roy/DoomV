@@ -14,16 +14,27 @@ name each profile after the *output* they were compiled for; building the two
 stages to different paths leaves the final build looking for profiles that do
 not exist (it says so, per file, as -Wmissing-profile).
 
---cxx/--cc build with another compiler, and --lto adds -flto. Neither is the
-default: the installed GCC 8.1 cannot link this project with -flto at all, and
-a newer GCC is not assumed to be present. See performance/README.md for what
-each combination measured.
+--cxx/--cc build with another compiler, and --lto adds -flto to GCC's builds
+and to the instrumented one. Under Clang the final build has ThinLTO anyway,
+because it is the Makefile's. Neither is the default for GCC: the installed
+GCC 8.1 cannot link this project with -flto at all, and a newer GCC is not
+assumed to be present. See performance/README.md for what each combination
+measured.
 
 It changes how fast the code runs, not what it does -- the sources are the
-same, and bench.py's crash.log comparison is the check. `make` stays the plain
-build: this one takes minutes, because it runs the emulator in the middle.
+same, and bench.py's crash.log comparison is the check.
 
-  python performance/pgo.py              # build riscv_doom.exe with PGO
+Under Clang the profile is kept, as build/pgo/doomv.profdata, and from then on
+every `make` builds with it (see the Makefile): training takes minutes because
+it runs the emulator, so it happens here, once, and the build that people run
+and the gate tests is the PGO one. Re-run this after changing the hot path; a
+stale profile costs speed, never correctness. The final build here is a plain
+`make` for the same reason -- it is exactly the build `make` gives afterwards,
+ThinLTO included. Under GCC nothing is kept: its profiles are tied to the
+paths this script builds to, so its PGO build is this script's alone, and the
+next `make` replaces it with a plain one.
+
+  python performance/pgo.py              # train, keep the profile, build riscv_doom.exe
   python performance/pgo.py --bench      # ...then record it against the baseline
 
 Two things this toolchain (MinGW GCC 8.1) needs, found the hard way:
@@ -49,6 +60,8 @@ import bench  # noqa: E402  (the workloads)
 PGO = ROOT / "build" / "pgo"
 GEN = PGO / "gen"
 DATA = PGO / "data"
+# The Clang profile `make` picks up -- the Makefile's PROFILE.
+PROFILE = PGO / "doomv.profdata"
 
 # The Makefile's flags without CXXFLAGS' optimization choices changed -- the
 # profile flags are added to them, nothing is taken away.
@@ -68,6 +81,20 @@ def make(out: Path, extra: str, log: Path, cxx=None, cc=None):
     if r.returncode != 0:
         raise RuntimeError(f"build failed; see {log}")
     return log.read_text(errors="replace")
+
+
+def missing_inputs(args: list[str]) -> list[str]:
+    """The files a workload's command line names that do not exist.
+
+    A path is an argument of its own or the value of a -name=value option; an
+    empty value (-drives=) names nothing.
+    """
+    missing = []
+    for arg in args:
+        value = arg.split("=", 1)[1] if arg.startswith("-") and "=" in arg else (None if arg.startswith("-") else arg)
+        if value and not Path(value).exists():
+            missing.append(value)
+    return missing
 
 
 def windows_path(p: Path) -> str:
@@ -128,7 +155,9 @@ def main():
     ap.add_argument("--baseline", type=Path, default=ROOT / "build" / "perf-baseline" / "riscv_doom.exe")
     ap.add_argument("--cxx", help="build with this C++ compiler instead of the Makefile's")
     ap.add_argument("--cc", help="...and this C compiler, for SoftFloat (defaults beside --cxx's gcc)")
-    ap.add_argument("--lto", action="store_true", help="add -flto (needs a compiler whose LTO works: not GCC 8.1)")
+    ap.add_argument("--lto", action="store_true",
+                    help="add -flto to GCC's builds and the instrumented one (Clang's final build has ThinLTO "
+                         "regardless); needs a compiler whose LTO works: not GCC 8.1")
     args = ap.parse_args()
     # An explicit --cxx wins; otherwise resolve what make would use, so the
     # profile flow below matches the compiler that actually does the building.
@@ -145,7 +174,10 @@ def main():
     if args.lto:
         lto = " -flto=thin" if clang else " -flto=auto"
 
-    shutil.rmtree(PGO, ignore_errors=True)
+    # The previous profile stays until a new one replaces it, so a training
+    # run that fails leaves `make` building with the old one, not with none.
+    shutil.rmtree(GEN, ignore_errors=True)
+    shutil.rmtree(DATA, ignore_errors=True)
     GEN.mkdir(parents=True)
     DATA.mkdir(parents=True)
     # Both stages build to this one path: GCC 11 and later name each profile
@@ -178,17 +210,29 @@ def main():
     # has only what `scripts/build.py all` produces, and ubuntu.img is not
     # that. A profile from the two core workloads is what the recorded PGO
     # numbers were measured with anyway.
+    #
+    # A workload whose inputs have not been built yet is skipped too, so that
+    # `scripts/build.py doom` can train on DOOM alone before Linux exists.
+    # A profile from one workload still speeds up the other, if less.
+    trained = 0
     for name, spec in bench.WORKLOADS.items():
         if spec.get("optional"):
             continue
+        missing = missing_inputs(spec["args"]())
+        if missing:
+            print(f"    {name}: skipped, not built: {', '.join(missing)}", flush=True)
+            continue
+        trained += 1
         cmd = [str(staged)] + spec["args"]() + [f"-stopat={spec['steps']}"]
         with (PGO / f"train-{name}.log").open("wb") as f:
             r = subprocess.run(cmd, cwd=GEN, env=env, stdin=subprocess.DEVNULL, stdout=f, stderr=subprocess.STDOUT)
         print(f"    {name}: exit {r.returncode}", flush=True)
         if r.returncode != 0:
             raise RuntimeError(f"training run {name} failed; see {PGO / f'train-{name}.log'}")
+    if not trained:
+        raise RuntimeError("no workload to train on: build a guest first (scripts/build.py doom)")
     if clang:
-        use_flags = f"-fprofile-use={windows_path(merge_profraw(args.cxx, DATA))}"
+        shutil.copy2(merge_profraw(args.cxx, DATA), PROFILE)
     else:
         profiles = sorted(DATA.rglob("*.gcda"))
         if not profiles:
@@ -197,13 +241,24 @@ def main():
         use_flags = f"-fprofile-use -fprofile-correction -fprofile-dir={windows_path(DATA)}"
 
     print("3/3 optimized build -> riscv_doom.exe", flush=True)
-    log = make(staged, f"{use_flags}{lto}", PGO / "build-use.log", args.cxx, args.cc)
-    if "profile count data file not found" in log:
-        raise RuntimeError(f"GCC found no profiles; the binary is not a PGO build. See {PGO / 'build-use.log'}")
-    if clang and "profile data may be out of date" in log:
-        print("    warning: clang reports stale profile data for some functions", flush=True)
-    shutil.copy2(staged, ROOT / "riscv_doom.exe")
-    print("done: riscv_doom.exe is a PGO build", flush=True)
+    if clang:
+        # `make` itself, with the Makefile's own flags: it finds PROFILE and
+        # adds ThinLTO, so this is the build every later `make` reproduces.
+        cmd = ["make", "-B", f"-j{os.environ.get('JOBS', '4')}", f"CXX={args.cxx}", f"CC={args.cc}"]
+        with (PGO / "build-use.log").open("wb") as f:
+            r = subprocess.run(cmd, cwd=ROOT, stdout=f, stderr=subprocess.STDOUT)
+        if r.returncode != 0:
+            raise RuntimeError(f"build failed; see {PGO / 'build-use.log'}")
+        if f"-fprofile-use={PROFILE.relative_to(ROOT).as_posix()}" not in (PGO / "build-use.log").read_text(errors="replace"):
+            raise RuntimeError(f"make did not pick up {PROFILE}; see {PGO / 'build-use.log'}")
+        print(f"done: riscv_doom.exe is a PGO build, and `make` will keep using {PROFILE.relative_to(ROOT).as_posix()}",
+              flush=True)
+    else:
+        log = make(staged, f"{use_flags}{lto}", PGO / "build-use.log", args.cxx, args.cc)
+        if "profile count data file not found" in log:
+            raise RuntimeError(f"GCC found no profiles; the binary is not a PGO build. See {PGO / 'build-use.log'}")
+        shutil.copy2(staged, ROOT / "riscv_doom.exe")
+        print("done: riscv_doom.exe is a PGO build (GCC: the next `make` is a plain one)", flush=True)
 
     if args.bench:
         for workload in bench.WORKLOADS:

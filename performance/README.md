@@ -37,12 +37,15 @@ inlined into. It needs nothing installed and no special build.
 
 **`pgo.py`** builds `riscv_doom.exe` with profile-guided optimization: an
 instrumented build, training on the two workloads, then the optimized build.
-`make` stays the plain build, because this one runs the emulator in the middle
-and takes a few minutes.
+Under Clang it keeps the profile as `build/pgo/doomv.profdata`, and the
+Makefile uses it from then on, so every `make` is the PGO build; training is
+the only slow part, and it happens here rather than in `make`.
+`scripts/build.py` runs it the first time there is a guest to train on.
 
 ```sh
-python performance/pgo.py            # riscv_doom.exe, PGO
+python performance/pgo.py            # train, keep the profile, build riscv_doom.exe
 python performance/pgo.py --bench    # ...and record it against the baseline
+make PROFILE=                        # a build without the profile
 ```
 
 `build/perf-baseline/` holds the emulator from before this work (`eaa9628`),
