@@ -133,7 +133,7 @@ looked like it did: inside an openbox session on an 8G guest, `free` reports
 7948 MB total and **7812 MB available**. X, openbox and a terminal cost about
 136 MB, not gigabytes. A crash under a desktop is not this.
 
-## `llama cli` segfaults; use `completion`
+## `llama cli` needs `--simple-io`
 
 `llama cli` crashes in the guest and `llama completion` does not. Measured:
 
@@ -144,6 +144,7 @@ looked like it did: inside an openbox session on an 8G guest, `free` reports
 | `llama cli -m ...` | SIGSEGV (139), with 7.8 GB free |
 | `cli --server-base <a live server>` | SIGSEGV (139) |
 | `cli --server-base <a port with nothing on it>` | exit 1, a clean failure |
+| `cli --simple-io -m ...` | **generates** |
 
 Those last two are the useful pair. `cli` is not an inference command: it
 spawns a server and then talks to it over HTTP as a client
@@ -152,19 +153,55 @@ crashes only once it has connected successfully, so the fault is in handling
 the server's response rather than in memory, name resolution or the model. The
 same binary serves and completes without trouble.
 
-Not chased further than that. It is llama.cpp's own client path in this
-configuration -- static, riscv64, built without OpenSSL -- and the interactive
-experience `cli` exists for is what `completion` already gives on a tty:
-
 ```sh
-/root/llama completion -m /mnt/shared/<model>.gguf
+/root/llama cli --simple-io -m /mnt/shared/<model>.gguf   # works
+/root/llama cli -m /mnt/shared/<model>.gguf               # SIGSEGV
 ```
 
-which prompts, takes a turn at a time, and is what every verified run here
-used.
+**Nothing in DoomV needs changing, and nothing in how llama is built.** The
+cause is in the guest's own C library, and the same binary would crash the same
+way on real RISC-V hardware.
+
+A core dump taken in the guest and read on the host with `gdb-multiarch` says
+it outright:
+
+```
+#0  0x0000000000000000 in ?? ()          <- a call through a null pointer
+#1  _IO_doallocbuf ()
+#2  _IO_wfile_underflow ()
+#3  _IO_wdefault_uflow ()
+#4  getwchar ()
+#5  console::readline_advanced(std::string&, bool)
+#6  cli_context::run()
+#7  llama_cli(int, char**)
+```
+
+and the kernel agrees: `cause: 0xc` (instruction page fault),
+`Unable to access instruction at 0xffffffffffffffec` -- a jump to address
+zero minus a vtable offset.
+
+`cli` reads the console with `getwchar()`, glibc's *wide-character* stdio. That
+path wants gconv modules, which glibc loads with `dlopen` -- and a statically
+linked binary cannot dlopen, so the slot in the wide-stream vtable is null and
+calling it jumps to zero. `--simple-io` makes llama.cpp read with `fgets`
+instead (`common/console.cpp`, `console::init`), which never enters glibc's
+wide-char machinery. Verified both ways in the guest: without the flag, exit
+139; with it, the interactive prompt comes up and the model answers.
+
+Static linking is still the right choice here -- it is what lets one binary run
+on a guest whose glibc (2.39) is older than the cross-compiler's (2.43), and
+nothing else in llama has minded. The alternative fixes, for the record, would
+be a cross-toolchain matching the guest's glibc so the binary can be dynamic,
+or a musl toolchain, whose static builds have no dlopen-dependent wide-char
+path.
+
+`completion` does not use that code path and needs no flag. It is interactive on
+a tty too, and is what every other verified run here used.
 
 ## Notes
 
+* **`cli` needs `--simple-io`** in this static build, or it segfaults reading
+  the console. See above.
 * **`llama-cli` does not exist any more.** Upstream folded the CLI into one
   `llama` binary with subcommands, so it is `llama completion ...`, and the
   CMake target to build is `llama-app`. `llama help` lists the rest.
