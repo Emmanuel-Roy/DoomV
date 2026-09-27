@@ -116,15 +116,29 @@ Capping the context by hand does not save it. With `-c 2048` on the same 1G
 guest it got as far as generating two words and then died the same way,
 exit 139. The context is not the problem; the total is.
 
-| guest RAM | context | result |
-|---|---|---|
-| 1G | default | SIGSEGV (139) |
-| 1G | `-c 2048` | SIGSEGV (139), a little later |
-| 4G | default | generates |
+| guest RAM | session | model | result |
+|---|---|---|---|
+| 1G | console | 323MB IQ2_XXS | SIGSEGV (139) |
+| 1G | console, `-c 2048` | 323MB | SIGSEGV (139), a little later |
+| 4G | console | 323MB | generates |
+| 4G | console | 532MB Q4_K_M | generates |
+| 4G | openbox desktop | either | SIGSEGV (139) |
 
-So: `--ram 4G` for a 323MB model, and more for a bigger one. Guest RAM that
-the model does not use costs nothing -- the allocation is lazy -- so there is
-no reason to be sparing. `run.sh` defaults to 4G for this reason.
+**A desktop changes the answer.** 4G is enough for either model on the console
+and not enough once X, openbox and a terminal are resident -- they are there
+before llama asks for anything, and that is what tips it over. The model size
+is not what matters: the 532MB model runs on 4G headless, and the 323MB one
+crashes on 4G under a desktop.
+
+So `--ram 4G` for a console run, and **8G or more when running a model inside
+a desktop session**. Guest RAM the model does not use costs nothing -- the
+allocation is lazy, and even 16G starts in 0.39s -- so there is no reason to
+be sparing. `run.sh` defaults to 4G because it boots the console, not a
+desktop.
+
+The 8G figure is the recommendation that follows from the rows above rather
+than a measured one: what was measured is that 4G is enough without a desktop
+and not enough with one.
 
 ## Notes
 
@@ -137,7 +151,8 @@ no reason to be sparing. `run.sh` defaults to 4G for this reason.
 * **Timings the model prints are about the emulated machine.** The guest clock
   comes from the instruction count, so tokens per second there is a statement
   about DoomV, not your CPU.
-* **RAM.** `-ram=4G` is comfortable for an 0.8B model. Unused guest RAM costs
+* **RAM.** `-ram=4G` is comfortable for an 0.8B model on the console, and not
+  enough for one inside a desktop session -- see above. Unused guest RAM costs
   nothing -- the allocation is lazy -- so size it for the model rather than
   sparingly. A bigger model needs a bigger `-ram=` and nothing else.
 * **Vector.** This builds for plain `rv64gc`. The guest implements far more,
