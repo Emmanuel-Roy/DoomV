@@ -198,6 +198,44 @@ path.
 `completion` does not use that code path and needs no flag. It is interactive on
 a tty too, and is what every other verified run here used.
 
+## `cli` looks like it has hung, and Ctrl+C takes two goes
+
+Both are llama.cpp behaviours that the emulator's speed makes obvious rather
+than subtle.
+
+**The silence is deliberate.** `llama_cli` opens with
+`params.verbosity = LOG_LEVEL_ERROR` -- "by default, less verbose logs" -- so
+the minutes it spends loading the model produce no output at all. `serve`
+prints its progress at the default level, which is why that looks alive and
+`cli` does not. Turn it up and the wait becomes legible:
+
+```sh
+/root/llama cli --simple-io -lv 3 -m /mnt/shared/<model>.gguf
+```
+
+`-lv` takes 0 generic, 1 error, 2 warning, 3 info, 4 trace. Nothing is wrong
+during that wait: loading a few hundred megabytes through 9p at emulated speed
+takes minutes, and it is the same wait `completion` and `serve` have -- they
+just say so.
+
+**Ctrl+C is cooperative, by design:**
+
+```c
+static void signal_handler(int) {
+    if (cli_context::interrupted().load()) {
+        std::exit(130);        // second Ctrl+C - exit immediately
+    }
+    cli_context::interrupted().store(true);
+}
+```
+
+The first press only sets a flag, which is read at the next `should_stop()`
+check -- and during a model load nothing reaches one for minutes, so it appears
+to do nothing. The second calls `std::exit`, which runs teardown while the
+spawned server thread is still mid-load and can stall there itself, which is
+what makes a third press look necessary. Not a bug worth fixing here; worth
+knowing so the first two presses are not mistaken for a hang.
+
 ## Notes
 
 * **`cli` needs `--simple-io`** in this static build, or it segfaults reading

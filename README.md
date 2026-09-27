@@ -412,19 +412,19 @@ you own a copy, and rebuild the guest ELF from `tools/doom/doombuild/` to match.
 <a id="paste"></a>
 ### Pasting into the guest
 
-**Ctrl+Alt+V**, or **F8** on a Linux guest, types the host's clipboard into the
-guest. It is a paste in the
+**Ctrl+Alt+V**, or **Shift+F8** on a Linux guest, types the host's clipboard
+into the guest. It is a paste in the
 sense that matters -- the text comes from the host and lands in the guest --
 but the mechanism is the emulated keyboard, one character at a time, at the
 pace an `-input` script types. Nothing runs inside the guest to receive it, so
 it works the same at a login prompt, in a shell, in an X terminal and in
 anything else that reads a keyboard.
 
-Two keys for one thing, because a chord depends on the host and SDL agreeing
-about the modifier state and a bare key does not. If Ctrl+Alt+V does nothing,
-try F8 — and if F8 works where the chord did not, the modifiers were being
-taken by something between the keyboard and the emulator. F8 is Linux-only:
-DOOM binds every function key, and pasting into DOOM is not a thing to want.
+Two keys for one thing, because a chord and a function key get taken by
+different things, and having both means one is usually free. Shift+F8 rather
+than a bare F8 so the guest keeps F8 for itself — a lone function key is not
+free, DOOM binds all twelve and plenty of terminal programs bind them too.
+Shift+F8 is Linux-only, since pasting into DOOM is not a thing to want.
 
 Two things follow from it being typing rather than a clipboard transfer:
 
@@ -687,7 +687,7 @@ Three keys belong to the window rather than the guest:
 | Ctrl+Alt+G | Capture the mouse: fence the pointer inside the display area and hide it. DOOM also switches to deltas, so the view can keep turning. |
 | Ctrl+Alt+F | Give a Linux framebuffer the whole window instead of the dashboard's display box |
 | Ctrl+Alt+V | Paste the host's clipboard into the guest, by typing it on the emulated keyboard |
-| F8 | The same paste, on a bare key. Linux guests only — DOOM binds every function key. |
+| Shift+F8 | The same paste. Linux guests only, and Shift so the guest keeps a bare F8. |
 
 Ctrl+Alt rather than more function keys because a bare function key is not
 free -- DOOM binds all twelve, so F10 and F11 would have cost it "quit game"
