@@ -124,21 +124,44 @@ exit 139. The context is not the problem; the total is.
 | 4G | console | 532MB Q4_K_M | generates |
 | 4G | openbox desktop | either | SIGSEGV (139) |
 
-**A desktop changes the answer.** 4G is enough for either model on the console
-and not enough once X, openbox and a terminal are resident -- they are there
-before llama asks for anything, and that is what tips it over. The model size
-is not what matters: the 532MB model runs on 4G headless, and the 323MB one
-crashes on 4G under a desktop.
+`--ram 4G` is enough for either of these models. More is free -- the allocation
+is lazy, and even 16G starts in 0.39s -- so size it for the model rather than
+sparingly. `run.sh` defaults to 4G.
 
-So `--ram 4G` for a console run, and **8G or more when running a model inside
-a desktop session**. Guest RAM the model does not use costs nothing -- the
-allocation is lazy, and even 16G starts in 0.39s -- so there is no reason to
-be sparing. `run.sh` defaults to 4G because it boots the console, not a
-desktop.
+A desktop session does *not* change this, which was worth measuring because it
+looked like it did: inside an openbox session on an 8G guest, `free` reports
+7948 MB total and **7812 MB available**. X, openbox and a terminal cost about
+136 MB, not gigabytes. A crash under a desktop is not this.
 
-The 8G figure is the recommendation that follows from the rows above rather
-than a measured one: what was measured is that 4G is enough without a desktop
-and not enough with one.
+## `llama cli` segfaults; use `completion`
+
+`llama cli` crashes in the guest and `llama completion` does not. Measured:
+
+| command | result |
+|---|---|
+| `llama completion -m ...` | generates |
+| `llama serve -m ...` | loads the model, listens on 127.0.0.1:8080 |
+| `llama cli -m ...` | SIGSEGV (139), with 7.8 GB free |
+| `cli --server-base <a live server>` | SIGSEGV (139) |
+| `cli --server-base <a port with nothing on it>` | exit 1, a clean failure |
+
+Those last two are the useful pair. `cli` is not an inference command: it
+spawns a server and then talks to it over HTTP as a client
+(`tools/cli/cli-client.cpp`). It fails *politely* when it cannot connect and
+crashes only once it has connected successfully, so the fault is in handling
+the server's response rather than in memory, name resolution or the model. The
+same binary serves and completes without trouble.
+
+Not chased further than that. It is llama.cpp's own client path in this
+configuration -- static, riscv64, built without OpenSSL -- and the interactive
+experience `cli` exists for is what `completion` already gives on a tty:
+
+```sh
+/root/llama completion -m /mnt/shared/<model>.gguf
+```
+
+which prompts, takes a turn at a time, and is what every verified run here
+used.
 
 ## Notes
 
