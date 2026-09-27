@@ -210,6 +210,27 @@ private:
 	size_t replay_pos = 0;
 	bool replaying = false;
 
+	// Ctrl+Alt+V: the host's clipboard, typed into the guest.
+	//
+	// A paste is typing, and is handled as typing: the window thread reads the
+	// clipboard and leaves the text here, and the CPU thread presses the keys
+	// through the same path an -input script's `type` uses, at the same pace.
+	// The guest has no idea it was a paste, which is what makes it work at a
+	// login prompt, in a shell and in an X terminal alike without a guest
+	// agent -- and what makes it go through commit_input, so -record captures
+	// it and -replay reproduces it like any other input.
+	//
+	// The other direction, guest to host, is not here and cannot be done this
+	// way: the guest's selection lives inside the guest, and reading it needs
+	// something running in there to hand it over.
+	std::mutex paste_mutex;
+	std::string paste_incoming;                        // window thread -> CPU thread
+	std::string paste_typing;                          // CPU thread
+	size_t paste_pos = 0;
+	uint64_t paste_due = 0;
+	void submit_paste(const std::string &text);        // window thread
+	void run_paste(uint64_t now);                      // CPU thread
+
 	// The -input script, run by the CPU thread. See run_script.
 	std::string input_script_path;
 	std::vector<std::string> script_lines;

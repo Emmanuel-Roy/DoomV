@@ -1628,6 +1628,7 @@ void DoomSystem::service_input(uint64_t now)
 	}
 
 	run_script(now);
+	run_paste(now);
 
 	if (input_waiting.load(std::memory_order_relaxed)) {
 		std::vector<GuestInput> batch;
@@ -1662,6 +1663,47 @@ void DoomSystem::service_input(uint64_t now)
 		record_dirty = false;
 	}
 	memory.pump_input();
+}
+
+void DoomSystem::submit_paste(const std::string &text)
+{
+	std::lock_guard<std::mutex> lock(paste_mutex);
+	// Appended, not replaced: two pastes in quick succession should both
+	// arrive, in order, rather than the second cutting the first short.
+	// Bounded for the same reason submit_input is -- a paused machine types
+	// nothing, and the clipboard can hold a lot.
+	if (paste_incoming.size() + text.size() > (1u << 20)) return;
+	paste_incoming += text;
+}
+
+// Types whatever Ctrl+Alt+V has queued, one character at a time, at the pace
+// exec_script_line's `type` uses. Slower than the host can paste on purpose:
+// the keystrokes go to a tty or an X client that has to read them, and a
+// burst arrives faster than either drains.
+//
+// Independent of run_script rather than sharing its queue: a script is a
+// recorded sequence with its own timing, and a paste landing in the middle of
+// one would interleave two texts into the same keyboard. Pasting while a
+// script runs simply waits for it.
+void DoomSystem::run_paste(uint64_t now)
+{
+	if (paste_typing.empty()) {
+		std::lock_guard<std::mutex> lock(paste_mutex);
+		if (paste_incoming.empty()) return;
+		paste_typing.swap(paste_incoming);
+		paste_pos = 0;
+		paste_due = now;
+	}
+	// A script owns the keyboard while it runs; see above.
+	if (script_active) return;
+	while (paste_pos < paste_typing.size() && now >= paste_due) {
+		type_script_char(now, paste_typing[paste_pos++]);
+		paste_due = now + 20 * SCRIPT_INSTR_PER_MS;
+	}
+	if (paste_pos >= paste_typing.size()) {
+		paste_typing.clear();
+		paste_pos = 0;
+	}
 }
 
 void DoomSystem::run_script(uint64_t now)
@@ -1894,6 +1936,16 @@ void DoomSystem::run()
 				// would do nothing and cost the guest a keystroke.
 				if (ctrl_alt && ev.sdl_keysym == SDLK_f && linux_mode) {
 					gui.toggle_fb_fullscreen();
+					continue;
+				}
+				// Ctrl+Alt+V pastes the host clipboard by typing it. SDL's
+				// clipboard belongs to the thread that set the video mode,
+				// which is this one.
+				if (ctrl_alt && ev.sdl_keysym == SDLK_v) {
+					if (char *text = SDL_GetClipboardText()) {
+						submit_paste(text);
+						SDL_free(text);
+					}
 					continue;
 				}
 			}

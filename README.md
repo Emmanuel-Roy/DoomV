@@ -409,6 +409,34 @@ build and the next `make` is an ordinary one.
 it's free to redistribute. Point it at your own `DOOM.WAD`/`DOOM2.WAD` if
 you own a copy, and rebuild the guest ELF from `tools/doom/doombuild/` to match.
 
+<a id="paste"></a>
+### Pasting into the guest
+
+**Ctrl+Alt+V** types the host's clipboard into the guest. It is a paste in the
+sense that matters -- the text comes from the host and lands in the guest --
+but the mechanism is the emulated keyboard, one character at a time, at the
+pace an `-input` script types. Nothing runs inside the guest to receive it, so
+it works the same at a login prompt, in a shell, in an X terminal and in
+anything else that reads a keyboard.
+
+Two things follow from it being typing rather than a clipboard transfer:
+
+* **It goes at typing speed** -- deliberately. The keystrokes are read by a
+  tty or an X client that has to keep up, and a burst arrives faster than
+  either drains. A long paste takes a moment.
+* **It is input like any other**, committed on an instruction count, so
+  `-record` captures it and `-replay` reproduces it exactly. What it does not
+  do is make the *timing* of your keypress reproducible: that is outside the
+  machine, same as any other live typing (see [Determinism](scripts/README.md)).
+
+Pasting while an `-input` script is running waits for the script to finish,
+rather than interleaving two texts into one keyboard.
+
+**The other direction is not supported.** Copying from the guest to the host
+cannot be done this way: the selection lives inside the guest, and getting it
+out needs something running in there to hand it over -- a clipboard agent of
+the kind SPICE uses. Nothing like that is in the guest today.
+
 <a id="the-gate"></a>
 ### The gate
 
@@ -651,6 +679,7 @@ Three keys belong to the window rather than the guest:
 | F9 | Resume from a debugger halt |
 | Ctrl+Alt+G | Capture the mouse: fence the pointer inside the display area and hide it. DOOM also switches to deltas, so the view can keep turning. |
 | Ctrl+Alt+F | Give a Linux framebuffer the whole window instead of the dashboard's display box |
+| Ctrl+Alt+V | Paste the host's clipboard into the guest, by typing it on the emulated keyboard |
 
 Ctrl+Alt rather than more function keys because a bare function key is not
 free -- DOOM binds all twelve, so F10 and F11 would have cost it "quit game"
