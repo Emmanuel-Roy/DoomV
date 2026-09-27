@@ -93,6 +93,39 @@ assistant
 The capital of France is the capital of
 ```
 
+## "Segmentation fault" loading the model
+
+Give the guest more memory. This is the one failure worth knowing in advance,
+because llama.cpp reports it as a crash rather than as running out of room.
+
+Reproduced here on a 1G guest, which is what `boot.py ubuntu` gives you without
+`--ram`:
+
+```
+W common_fit_params: failed to fit params to free device memory:
+  was unable to fit model into system memory by reducing context, abort
+EXIT-DEFAULTCTX=139
+```
+
+139 is 128+11, a SIGSEGV. llama.cpp notices it cannot fit, tries shrinking the
+context on its own -- 163584 down to 4096 -- fails, and then segfaults instead
+of exiting. Nothing in the kernel log: no OOM killer, no message naming memory.
+Just a crash while loading.
+
+Capping the context by hand does not save it. With `-c 2048` on the same 1G
+guest it got as far as generating two words and then died the same way,
+exit 139. The context is not the problem; the total is.
+
+| guest RAM | context | result |
+|---|---|---|
+| 1G | default | SIGSEGV (139) |
+| 1G | `-c 2048` | SIGSEGV (139), a little later |
+| 4G | default | generates |
+
+So: `--ram 4G` for a 323MB model, and more for a bigger one. Guest RAM that
+the model does not use costs nothing -- the allocation is lazy -- so there is
+no reason to be sparing. `run.sh` defaults to 4G for this reason.
+
 ## Notes
 
 * **`llama-cli` does not exist any more.** Upstream folded the CLI into one

@@ -32,6 +32,15 @@ OUT="$WORK/run-$(basename "${MODEL_PATH%.gguf}").log"
 MODEL="/mnt/shared/$(basename "$MODEL_PATH")"
 mkdir -p "$WORK"
 
+# A model that does not fit does not fail politely: llama.cpp warns that it
+# "failed to fit params", then segfaults, with nothing in the kernel log to
+# say memory was the problem. 1G is reliably too little for even an 0.8B
+# model. Warn rather than refuse -- a tiny model may genuinely be fine.
+case "$RAM" in
+    *G|*g) [ "${RAM%[Gg]}" -lt 2 ] 2>/dev/null && echo "warning: RAM=$RAM is small; a model that does not fit segfaults rather than erroring (see tools/llama/README.md)" >&2 ;;
+    *M|*m) echo "warning: RAM=$RAM is small; a model that does not fit segfaults rather than erroring (see tools/llama/README.md)" >&2 ;;
+esac
+
 # sleep N is N x 10,000 instructions, not wall-clock, so this script behaves
 # the same on any host. Generous rather than tuned: the run ends when the guest
 # powers off, so an early wake costs nothing.
