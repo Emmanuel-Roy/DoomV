@@ -1,0 +1,337 @@
+# Ubuntu root filesystem
+
+`src/` is a git submodule of
+[Ubuntu's debootstrap source](https://git.launchpad.net/ubuntu/+source/debootstrap),
+pinned to the `applied/ubuntu/noble` branch — Ubuntu's packaging rather than
+Debian's, because the suite scripts differ and `scripts/noble` only exists in
+Ubuntu's tree.
+
+`mkrootfs.sh` builds `ubuntu.img`, a GPT-partitioned ext4 disk image holding
+an Ubuntu 24.04 riscv64 root filesystem with systemd as PID 1. Both are
+gitignored build output, same as every other `tools/*` artifact.
+
+## Why this is separate from `../rootfs/`
+
+`../rootfs/` builds a BusyBox initramfs: one static binary, exec'd directly
+as PID 1 by `rdinit=/bin/sh`. It proves the kernel boots. It proves almost
+nothing about the machine underneath, because BusyBox's shell asks the kernel
+for very little.
+
+Ubuntu asks for a great deal. systemd needs cgroups, epoll, signalfd,
+timerfd, inotify, mount namespaces, a working monotonic clock and a real
+`/proc` and `/sys`; the package tooling needs a filesystem it can actually
+write; and all of it runs as several hundred processes rather than one. A
+machine that boots BusyBox is not thereby known to boot a distribution, and
+the gap between the two is where the interesting emulator bugs live.
+
+Keeping it in its own directory with its own submodule follows the pattern
+the rest of `tools/` already uses: one third-party source pinned per
+component, with DoomV's own build script beside it rather than inside it.
+
+## Building, in two stages
+
+Stage 1 unpacks; stage 2 configures. The split is not a convenience -- it is
+how cross-architecture bootstrapping works, and it is where the interesting
+decision is.
+
+```
+git submodule update --init tools/linux/ubuntu/src
+wsl -d Ubuntu -u root -- apt-get install -y gdisk
+wsl -d Ubuntu -u root -- bash /mnt/z/Code/Dev/DoomV/tools/linux/ubuntu/mkrootfs.sh
+tools/linux/ubuntu/boot-stage2.sh
+```
+
+**Stage 1** (`mkrootfs.sh`, on the host) runs `debootstrap --foreign`, which
+unpacks the `.debs` and executes nothing from the target architecture. That is
+precisely what makes it possible on an x86 machine. It downloads from
+`ports.ubuntu.com` -- riscv64 is a *ports* architecture and is not on
+`archive.ubuntu.com`.
+
+**Stage 2** (`boot-stage2.sh`) configures those packages, which means running
+riscv64 `dpkg`, its maintainer scripts, and the perl and shell those fork.
+**DoomV runs it.** The image is booted with `init=/doomv-stage2` and the
+emulator does the work.
+
+The ordinary way to do this is `qemu-user-static` plus binfmt, letting the
+host execute the target's binaries. That is deliberately not what happens
+here, and not because qemu is unavailable: the point of an emulator that
+boots Linux is that it can run the distribution's own tooling. If DoomV can
+configure a hundred Ubuntu packages then it is running real riscv64 userspace
+under real load, which is a far stronger statement than any conformance suite
+makes -- and if it cannot, that is a bug worth finding. Expect it to take a
+long while -- a Linux boot measured about 6.6 MIPS when stage 2 was built
+(`tools/verification/bench_boot.sh` measures yours, and
+[performance/](../../../performance/README.md) records what has changed
+since), and this is a great deal of dpkg.
+
+Stage 2 is unattended, and it took three separate fixes to make that true.
+The guest powers itself off through SBI SRST and the `sifive,test0` device in
+the device tree -- without that device a guest's `poweroff` returns "not
+supported" and the machine sits at a dead prompt, which is why the device
+exists at all. But `poweroff` in an Ubuntu rootfs is systemd's and wants to
+talk to a running systemd, which there is not when the stage-2 script is PID
+1, so the script goes through `/proc/sysrq-trigger` instead; that needs
+`CONFIG_MAGIC_SYSRQ`, which riscv `defconfig` leaves off and
+`scripts/build_linux.sh` now enables; and the emulator had to actually *read*
+the register it had been acknowledging writes to. See
+[Part XI of BUGS.md](../../../docs/BUGS.md#part-xi-toc).
+
+`boot-stage2.sh` does not depend on any of that. It runs the emulator in the
+background and ends the run itself when the completion marker appears in the
+log, so a four-hour build does not hinge on which kernel happens to be in
+`build/linux`. The marker is printed after the guest's `sync`, so it means
+"the image is on disk" rather than "the script got this far".
+
+### Checking out a POSIX tool on Windows breaks it twice
+
+Both of these are handled by the script, and both are worth knowing about
+because they apply to any vendored shell tool, not just this one. The parent
+`.gitattributes` deliberately leaves `tools/*/src` alone -- submodules keep
+whatever upstream uses -- and upstream debootstrap ships no `.gitattributes`
+of its own, so it arrives from a Windows clone damaged in two independent
+ways.
+
+**Line endings.** `core.autocrlf=true` gives every file CRLF, and debootstrap
+is POSIX shell:
+
+```
+debootstrap: line 2: set: -: invalid option
+```
+
+**Symlinks.** Git on Windows cannot create them without developer mode, so it
+writes each one out as a one-line text file containing the target's name. 47
+of debootstrap's 70 suite scripts are symlinks -- `scripts/noble` is the five
+bytes `gutsy` -- so sourcing one runs its target's *name* as a command:
+
+```
+scripts/noble: gutsy: not found
+```
+
+That one is genuinely nasty, because debootstrap has already redirected its
+own output by the time it happens: the visible symptom is an exit status of
+127 and complete silence. Finding it took running debootstrap under `sh -x`
+and reading the last twenty lines of the trace.
+
+`mkrootfs.sh` works from a copy in a temp directory with CRs stripped and the
+symlinks materialised, rather than requiring every checkout to be configured
+correctly.
+
+### Host dependencies debootstrap does not check
+
+`zstd`, in particular. Noble compresses `.deb` payloads with it, a WSL
+install does not ship it, and debootstrap's failure mode is another bare exit
+127 from inside the unpack loop with no indication of which tool was missing.
+`mkrootfs.sh` checks `wget ar gpgv xz zstd` up front and names the package to
+install.
+
+## Booting
+
+```
+python scripts/boot.py ubuntu            # window, systemd, logs in as root by itself
+python scripts/boot.py ubuntu --no-autologin  # window, stop at the login prompt
+python scripts/boot.py ubuntu --no-build # skip the kernel rebuild
+python scripts/boot.py ubuntu --headless # no window; kernel log on stdout
+python scripts/boot.py ubuntu --login    # headless self-check, see below
+```
+
+`tools/linux/ubuntu/boot.sh` does the same thing from MSYS2/Git Bash and
+compiles its own device tree through WSL; the Python script uses the
+`ubuntu.dtb` that `scripts/build_linux.sh` already produces, so it needs no
+WSL round trip to start.
+
+`--login` is the unattended check: it boots headless, waits for the login
+prompt, and then types a username, a password and a command **through the
+emulated keyboard**, so it exercises the virtio-input device and the VT
+layer rather than just the boot. It leaves `build/logs/ubuntu-login.log` and
+a framebuffer dump beside it.
+
+In the window it logs itself in: once getty prints `doomv login:`, the
+boot script types `root` and `doomv` through the emulated keyboard, the same
+way `--login` does, and the shell on tty1 is yours. The waits count
+instructions, so the login lands at the same point in every boot. The image
+is not changed for this -- getty still asks, a headless boot still stops at
+the prompt, and `--no-autologin` stops there in the window too. A `--desktop`
+session needs none of it: its service starts X as root without a login.
+
+The account is `root` / `doomv`. The window, with `FB_SIMPLE` in the
+kernel and the `framebuffer@50000000` node in the device tree the console is
+a real 1168x1056 framebuffer rather than a serial log -- Ubuntu being
+*displayed* by the emulator, not merely logged by it. Pass `-ng` for the log
+instead.
+
+You can type at it, too: the device tree carries a `virtio-input` keyboard
+and mouse, and the keyboard binds the VT layer's own handler, so `doomv
+login:` on tty1 is a prompt rather than a picture of one. At 1920x1080 the
+console is shown at 1:1 with the registers and trace log beside it;
+Ctrl+Alt+F gives it the whole window, and Ctrl+Alt+G grabs the mouse. See
+[Input](../../../README.md#input).
+
+Two things not to do:
+
+* **No `-initrd`.** With an initramfs present the kernel runs that instead
+  and never mounts the disk, which looks like a successful boot of nothing.
+  Both scripts strip the `linux,initrd-*` properties rather than leaving them
+  pointing at a stale address, because a `/chosen` that claims an initramfs
+  that was never loaded is how you get a kernel unpacking garbage.
+* **No `init=` override** after stage 2. `init=/bin/sh` reaches a shell far
+  faster and skips systemd entirely, which is the whole point of this image.
+
+## Desktops
+
+The image can also boot into an X11 desktop, drawn on the same framebuffer
+and driven by the same virtio keyboard and mouse. Three are installed side by
+side, and which one starts is a boot option:
+
+```
+python scripts/boot.py ubuntu --install-desktops   # once; DoomV does the install
+python scripts/boot.py ubuntu --desktop openbox    # Xorg + Openbox + xterm
+python scripts/boot.py ubuntu --desktop xfce       # the XFCE desktop
+python scripts/boot.py ubuntu --desktop x          # bare X: xterm windows, no window manager
+```
+
+Plain `boot.py ubuntu`, without `--desktop`, is the text console as before.
+
+**Installing** follows the same split as building the image. On the host,
+`mkdesktop.sh` downloads the riscv64 packages -- 270 of them, about 124 MB --
+into the image as a local apt repository, and writes the X configuration,
+the three sessions and an install script, executing nothing riscv64. Then
+DoomV boots the image with that script as init, and the guest's own apt and
+dpkg install everything. That took about three and a half hours here --
+checking the local packages, unpacking them, then configuring them -- for
+the same reason stage 2 took four.
+`--install-desktops` copies the image to `ubuntu.pre-desktop.img` first, and
+if apt fails the local repository stays in the image so the install can
+simply be run again.
+
+**Choosing a desktop** is a kernel command line argument. Each of
+`ubuntu-openbox.dtb`, `ubuntu-xfce.dtb` and `ubuntu-x.dtb` adds
+`doomv.desktop=<name>` to the plain Ubuntu device tree, and a
+`doomv-desktop` systemd unit in the guest, which only runs when that
+argument is present, starts the matching X session on VT 7.
+
+**The X server** uses the `fbdev` driver on `/dev/fb0` and names the input
+devices explicitly -- keyboard `event0`, mouse `event1` -- because the image
+has no udev to discover them with. GNOME is not offered: it wants a GPU and
+several gigabytes of memory, and this machine has neither.
+
+Expect a desktop to take a while to appear, because systemd, then Xorg,
+then the session all start at emulated speed. Measured from power-on:
+
+| Desktop | X draws the screen | Usable |
+| --- | --- | --- |
+| Openbox | ~14 min | ~25 min, when the xterm comes up |
+| bare X | ~14 min | ~25 min, the two xterms |
+| XFCE | ~29 min | ~30 min, panel and desktop drawn |
+
+Openbox is the most responsive once it is up. Ctrl+Alt+G grabs the mouse.
+`systemd-logind` failing to start appears in the boot log on every desktop
+boot and is harmless: nothing here needs a login session manager.
+
+| Openbox | XFCE | bare X |
+|---|---|---|
+| ![Openbox with an xterm, Ubuntu 24.04 on DoomV](../../../docs/images/ubuntu-openbox.png) | ![The XFCE desktop, Ubuntu 24.04 on DoomV](../../../docs/images/ubuntu-xfce.png) | ![Two xterms on bare X, Ubuntu 24.04 on DoomV](../../../docs/images/ubuntu-x.png) |
+
+<sub>Captured from DoomV's 1168x1056 Linux framebuffer with `-fbdump`.</sub>
+
+The two xterm sessions report their progress on the serial console as
+`DOOMV-SESSION:` lines -- the session starting, the font loading, and
+`xterm is up` from the shell inside each terminal -- which is how a slow
+terminal is told apart from a broken one on a headless run. A change to the
+X configuration or the sessions reaches an installed image without
+reinstalling anything:
+
+```
+wsl -d Ubuntu -u root -- bash tools/linux/ubuntu/mkdesktop.sh --sessions-only /mnt/z/.../ubuntu.img
+```
+
+## Known constraints
+
+**Memory.** DoomV currently has 1 GB (`Memory::RAM_SIZE` in
+`src/memory.hpp`, mirrored by the `memory@80000000` node in
+`tools/linux/dts/doomv.dts` — the two have to agree). systemd in 1 GB is
+workable but tight, and `apt` is not. If the boot dies in the OOM killer,
+that pair is the thing to raise, and both must be changed together.
+
+**A guest-side timer is not a wall clock.** Guest time here is driven by
+instructions -- `mtime` advances once every two and `timebase-frequency` is
+5e8 -- so one guest second is a billion instructions,
+which is minutes of real time. A `sleep 60` inside the guest is a
+three-and-a-half *hour* wait, which is how the first version of the stage-2
+heartbeat produced no output at all. Anything scripted inside a guest that
+means to wait for a wall-clock interval has to be scaled, or keyed off work
+done rather than time passed.
+
+**Speed.** A Linux boot measured about 6.6 MIPS when this page was
+written, and the initramfs boot in [performance/](../../../performance/README.md)
+now runs at about 30 MIPS, or 36 with its PGO build -- run
+`tools/verification/bench_boot.sh` to check yours -- so a systemd boot that
+takes two seconds on hardware still takes minutes here. The figure is worth
+measuring rather than assuming: it was 1.67 MIPS before a TLB, a `read16` fast
+path and a PMP region cache, and the timings quoted on this page were taken at
+6.6. That is expected, not a fault, and
+it is why `-ng` exists for the test suites — but for this image you want the
+window, since the point is to log in and look around.
+
+**No network.** There is no NIC in this machine, so `apt` cannot reach a
+mirror from inside the guest; everything the image needs has to be in it
+before it boots. `mkrootfs.sh`'s `--include=` list is where to add packages.
+`systemd-networkd-wait-online` is disabled by the script for the same
+reason — left enabled it blocks the boot for two minutes waiting for a link
+that will never come up.
+
+## Status
+
+Built and booted. Stage 1 unpacked 104 packages on the host; DoomV ran stage 2
+and `dpkg` configured all 104 of them -- `dpkg -l` on the finished image shows
+104 `install ok installed` and nothing left unpacked, and `/sbin/init` is
+systemd. Booting that image reaches `Welcome to Ubuntu 24.04 LTS!`, `Reached
+target multi-user.target` and a `doomv login:` prompt.
+
+The framebuffer is verified the same way, with `-fbdump=<path>` rather than a
+screenshot -- a screenshot of an SDL window is not evidence, since
+`CopyFromScreen` captures whatever is actually on top of that rectangle and
+`PrintWindow` returns black for GPU-composited content. The dump comes from
+`Memory::linux_framebuffer()` itself, so it cannot be the wrong window. On the
+Ubuntu boot it holds two lines of 8x16 fbcon text at the top left:
+
+```
+Ubuntu 24.04 LTS doomv tty1
+
+doomv login: _
+```
+
+which is getty's issue banner, rendered by the kernel into DoomV's
+framebuffer. Its pixel count is small (about a thousand lit pixels of
+786432, on the 1024x768 framebuffer this was measured with -- it is
+1168x1056 now) because that is all a cleared console with a login prompt on
+it *is* -- worth knowing before concluding from a thumbnail that the screen
+is blank.
+
+And it is a prompt rather than a picture of one. With the `virtio-input`
+keyboard in the device tree, a scripted login reaches a root shell and runs
+a command, all of it through the emulated keyboard and all of it read back
+out of the framebuffer:
+
+```
+tools/linux/ubuntu/boot.sh   # or, scripted and headless:
+riscv_doom.exe -ng -expect='doomv login:' -input=login.script \
+  -fbdump=fb.ppm -kernel=build/linux/Image -dtb=... -disk=ubuntu.img
+```
+
+```
+doomv login: root
+Password:
+  ... the Ubuntu MOTD ...
+root@doomv:~# uname -srm
+Linux 6.12.0 riscv64
+root@doomv:~#
+```
+
+Two things about scripting that guest. `-expect` is matched against the raw
+byte stream, and systemd colourises unit names -- `Started
+getty@tty1.service` is really `Started \e[0;1;39mgetty@tty1.service`, so a
+needle spanning the space never fires and the script silently sends
+nothing. `doomv login:` is contiguous and safe. And the waits have to be
+generous: authenticating a password means `crypt()`, which at emulated
+speed is not quick, and typing during it gets echoed by the tty before `login` has
+finished, which looks alarming and is harmless.

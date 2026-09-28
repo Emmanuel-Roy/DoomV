@@ -1,5 +1,6 @@
 #pragma once
 #include <string>
+#include <cstdint>
 
 // Runtime-configurable, not compile-time -- every extension (and the base
 // XLEN width) can be switched on/off per run via -march= on the command
@@ -30,6 +31,95 @@ struct ExtensionConfig {
 	bool ZBS = true;
 	bool ZICOND = true; // czero.eqz/czero.nez -- RVA23 again, same reason as Zb*
 
+
+	// The RVA23 hint and reserved-encoding extensions. All six retire
+	// without architectural effect on this machine, and several were
+	// already retiring correctly by accident -- PAUSE is a FENCE, the NTL
+	// hints are C.ADD into x0, and the prefetches are ORI into x0. What
+	// enabling them buys is that the machine names them honestly, and that
+	// Zimop/Zcmop write the zero the spec requires rather than leaving rd
+	// untouched, which is the one place a "does nothing" extension can
+	// actually be wrong.
+	//
+	// Default on for the same reason as Zb*: RVA23 mandates them, so a
+	// distro userspace may emit them freely and defaulting them off would
+	// only manufacture illegal instructions.
+	bool ZIHINTPAUSE = true;
+	bool ZIHINTNTL = true;
+	bool ZIMOP = true;
+	bool ZCMOP = true;
+	bool ZICBOM = true;
+	bool ZICBOP = true;
+	// Zicboz has real behaviour, unlike the group above: cbo.zero is a
+	// store. Zawrs retires immediately, which the spec explicitly permits
+	// and which is the only implementation that terminates on one hart.
+	bool ZICBOZ = true;
+	bool ZAWRS = true;
+	// Zfa is real FP arithmetic, not a hint: fli materialises constants,
+	// fminm/fmaxm differ from FMIN/FMAX on NaN, and fleq/fltq differ from
+	// FLE/FLT only in which NaNs raise invalid.
+	bool ZFA = true;
+	// Zfhmin, not Zfh: RVA23U64 mandates the minimal half-precision set
+	// (load/store, bit moves, conversions) and makes full half-precision
+	// arithmetic an expansion option. Software is expected to widen to
+	// single, compute, and narrow back.
+	bool ZFHMIN = true;
+	// Svinval's three instructions, and the two Sv* page-table features
+	// (Svnapot's N bit, Svpbmt's memory-type field), which add no
+	// instructions and are handled in mmu.cpp.
+	bool SVINVAL = true;
+	bool SVNAPOT = true;
+	bool SVPBMT = true;
+	// Pointer masking. One flag covers Ssnpm, Smnpm and Sspm: they are the
+	// same mechanism named for which envcfg holds the PMM field, and no
+	// guest would sensibly have one without the others.
+	// Smpmp: physical memory protection. Optional in RVA23S64, but the
+	// architectural tests assume it and, more to the point, without it
+	// S and U mode reach all of memory unchecked.
+	bool SMPMP = true;
+	bool SSNPM = true;
+	// H: the hypervisor extension. Off by default -- unlike the others
+	// here it changes how existing CSR numbers behave (the VS-mode
+	// redirection), so a guest that never asked for virtualisation should
+	// not have to pay for it.
+	bool H = false;
+	// Both are RVA23 mandatory, and both are CSR-and-interrupt extensions
+	// with no instructions of their own -- which is exactly why they were
+	// missed until DoomV was audited against the profile's own machine-
+	// readable extension list rather than against a hand-written plan.
+	bool SSCOFPMF = true;
+	bool SSSTATEEN = true;
+
+	// Zkr: the entropy source. One CSR, `seed`, and no instructions -- but
+	// it is not a plain register. Reading it *consumes* entropy, so a
+	// read-only access to it is illegal rather than harmless, and which
+	// modes may reach it at all is controlled from mseccfg. Off by default
+	// like H: a machine that does not claim an entropy source should not
+	// answer as though it had one.
+	// The crypto bitmanip trio. Off by default like the other optional
+	// extensions: they add instructions in encodings that are otherwise
+	// illegal, so claiming them changes what an unknown encoding does.
+	// Full half-precision arithmetic. Zfhmin is mandatory and separate;
+	// this is the expansion option on top of it, so it implies Zfhmin.
+	bool ZFH = false;
+	bool ZBC = false;
+	bool ZBKB = false;
+	bool ZBKX = false;
+
+	bool ZKR = false;
+
+	// Zicfilp: landing pads. Every indirect jump arms an expectation that
+	// the next instruction is an `lpad`, and anything else is a
+	// software-check exception. Off by default -- turning it on changes
+	// what ordinary indirect jumps do.
+	bool ZICFILP = false;
+
+	// Zicfiss: the shadow stack. Adds `ssp`, four instructions that hide
+	// inside Zimop/Zcmop encodings when the extension is off, and a page
+	// permission -- W without R, otherwise reserved -- that means "shadow
+	// stack". Off by default for the same reason.
+	bool ZICFISS = false;
+
 	// Base ISA width, not an optional extension. Registers/Memory always
 	// store values in 64-bit containers regardless of this flag: RV32
 	// mode just means every integer op computes at 32-bit width and
@@ -48,6 +138,13 @@ struct ExtensionConfig {
 // that -- reads happen constantly (every decode), writes happen at most
 // once per run.
 inline ExtensionConfig Extensions;
+// What the hart supports, as -march chose it. Extensions is what is enabled
+// right now: misa is writable, and clearing a letter turns its extension off
+// until it is set again, so Extensions follows misa and this does not.
+inline ExtensionConfig SupportedExtensions;
+// Bumped whenever Extensions changes at run time, so anything that cached a
+// decision made under the old set -- the decode cache -- knows to redo it.
+inline uint32_t ExtensionsEpoch = 0;
 
 // Parses a GCC/toolchain-style march string ("rv64imafdc_zicsr",
 // "rv32ima", ...): resets every extension to off, sets XLEN64 from the

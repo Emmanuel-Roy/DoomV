@@ -32,7 +32,7 @@ DecodedInstruction Decoder::decode_zifencei(uint32_t raw_instr) const
 	return instr;
 }
 
-void RiscvCore::exec_ZIFENCEI(const DecodedInstruction &instr, Registers &regs, Memory &mem)
+void RiscvCore::exec_ZIFENCEI(const DecodedOp &instr, Registers &regs, Memory &mem)
 {
 	(void)mem;
 	// Nothing to synchronise -- see the file header.

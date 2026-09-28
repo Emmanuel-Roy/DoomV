@@ -4,13 +4,20 @@
 #include <cstdint>
 #include <vector>
 
-// Everything the render thread needs to draw one frame, copied out of the
-// CPU thread's live state under a lock. The render thread never touches
-// Memory/Registers/Debugger directly -- those are only ever mutated by the
-// CPU thread, which keeps the whole rest of the emulator single-threaded
-// and avoids needing locks scattered through it.
+// Everything the dashboard thread needs to draw the panels, copied out of
+// the CPU thread's live state under a lock. Neither the dashboard nor the
+// window thread touches Memory/Registers/Debugger directly -- those are only
+// ever mutated by the CPU thread, which keeps the whole rest of the emulator
+// single-threaded and avoids needing locks scattered through it.
+//
+// The framebuffer is not in here any more. It used to be, copied whole on
+// every burst -- 4.9MB for a Linux guest, whether or not a pixel had
+// changed, and whatever the guest was halfway through drawing. The display
+// thread takes frames on its own schedule now; see DoomSystem::display_loop.
 struct Snapshot {
-	std::vector<uint32_t> framebuffer = std::vector<uint32_t>(Memory::FB_W * Memory::FB_H, 0);
+	// Increments on every publish, so a reader can tell a new snapshot from
+	// the one it already drew without comparing the contents.
+	uint64_t seq = 0;
 	uint64_t x[32] = {};
 	// Just the low 64 bits of each 128-bit V register -- plenty for a
 	// dashboard display (they're all zero until V is actually implemented
@@ -31,7 +38,7 @@ struct Snapshot {
 		uint16_t addr = 0;
 		uint64_t value = 0;
 	};
-	static constexpr int CSR_PANEL_SIZE = Registers::CSR_HISTORY_SIZE;
+	static constexpr int CSR_PANEL_SIZE = Registers::CSR_TOP;
 	CsrEntry csrs[CSR_PANEL_SIZE]{};
 	int csr_count = 0;
 };

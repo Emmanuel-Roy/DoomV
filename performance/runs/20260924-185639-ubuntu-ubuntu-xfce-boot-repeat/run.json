@@ -1,0 +1,15 @@
+{
+  "time": "20260924-185639",
+  "label": "ubuntu-xfce boot, repeat",
+  "workload": "ubuntu",
+  "steps": 3000000000,
+  "seconds": 55.959,
+  "mips": 53.611,
+  "crash_log_sha256": "2ca0ac5022e11a089c8235c6b5672d0a7ea4943d0eca878a81e2aab1346f64ad",
+  "exe": "Z:\\Code\\Dev\\DoomV\\riscv_doom.exe",
+  "exe_sha256": "70627acba39786b84c352e5fa9d99de1ca3b2ed133ac945a5fdcdb53aa8198fd",
+  "commit": "cfd8034",
+  "dirty": false,
+  "host": "AMD64 Family 25 Model 97 Stepping 2, AuthenticAMD / Windows 10",
+  "profiled": false
+}

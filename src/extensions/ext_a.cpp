@@ -4,6 +4,8 @@
 #include "riscv_decoder.hpp"
 #include "riscv_core.hpp"
 #include "registers.hpp"
+#include "ext_zicfiss.hpp"
+#include "ext_h.hpp"
 #include "memory.hpp"
 #include "extensions.hpp"
 
@@ -43,6 +45,11 @@ DecodedInstruction Decoder::decode_a(uint32_t raw_instr) const
 	case 0b10100: instr.mnemonic = instr.op_64 ? "AMOMAX.D"  : "AMOMAX.W";  break;
 	case 0b11000: instr.mnemonic = instr.op_64 ? "AMOMINU.D" : "AMOMINU.W"; break;
 	case 0b11100: instr.mnemonic = instr.op_64 ? "AMOMAXU.D" : "AMOMAXU.W"; break;
+	// Zicfiss's shadow-stack swap. It is an AMO because switching stacks
+	// has to be atomic against a trap arriving mid-swap, and it sits in
+	// this space rather than the Zimop one because it needs two operands
+	// and a result.
+	case 0b01001: instr.mnemonic = instr.op_64 ? "SSAMOSWAP.D" : "SSAMOSWAP.W"; break;
 	}
 	if (instr.op_64 && !Extensions.XLEN64) instr.ext = Extension::ILLEGAL; // .D forms don't exist on RV32
 
@@ -53,7 +60,7 @@ RiscvCore::RiscvCore() : reservation_valid(false), reservation_addr(0)
 {
 }
 
-void RiscvCore::exec_32A(const DecodedInstruction &instr, Registers &regs, Memory &mem)
+void RiscvCore::exec_32A(const DecodedOp &instr, Registers &regs, Memory &mem)
 {
 	uint64_t pc = regs.get_pc();
 	uint64_t addr = regs.read_x(instr.rs1);
@@ -66,11 +73,57 @@ void RiscvCore::exec_32A(const DecodedInstruction &instr, Registers &regs, Memor
 	// virtual address (not paddr): that's fine since nothing here models
 	// a second hart or address-space switch that could alias two virtual
 	// addresses onto the same physical reservation mid-sequence.
+	// ssamoswap answers to shadow-stack permissions, not ordinary AMO ones:
+	// it may only touch a shadow stack page, which is what stops it being
+	// used as a general-purpose atomic swap that happens to bypass the
+	// write protection on one.
 	AccessType amo_access = (amo_op == 0b00010) ? AccessType::Load
 	                       : (amo_op == 0b00011) ? AccessType::Store
+	                       : (amo_op == 0b01001) ? AccessType::ShadowStack
 	                                              : AccessType::Amo;
+
+	// With the extension disabled for this mode the encoding is not an
+	// instruction at all. A guest refused by its hypervisor's envcfg gets a
+	// virtual instruction so the hypervisor can emulate the swap; refused
+	// by the machine's, an illegal one.
+	if (amo_op == 0b01001 && !cfiss::enabled(regs)) {
+		if (cfiss::denial_is_virtual(regs))
+			enter_trap(regs, hyp::CAUSE_VIRTUAL_INSTRUCTION, instr.raw);
+		else
+			raise_illegal_instruction(regs, instr.raw);
+		return;
+	}
+	// Every A-extension access must be naturally aligned, and unlike an
+	// ordinary load or store this is not softened by Zicclsm: an atomic
+	// spanning two naturally-aligned units is not something hardware can
+	// perform. DoomV checked nothing here and quietly did the access.
+	//
+	// Two details here are not what they look like, and both were got
+	// wrong before being read off the reference.
+	//
+	// The cause is an *access* fault, not an address-misaligned one. The A
+	// extension explicitly permits either -- "an address-misaligned
+	// exception or an access-fault exception will be generated" -- and the
+	// access fault is the one to raise when the misaligned access is not
+	// going to be emulated, which is this machine. Sail raises the access
+	// fault, so cause 4/6 here is a mismatch even though it looks like the
+	// more specific answer.
+	//
+	// And it comes *before* translation. An atomic to an address that is
+	// both misaligned and unmapped reports the access fault, not the page
+	// fault -- the misalignment is decided from the effective address
+	// alone and never reaches the page tables.
+	unsigned width = is64 ? 8 : 4;
+	if (addr & (width - 1)) {
+		constexpr uint64_t CAUSE_LOAD_ACCESS  = 5;
+		constexpr uint64_t CAUSE_STORE_ACCESS = 7;
+		enter_trap(regs, (amo_op == 0b00010) ? CAUSE_LOAD_ACCESS
+		                                     : CAUSE_STORE_ACCESS, addr);
+		return;
+	}
+
 	uint64_t paddr;
-	if (!translate_or_trap(regs, mem, addr, amo_access, paddr)) return;
+	if (!translate_or_trap(regs, mem, addr, amo_access, paddr, width)) return;
 
 	if (amo_op == 0b00011) { // SC.W/SC.D
 		if (reservation_valid && reservation_addr == addr) {
@@ -102,6 +155,7 @@ void RiscvCore::exec_32A(const DecodedInstruction &instr, Registers &regs, Memor
 		uint64_t result = loaded;
 		switch (amo_op) {
 		case 0b00001: result = rs2_val; break;                                          // AMOSWAP.D
+		case 0b01001: result = rs2_val; break;                                          // SSAMOSWAP.D
 		case 0b00000: result = loaded + rs2_val; break;                                 // AMOADD.D
 		case 0b00100: result = loaded ^ rs2_val; break;                                 // AMOXOR.D
 		case 0b01100: result = loaded & rs2_val; break;                                 // AMOAND.D
@@ -119,6 +173,7 @@ void RiscvCore::exec_32A(const DecodedInstruction &instr, Registers &regs, Memor
 		uint32_t result32 = loaded32;
 		switch (amo_op) {
 		case 0b00001: result32 = rs2_32; break;                                               // AMOSWAP.W
+		case 0b01001: result32 = rs2_32; break;                                               // SSAMOSWAP.W
 		case 0b00000: result32 = loaded32 + rs2_32; break;                                    // AMOADD.W
 		case 0b00100: result32 = loaded32 ^ rs2_32; break;                                    // AMOXOR.W
 		case 0b01100: result32 = loaded32 & rs2_32; break;                                    // AMOAND.W

@@ -8,7 +8,7 @@
 // trapping. This needs to know a fault is *about to* happen without taking
 // it, which translate_or_trap cannot express -- mmu_translate reports the
 // fault instead of entering it, and that is the distinction the FOF path
-// uses. Only the non-faulting case is covered by tools/vtest/vector, since
+// uses. Only the non-faulting case is covered by tools/verification/tests/differential/vector, since
 // making an access fault on purpose needs Sv39 paging set up inside the
 // test; the faulting path is exercised in practice by glibc's strlen,
 // which is the reason the encoding exists.
@@ -63,7 +63,7 @@ void st_eew(Memory &mem, uint64_t addr, int eew, uint64_t value)
 
 namespace vcommon {
 
-bool exec_v_ldst(const DecodedInstruction &instr, Registers &regs, Memory &mem, RiscvCore &core)
+bool exec_v_ldst(const DecodedOp &instr, Registers &regs, Memory &mem, RiscvCore &core)
 {
 	bool is_load = (instr.opcode == 0b0000111);
 	AccessType access = is_load ? AccessType::Load : AccessType::Store;

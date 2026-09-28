@@ -1,0 +1,15 @@
+{
+  "time": "20260925-114059",
+  "label": "Z: fast loop + retrained PGO vs merged",
+  "workload": "doom",
+  "steps": 1000000000,
+  "seconds": 3.553,
+  "mips": 281.443,
+  "crash_log_sha256": "3d73dac132f396aa505f0bc0ca70860519d439b38267eadb95954786cf97ee99",
+  "exe": "Z:\\Code\\Dev\\DoomV\\riscv_doom.exe",
+  "exe_sha256": "d4b3093f9530240edeff797ed2554284e50c2904a6f49dbc7b5e448797322d89",
+  "commit": "288b1df",
+  "dirty": true,
+  "host": "AMD64 Family 25 Model 97 Stepping 2, AuthenticAMD / Windows 10",
+  "profiled": false
+}

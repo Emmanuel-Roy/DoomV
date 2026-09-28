@@ -12,6 +12,10 @@ public:
 	void load_breakpoints(const char *path);
 	void add_breakpoint(uint64_t addr);
 	bool should_halt(uint64_t pc, bool instr_was_illegal);
+	// False when should_halt cannot return true whatever the pc: no
+	// breakpoints and no halting on illegal instructions. Checked inline
+	// before the call, which otherwise runs twice per instruction.
+	bool may_halt() const { return !breakpoints.empty() || break_on_illegal; }
 
 	void dump_log(const Registers &regs, Memory &mem, const char *path);
 
@@ -22,6 +26,9 @@ public:
 	void dump_signature(Memory &mem, uint64_t begin, uint64_t end, const char *path);
 
 	bool halted;
+	// Halt on an illegal instruction instead of letting it trap. Off by
+	// default: a guest with a handler must be allowed to take the trap.
+	bool break_on_illegal = false;
 
 	// Clears `halted` and arms a one-shot skip for `pc`. Without the skip a
 	// breakpoint could never be resumed past: pc still sits on it, so the

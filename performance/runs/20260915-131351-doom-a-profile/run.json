@@ -1,0 +1,78 @@
+{
+  "time": "20260915-131351",
+  "label": "A profile",
+  "workload": "doom",
+  "steps": 1000000000,
+  "seconds": 48.874,
+  "mips": 20.461,
+  "crash_log_sha256": "3d73dac132f396aa505f0bc0ca70860519d439b38267eadb95954786cf97ee99",
+  "exe": "Z:\\Code\\Dev\\DoomV\\riscv_doom.exe",
+  "exe_sha256": "263888edd09edea110531c2525f00cda42b6814f6f81ca16c2f98099dc13b61d",
+  "commit": "eaa9628",
+  "dirty": true,
+  "host": "AMD64 Family 25 Model 97 Stepping 2, AuthenticAMD / Windows 10",
+  "profiled": true,
+  "samples": 19183,
+  "top": [
+    [
+      "RiscvCore::translate_or_trap(Registers&, Memory&, unsigned long long, AccessType, unsigned long long&, unsigned int)",
+      3838
+    ],
+    [
+      "RiscvCore::exec_32I(DecodedInstruction const&, Registers&, Memory&)",
+      2758
+    ],
+    [
+      "pmp::check(Registers&, unsigned long long, unsigned int, int, unsigned char)",
+      2268
+    ],
+    [
+      "DoomSystem::step_execute()",
+      2209
+    ],
+    [
+      "mmu_translate(Registers&, Memory&, unsigned long long, AccessType, unsigned long long&, unsigned long long&, unsigned long long&, bool)",
+      1802
+    ],
+    [
+      "Decoder::decode_and_dispatch(unsigned long long, unsigned int)",
+      1309
+    ],
+    [
+      "Memory::read16(unsigned long long)",
+      894
+    ],
+    [
+      "DoomSystem::refresh_counter_enables()",
+      710
+    ],
+    [
+      "DoomSystem::cpu_loop()",
+      618
+    ],
+    [
+      "DoomSystem::interrupt_may_be_due()",
+      568
+    ],
+    [
+      "Registers::read_x(int) const",
+      492
+    ],
+    [
+      "Registers::write_x(int, unsigned long long)",
+      223
+    ],
+    [
+      "Memory::is_backed(unsigned long long, unsigned int) const",
+      209
+    ],
+    [
+      "RiscvCore::load_virtual(Registers&, Memory&, unsigned long long, unsigned int, unsigned long long&)",
+      181
+    ],
+    [
+      "pointer_mask_len(Registers&, PrivMode, bool, bool)",
+      176
+    ]
+  ]
+}

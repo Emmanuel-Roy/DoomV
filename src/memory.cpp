@@ -74,7 +74,7 @@ constexpr uint32_t PT_LOAD = 1;
 // both formats -- the only thing that differs is which struct types get
 // plugged in.
 template <typename Ehdr, typename Phdr>
-bool load_elf_generic(std::ifstream &file, std::vector<uint8_t> &ram)
+bool load_elf_generic(std::ifstream &file, GuestRam &ram)
 {
 	Ehdr ehdr;
 	file.read((char *)&ehdr, sizeof(ehdr));
@@ -92,7 +92,7 @@ bool load_elf_generic(std::ifstream &file, std::vector<uint8_t> &ram)
 
 		if (phdr.p_type != PT_LOAD) continue;
 		uint64_t vaddr = phdr.p_vaddr, memsz = phdr.p_memsz;
-		if (vaddr < Memory::RAM_BASE || vaddr + memsz > Memory::RAM_BASE + Memory::RAM_SIZE + Memory::WAD_SIZE) {
+		if (vaddr < Memory::RAM_BASE || vaddr + memsz > Memory::RAM_BASE + Memory::RAM_SPAN) {
 			return false;
 		}
 
@@ -114,27 +114,62 @@ bool load_elf_generic(std::ifstream &file, std::vector<uint8_t> &ram)
 
 } // namespace
 
+uint64_t Memory::RAM_SIZE = 1024ull * 1024 * 1024;
+uint64_t Memory::WAD_BASE = Memory::RAM_BASE + Memory::RAM_SIZE;
+uint64_t Memory::RAM_SPAN = Memory::RAM_SIZE + Memory::WAD_SIZE;
+
+void Memory::set_ram_size(uint64_t bytes)
+{
+	RAM_SIZE = bytes;
+	WAD_BASE = RAM_BASE + RAM_SIZE;
+	RAM_SPAN = RAM_SIZE + WAD_SIZE;
+}
+
 Memory::Memory()
-	: ram(RAM_SIZE + WAD_SIZE, 0), fb(FB_SIZE, 0),
+	: fb(FB_SIZE, 0), lfb(LFB_SIZE, 0),
 	  key_queue_head(0), key_queue_tail(0), instr_count(0), tick_counter(0), ms_accum(0), fb_write_count(0),
 	  aplic(imsic_s)
 {
+	ram.allocate(RAM_SPAN, GuestRam::from_env());
 	for (int i = 0; i < 16; i++) key_queue[i] = 0;
 }
 
 uint8_t Memory::read8(uint64_t addr)
 {
-	if (addr >= RAM_BASE && addr < RAM_BASE + RAM_SIZE + WAD_SIZE)
+	if (addr >= RAM_BASE && addr < RAM_BASE + RAM_SPAN)
 		return ram[addr - RAM_BASE];
 	if (addr >= MMIO_FB && addr < MMIO_FB + FB_SIZE)
 		return fb[addr - MMIO_FB];
+	if (addr >= LFB_BASE && addr < LFB_BASE + LFB_SIZE)
+		return lfb[addr - LFB_BASE];
 	if (addr >= UART_BASE && addr < UART_BASE + UART_SIZE)
 		return uart.read(addr - UART_BASE);
+	// virtio-input's config space is a packed struct of bytes, so unlike
+	// the block device these have to answer narrow reads.
+	if (addr >= VIRTIO_KBD_BASE && addr < VIRTIO_KBD_BASE + VIRTIO_SIZE)
+		return kbd_dev.read8(addr - VIRTIO_KBD_BASE);
+	if (addr >= VIRTIO_MOUSE_BASE && addr < VIRTIO_MOUSE_BASE + VIRTIO_SIZE)
+		return mouse_dev.read8(addr - VIRTIO_MOUSE_BASE);
+	// virtio-9p's config space holds the mount tag, read a byte at a time,
+	// and its length, read as a 16-bit load -- which read16 builds from two
+	// of these.
+	if (addr >= VIRTIO_SHARE_BASE && addr < VIRTIO_SHARE_BASE + VIRTIO_SIZE)
+		return share.read8(addr - VIRTIO_SHARE_BASE);
 	return 0;
 }
 
 uint16_t Memory::read16(uint64_t addr)
 {
+	// The same RAM fast path read32 has, and it matters more: this is the
+	// instruction fetch. Every fetch reads a halfword, a four-byte
+	// instruction reads two, and each one was walking the whole MMIO
+	// dispatch chain twice over through read8 -- four dispatches to fetch
+	// one instruction out of plain memory.
+	if (addr >= RAM_BASE && addr <= RAM_BASE + RAM_SPAN - 2) {
+		uint16_t val;
+		std::memcpy(&val, &ram[addr - RAM_BASE], sizeof(val));
+		return val;
+	}
 	return (uint16_t)read8(addr) | ((uint16_t)read8(addr + 1) << 8);
 }
 
@@ -150,8 +185,39 @@ uint32_t Memory::read32(uint64_t addr)
 	if (addr == MMIO_TICK) {
 		return tick_counter;
 	}
+	if (addr == MMIO_MOUSE_MOVE) {
+		std::lock_guard<std::mutex> lock(mouse_mutex);
+		// Saturate rather than wrap. A wrapped delta is a pointer that
+		// jumps the other way, and a mouse moved further than 32767 units
+		// between two frames is not a movement anything should try to
+		// reproduce faithfully.
+		const int cx = mouse_dx < -32768 ? -32768 : (mouse_dx > 32767 ? 32767 : mouse_dx);
+		const int cy = mouse_dy < -32768 ? -32768 : (mouse_dy > 32767 ? 32767 : mouse_dy);
+		mouse_dx = 0;
+		mouse_dy = 0;
+		return ((uint32_t)(uint16_t)(int16_t)cx << 16) | (uint32_t)(uint16_t)(int16_t)cy;
+	}
+	if (addr == MMIO_MOUSE_BTN) {
+		std::lock_guard<std::mutex> lock(mouse_mutex);
+		const uint32_t v = mouse_buttons | mouse_clicked;
+		mouse_clicked = 0;
+		return v;
+	}
+	// WAD_BASE fits in 32 bits and the guest is happy with a 32-bit
+	// pointer for it, so one word each.
+	if (addr == MMIO_WAD_BASE) return (uint32_t)WAD_BASE;
+	if (addr == MMIO_WAD_SIZE) return wad_len;
 	if (addr >= CLINT_BASE && addr < CLINT_BASE + CLINT_SIZE) return timer.read32(addr - CLINT_BASE);
 	if (addr >= APLIC_BASE && addr < APLIC_BASE + APLIC_SIZE) return aplic.read32(addr - APLIC_BASE);
+	if (addr >= VIRTIO_BASE && addr < VIRTIO_BASE + VIRTIO_SIZE) return disk.read32(addr - VIRTIO_BASE);
+	if (addr >= VIRTIO_DRIVE_BASE && addr < VIRTIO_DRIVE_BASE + NUM_DRIVES * VIRTIO_SIZE) {
+		const uint64_t off = addr - VIRTIO_DRIVE_BASE;
+		return drives[off / VIRTIO_SIZE].read32(off % VIRTIO_SIZE);
+	}
+	if (addr >= VIRTIO_SHARE_BASE && addr < VIRTIO_SHARE_BASE + VIRTIO_SIZE)
+		return share.read32(addr - VIRTIO_SHARE_BASE);
+	if (addr >= VIRTIO_KBD_BASE && addr < VIRTIO_KBD_BASE + VIRTIO_SIZE) return kbd_dev.read32(addr - VIRTIO_KBD_BASE);
+	if (addr >= VIRTIO_MOUSE_BASE && addr < VIRTIO_MOUSE_BASE + VIRTIO_SIZE) return mouse_dev.read32(addr - VIRTIO_MOUSE_BASE);
 	if (addr >= IMSIC_M_BASE && addr < IMSIC_M_BASE + IMSIC_SIZE) return 0; // seteipnum_le reads as zero, per spec
 	if (addr >= IMSIC_S_BASE && addr < IMSIC_S_BASE + IMSIC_SIZE) return 0;
 
@@ -162,9 +228,20 @@ uint32_t Memory::read32(uint64_t addr)
 	// order for free because the host (x86) is little-endian too -- already
 	// an implicit assumption everywhere else raw instruction words get
 	// manipulated directly (e.g. the decoder's immediate-field shifts).
-	if (addr >= RAM_BASE && addr <= RAM_BASE + RAM_SIZE + WAD_SIZE - 4) {
+	if (addr >= RAM_BASE && addr <= RAM_BASE + RAM_SPAN - 4) {
 		uint32_t val;
 		std::memcpy(&val, &ram[addr - RAM_BASE], sizeof(val));
+		return val;
+	}
+	// The Linux framebuffer is plain storage, so it gets the same
+	// word-at-a-time treatment RAM does. Correctness does not need this --
+	// the fallthrough below reaches it a byte at a time -- but a full
+	// repaint is three megabytes, and three million dispatches to move it
+	// is the difference between a console that scrolls and one that does
+	// not.
+	if (addr >= LFB_BASE && addr <= LFB_BASE + LFB_SIZE - 4) {
+		uint32_t val;
+		std::memcpy(&val, &lfb[addr - LFB_BASE], sizeof(val));
 		return val;
 	}
 
@@ -173,7 +250,7 @@ uint32_t Memory::read32(uint64_t addr)
 
 uint64_t Memory::read64(uint64_t addr)
 {
-	if (addr >= RAM_BASE && addr <= RAM_BASE + RAM_SIZE + WAD_SIZE - 8) {
+	if (addr >= RAM_BASE && addr <= RAM_BASE + RAM_SPAN - 8) {
 		uint64_t val;
 		std::memcpy(&val, &ram[addr - RAM_BASE], sizeof(val));
 		return val;
@@ -181,19 +258,60 @@ uint64_t Memory::read64(uint64_t addr)
 	return (uint64_t)read32(addr) | ((uint64_t)read32(addr + 4) << 32);
 }
 
+namespace {
+struct StoreCapture {
+	Memory &m;
+	const bool on;
+	StoreCapture(Memory &mem, uint64_t addr, uint64_t val, unsigned size) : m(mem), on(mem.store_log != nullptr)
+	{
+		if (on && m.store_depth++ == 0)
+			for (unsigned i = 0; i < size; i++) m.store_log->push_back({addr + i, (uint8_t)(val >> (8 * i))});
+	}
+	~StoreCapture() { if (on) m.store_depth--; }
+};
+}
+
 void Memory::write8(uint64_t addr, uint8_t val)
 {
-	if (addr >= RAM_BASE && addr < RAM_BASE + RAM_SIZE + WAD_SIZE) {
+	StoreCapture capture(*this, addr, val, 1);
+	if (addr >= RAM_BASE && addr < RAM_BASE + RAM_SPAN) {
 		ram[addr - RAM_BASE] = val;
+	} else if (addr >= LFB_BASE && addr < LFB_BASE + LFB_SIZE) {
+		lfb[addr - LFB_BASE] = val;
+		lfb_gen.store(lfb_gen.load(std::memory_order_relaxed) + 1, std::memory_order_relaxed);
 	} else if (addr >= MMIO_FB && addr < MMIO_FB + FB_SIZE) {
 		fb[addr - MMIO_FB] = val;
 		fb_write_count++;
+		fb_gen.store(fb_gen.load(std::memory_order_relaxed) + 1, std::memory_order_relaxed);
 	} else if (addr == MMIO_DEBUG) {
-		std::putchar(val);
-		std::fflush(stdout);
+		console_put(val);
 	} else if (addr >= UART_BASE && addr < UART_BASE + UART_SIZE) {
 		uart.write(addr - UART_BASE, val);
+	} else if (addr >= VIRTIO_KBD_BASE && addr < VIRTIO_KBD_BASE + VIRTIO_SIZE) {
+		kbd_dev.write8(addr - VIRTIO_KBD_BASE, val);
+	} else if (addr >= VIRTIO_MOUSE_BASE && addr < VIRTIO_MOUSE_BASE + VIRTIO_SIZE) {
+		mouse_dev.write8(addr - VIRTIO_MOUSE_BASE, val);
 	}
+}
+
+void Memory::read_bytes(uint64_t addr, uint8_t *out, size_t len)
+{
+	const uint64_t span = RAM_SPAN;
+	if (addr >= RAM_BASE && addr - RAM_BASE <= span && len <= span - (addr - RAM_BASE)) {
+		std::memcpy(out, &ram[addr - RAM_BASE], len);
+		return;
+	}
+	for (size_t i = 0; i < len; i++) out[i] = read8(addr + i);
+}
+
+void Memory::write_bytes(uint64_t addr, const uint8_t *data, size_t len)
+{
+	const uint64_t span = RAM_SPAN;
+	if (addr >= RAM_BASE && addr - RAM_BASE <= span && len <= span - (addr - RAM_BASE)) {
+		std::memcpy(&ram[addr - RAM_BASE], data, len);
+		return;
+	}
+	for (size_t i = 0; i < len; i++) write8(addr + i, data[i]);
 }
 
 uint32_t Memory::take_fb_write_count()
@@ -203,8 +321,66 @@ uint32_t Memory::take_fb_write_count()
 	return count;
 }
 
+// HTIF, checked after any store that lands on the tohost word.
+//
+// The check is here rather than in write64 because the width of the store
+// is not ours to assume: a test may write the port with sd, or with two sw
+// halves, and a 64-bit-only hook sees neither the second kind's exit nor
+// its console traffic. It reads the word back out of memory instead of
+// looking at the value passed in, so both spellings arrive at the same
+// place.
+//
+// The word is device(63:56) | command(55:48) | payload(47:0):
+//
+//   device 1, command 1  console write. The guest then *waits for the host
+//                        to clear tohost* before sending the next byte, so
+//                        with nothing answering it spins on its first
+//                        character -- which looks like a hang in the
+//                        emulator rather than an unimplemented handshake.
+//   device 0, command 0  exit, when payload bit 0 is set. The code is the
+//                        rest of the payload: 1 means pass, (n<<1)|1 names
+//                        failing subtest n.
+void Memory::check_tohost()
+{
+	// Re-entrancy guard, and it is load-bearing rather than defensive.
+	// Acknowledging a console write means storing zero to the port, and
+	// those stores come straight back here. Clearing the low half first
+	// leaves the high half still reading device 1 / command 1, so the
+	// re-entered call sees a console packet with a zero payload, prints a
+	// NUL, clears again, and never stops -- an infinite loop that looks
+	// like the guest hanging.
+	if (!tohost_addr || htif_busy) return;
+	htif_busy = true;
+	struct Guard { bool &b; ~Guard() { b = false; } } guard{htif_busy};
+	uint64_t v = (uint64_t)read32(tohost_addr) | ((uint64_t)read32(tohost_addr + 4) << 32);
+	if (v == 0) return;
+
+	const uint8_t device = (uint8_t)(v >> 56);
+	const uint8_t command = (uint8_t)(v >> 48);
+
+	if (device == 1 && command == 1) {
+		console_put((uint8_t)(v & 0xFF));
+		// Acknowledging is the whole protocol.
+		write32(tohost_addr + 0, 0);
+		write32(tohost_addr + 4, 0);
+		return;
+	}
+	if (device == 0 && command == 0 && (v & 1) && tohost_value == 0)
+		tohost_value = v;
+}
+
 void Memory::write32(uint64_t addr, uint32_t val)
 {
+	StoreCapture capture(*this, addr, val, 4);
+	// RAM first, as read32 does: most stores are to RAM, and they used to
+	// test every device window and then land a byte at a time through
+	// write8. The tohost check is the one thing a RAM store does besides
+	// storing, and it stays.
+	if (addr >= RAM_BASE && addr <= RAM_BASE + RAM_SPAN - 4) {
+		std::memcpy(&ram[addr - RAM_BASE], &val, sizeof(val));
+		if (tohost_addr && addr == tohost_addr + 4) check_tohost();
+		return;
+	}
 	// Unlike the byte-addressable devices below (RAM/framebuffer/debug
 	// putchar, all handled through write8), these are register-file-style
 	// devices whose writes need to land atomically (e.g. setipnum's
@@ -214,6 +390,30 @@ void Memory::write32(uint64_t addr, uint32_t val)
 	// MMIO_INPUT/MMIO_TICK ahead of its own RAM fast path.
 	if (addr >= CLINT_BASE && addr < CLINT_BASE + CLINT_SIZE) { timer.write32(addr - CLINT_BASE, val); return; }
 	if (addr >= APLIC_BASE && addr < APLIC_BASE + APLIC_SIZE) { aplic.write32(addr - APLIC_BASE, val); return; }
+	// A virtio register write can start I/O, which needs to read
+	// descriptors out of guest memory and raise an interrupt -- hence the
+	// device taking both back rather than being self-contained.
+	if (addr >= VIRTIO_KBD_BASE && addr < VIRTIO_KBD_BASE + VIRTIO_SIZE) {
+		kbd_dev.write32(addr - VIRTIO_KBD_BASE, val, *this, aplic);
+		return;
+	}
+	if (addr >= VIRTIO_MOUSE_BASE && addr < VIRTIO_MOUSE_BASE + VIRTIO_SIZE) {
+		mouse_dev.write32(addr - VIRTIO_MOUSE_BASE, val, *this, aplic);
+		return;
+	}
+	if (addr >= VIRTIO_DRIVE_BASE && addr < VIRTIO_DRIVE_BASE + NUM_DRIVES * VIRTIO_SIZE) {
+		const uint64_t off = addr - VIRTIO_DRIVE_BASE;
+		drives[off / VIRTIO_SIZE].write32(off % VIRTIO_SIZE, val, *this, aplic);
+		return;
+	}
+	if (addr >= VIRTIO_SHARE_BASE && addr < VIRTIO_SHARE_BASE + VIRTIO_SIZE) {
+		share.write32(addr - VIRTIO_SHARE_BASE, val, *this, aplic);
+		return;
+	}
+	if (addr >= VIRTIO_BASE && addr < VIRTIO_BASE + VIRTIO_SIZE) {
+		disk.write32(addr - VIRTIO_BASE, val, *this, aplic);
+		return;
+	}
 	if (addr >= IMSIC_M_BASE && addr < IMSIC_M_BASE + IMSIC_SIZE) {
 		if (addr - IMSIC_M_BASE == 0) imsic_m.set_pending(val); // seteipnum_le
 		return;
@@ -223,16 +423,41 @@ void Memory::write32(uint64_t addr, uint32_t val)
 		return;
 	}
 
+	if (addr >= LFB_BASE && addr <= LFB_BASE + LFB_SIZE - 4) {
+		std::memcpy(&lfb[addr - LFB_BASE], &val, sizeof(val));
+		lfb_gen.store(lfb_gen.load(std::memory_order_relaxed) + 1, std::memory_order_relaxed);
+		return;
+	}
+
+	// sifive,test0. OpenSBI's generic platform implements SBI SRST through
+	// this register, so a guest's `poweroff` arrives here as 0x5555. The
+	// flag is only set; the render thread owns process exit, because it is
+	// the thread that also owns the window.
+	if (addr >= TEST_BASE && addr < TEST_BASE + TEST_SIZE) {
+		const uint32_t cmd = val & 0xFFFF;
+		if (cmd == 0x5555 || cmd == 0x7777 || cmd == 0x3333) poweroff = true;
+		return;
+	}
+
 	write8(addr + 0, (val >> 0) & 0xFF);
 	write8(addr + 1, (val >> 8) & 0xFF);
 	write8(addr + 2, (val >> 16) & 0xFF);
 	write8(addr + 3, (val >> 24) & 0xFF);
+	// Evaluated only after the *high* half lands. write64 decomposes into
+	// two 32-bit stores, low first, so checking on the low one reads the
+	// new payload against a stale upper word: a console packet whose
+	// character happens to be odd then looks like device 0, command 0 with
+	// bit 0 set -- an exit, with the character as its code. That is exactly
+	// how the first version read a carriage return as "subtest 6 failed".
+	if (tohost_addr && addr == tohost_addr + 4) check_tohost();
 }
 
 void Memory::write64(uint64_t addr, uint64_t val)
 {
+	StoreCapture capture(*this, addr, val, 8);
 	write32(addr + 0, (uint32_t)(val & 0xFFFFFFFFu));
 	write32(addr + 4, (uint32_t)(val >> 32));
+
 }
 
 bool Memory::load_elf(const char *path)
@@ -251,7 +476,7 @@ bool Memory::load_blob(const char *path, uint64_t addr)
 	size_t len = (size_t)file.tellg();
 	file.seekg(0);
 
-	if (addr < RAM_BASE || addr + len > RAM_BASE + RAM_SIZE + WAD_SIZE) return false;
+	if (addr < RAM_BASE || addr + len > RAM_BASE + RAM_SPAN) return false;
 
 	file.read((char *)&ram[addr - RAM_BASE], len);
 	return (bool)file;
@@ -261,6 +486,7 @@ bool Memory::load_wad(const uint8_t *wad_bytes, size_t len)
 {
 	if (len > WAD_SIZE) return false;
 	std::memcpy(&ram[RAM_SIZE], wad_bytes, len);
+	wad_len = (uint32_t)len;
 	return true;
 }
 
@@ -274,13 +500,79 @@ void Memory::push_key_event(bool pressed, uint8_t doom_keycode)
 	key_queue_tail = next;
 }
 
-void Memory::step_instructions(uint32_t count)
+void Memory::push_mouse_motion(int dx, int dy)
 {
-	instr_count += count;
-	ms_accum += count;
-	while (ms_accum >= INSTR_PER_MS) {
-		ms_accum -= INSTR_PER_MS;
-		tick_counter++;
+	std::lock_guard<std::mutex> lock(mouse_mutex);
+	mouse_dx += dx;
+	mouse_dy += dy;
+}
+
+void Memory::push_mouse_button(int doom_bit, bool pressed)
+{
+	if (doom_bit < 0 || doom_bit > 2) return;
+	std::lock_guard<std::mutex> lock(mouse_mutex);
+	if (pressed) {
+		mouse_buttons |= (1u << doom_bit);
+		mouse_clicked |= (1u << doom_bit);
+	} else {
+		mouse_buttons &= ~(1u << doom_bit);
 	}
-	timer.tick(count);
+}
+
+// See memory.hpp for why this exists. The list mirrors the decode in the
+// read/write paths above; a region added there and forgotten here becomes an
+// access fault on real hardware DoomV claims to model, so the two belong
+// next to each other in any future edit.
+bool Memory::is_backed(uint64_t addr, unsigned size) const
+{
+	if (size == 0) size = 1;
+	uint64_t last = addr + size - 1;
+	if (last < addr) return false;   // wrapped
+
+	auto in = [&](uint64_t base, uint64_t len) {
+		return addr >= base && last < base + len;
+	};
+
+	// RAM and the WAD window are contiguous and are treated as one region:
+	// they are one allocation, and Doom's WAD really is addressable memory.
+	if (in(RAM_BASE, RAM_SPAN)) return true;
+
+	if (in(MMIO_FB, FB_SIZE)) return true;
+	if (in(LFB_BASE, LFB_SIZE)) return true;
+	if (in(TEST_BASE, TEST_SIZE)) return true;
+	// The root disk's slot was missing from this list for as long as DOOM's
+	// framebuffer covered it, because the framebuffer's entry answered for
+	// it. Moving the framebuffer made every probe of the slot an access
+	// fault -- Linux's virtio_mmio_probe, at boot.
+	if (in(VIRTIO_BASE, VIRTIO_SIZE)) return true;
+	if (in(VIRTIO_KBD_BASE, VIRTIO_SIZE)) return true;
+	if (in(VIRTIO_MOUSE_BASE, VIRTIO_SIZE)) return true;
+	if (in(VIRTIO_DRIVE_BASE, NUM_DRIVES * VIRTIO_SIZE)) return true;
+	if (in(VIRTIO_SHARE_BASE, VIRTIO_SIZE)) return true;
+	if (in(UART_BASE, UART_SIZE)) return true;
+	if (in(CLINT_BASE, CLINT_SIZE)) return true;
+	if (in(APLIC_BASE, APLIC_SIZE)) return true;
+	if (in(IMSIC_M_BASE, IMSIC_SIZE)) return true;
+	if (in(IMSIC_S_BASE, IMSIC_SIZE)) return true;
+
+	// The three word-sized Doom control registers. Each is exactly four
+	// bytes; an eight-byte access spanning two of them is not a thing the
+	// hardware answers.
+	if (in(MMIO_INPUT, 4) || in(MMIO_TICK, 4) || in(MMIO_DEBUG, 4)) return true;
+	if (in(MMIO_MOUSE_MOVE, 4) || in(MMIO_MOUSE_BTN, 4)) return true;
+	if (in(MMIO_WAD_BASE, 4) || in(MMIO_WAD_SIZE, 4)) return true;
+
+	return false;
+}
+
+// Hand any queued input events to the guest.
+//
+// The window enqueues on its own thread; this runs on the CPU thread,
+// which is the only one entitled to touch guest memory or the device's
+// queue state. Both devices are pumped because a click and the motion
+// before it come from different devices and neither is worth delaying.
+void Memory::pump_input()
+{
+	kbd_dev.pump(*this, aplic);
+	mouse_dev.pump(*this, aplic);
 }

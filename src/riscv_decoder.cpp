@@ -5,6 +5,7 @@
 #include "registers.hpp"
 #include "memory.hpp"
 #include "extensions.hpp"
+#include <algorithm>
 
 Decoder::Decoder(RiscvCore &core, Registers &regs, Memory &mem)
 	: core(core), regs(regs), mem(mem), cache(CACHE_SIZE)
@@ -47,16 +48,43 @@ Extension Decoder::classify(uint32_t raw_instr) const
 			case 0b010000: return Extension::I;   // SRAI
 			case 0b011000: return Extension::ZBB; // rori
 			case 0b001010: return Extension::ZBB; // orc.b
-			case 0b011010: return Extension::ZBB; // rev8
+			case 0b011010:
+				// rev8 and Zbkb's brev8 share this funct6 and differ only
+				// in the immediate's rs2 field: 11000 reverses the bytes,
+				// 00111 reverses the bits inside each byte. They are
+				// complementary operations, which is why they were given
+				// neighbouring encodings rather than separate ones.
+				return ((raw_instr >> 20) & 0x1F) == 0b00111
+				       ? Extension::ZBKB : Extension::ZBB;
 			case 0b010010: return Extension::ZBS; // bexti
 			default: return Extension::ILLEGAL;
 			}
 		}
+		// Zicbop's prefetch.{i,r,w} are ORI with rd=x0 and imm[4:0] naming
+		// the variant -- an encoding base I reserves as a HINT. Only claim it
+		// when the extension is on: with it off the encoding is still a
+		// perfectly legal (result-discarding) ORI, not an illegal instruction.
+		if (funct3 == 0b110 && Extensions.ZICBOP && ((raw_instr >> 7) & 0x1F) == 0) {
+			uint32_t sel = (raw_instr >> 20) & 0x1F;
+			if (sel == 0 || sel == 1 || sel == 3) return Extension::ZICBOP;
+		}
 		return Extension::I; // ADDI/SLTI/SLTIU/XORI/ORI/ANDI
 	}
-	case 0b0001111: { // FENCE (I) / FENCE.I (Zifencei) -- split by funct3
+	case 0b0001111: { // MISC-MEM: FENCE (I), FENCE.I (Zifencei), cbo.* (Zicbom) -- split by funct3
 		uint8_t funct3 = (raw_instr >> 12) & 0x07;
-		return (funct3 == 0b001) ? Extension::ZIFENCEI : Extension::I;
+		if (funct3 == 0b001) return Extension::ZIFENCEI;
+		if (funct3 == 0b010) { // cbo.*, selected by imm: 0/1/2 are Zicbom, 4 is Zicboz
+			uint32_t imm = (raw_instr >> 20) & 0xFFF;
+			if (imm <= 2) return Extension::ZICBOM;
+			if (imm == 4) return Extension::ZICBOZ;
+			return Extension::ILLEGAL;
+		}
+		// PAUSE is FENCE pred=W, succ=none with rd/rs1/fm zero, so it already
+		// retired as a plain FENCE. Classifying it separately is what lets
+		// the dashboard name it and -march gate it.
+		if (funct3 == 0b000 && Extensions.ZIHINTPAUSE && raw_instr == 0x0100000Fu)
+			return Extension::ZIHINTPAUSE;
+		return Extension::I;
 	}
 	case 0b0011011: { // OP-IMM-32 (RV64 only): ADDIW/SLLIW/SRLIW/SRAIW, plus
 		// Zba's slli.uw and Zbb's clzw/ctzw/cpopw/roriw in the same shift space.
@@ -92,18 +120,28 @@ Extension Decoder::classify(uint32_t raw_instr) const
 			return Extension::ILLEGAL;
 		case 0b0010000: // sh1add/sh2add/sh3add
 			return (funct3 == 0b010 || funct3 == 0b100 || funct3 == 0b110) ? Extension::ZBA : Extension::ILLEGAL;
-		case 0b0000101: // min/minu/max/maxu
-			return (funct3 >= 0b100) ? Extension::ZBB : Extension::ILLEGAL;
+		case 0b0000101: // min/minu/max/maxu (Zbb), and Zbc's clmul family
+			// The same funct7 carries both, split by funct3: Zbb took the
+			// high half (0b100..0b111) and Zbc has 001/010/011.
+			if (funct3 >= 0b100) return Extension::ZBB;
+			if (funct3 == 0b001 || funct3 == 0b010 || funct3 == 0b011)
+				return Extension::ZBC;
+			return Extension::ILLEGAL;
 		case 0b0110000: // rol/ror
 			return (funct3 == 0b001 || funct3 == 0b101) ? Extension::ZBB : Extension::ILLEGAL;
 		case 0b0100100: // bclr/bext
 			return (funct3 == 0b001 || funct3 == 0b101) ? Extension::ZBS : Extension::ILLEGAL;
 		case 0b0110100: // binv
 			return (funct3 == 0b001) ? Extension::ZBS : Extension::ILLEGAL;
+		case 0b0000100: // Zbkb pack/packh
+			if (funct3 == 0b100 || funct3 == 0b111) return Extension::ZBKB;
+			return Extension::ILLEGAL;
 		case 0b0000111: // Zicond czero.eqz/czero.nez
 			return (funct3 == 0b101 || funct3 == 0b111) ? Extension::ZICOND : Extension::ILLEGAL;
-		case 0b0010100: // bset
-			return (funct3 == 0b001) ? Extension::ZBS : Extension::ILLEGAL;
+		case 0b0010100: // bset (Zbs), and Zbkx's crossbar permutations
+			if (funct3 == 0b001) return Extension::ZBS;
+			if (funct3 == 0b010 || funct3 == 0b100) return Extension::ZBKX;
+			return Extension::ILLEGAL;
 		default: return Extension::ILLEGAL;
 		}
 	}
@@ -115,9 +153,14 @@ Extension Decoder::classify(uint32_t raw_instr) const
 		case 0b0000000: return Extension::I;
 		case 0b0100000: // SUBW/SRAW
 			return (funct3 == 0b000 || funct3 == 0b101) ? Extension::I : Extension::ILLEGAL;
-		case 0b0000100: // add.uw (Zba) / zext.h (Zbb) -- same funct7, split by funct3
+		case 0b0000100: // add.uw (Zba) / zext.h (Zbb) / packw (Zbkb)
 			if (funct3 == 0b000) return Extension::ZBA;
-			if (funct3 == 0b100) return Extension::ZBB;
+			if (funct3 == 0b100) {
+				// zext.h *is* packw with rs2 = x0, and Zbb owns that
+				// spelling. Any other rs2 is a real packw.
+				uint8_t rs2 = (raw_instr >> 20) & 0x1F;
+				return rs2 == 0 ? Extension::ZBB : Extension::ZBKB;
+			}
 			return Extension::ILLEGAL;
 		case 0b0010000: // sh{1,2,3}add.uw
 			return (funct3 == 0b010 || funct3 == 0b100 || funct3 == 0b110) ? Extension::ZBA : Extension::ILLEGAL;
@@ -128,21 +171,63 @@ Extension Decoder::classify(uint32_t raw_instr) const
 	}
 	case 0b0101111: // AMO
 		return Extension::A;
-	case 0b1110011: // SYSTEM: ECALL/EBREAK/CSR*, all gated behind Zicsr
+	case 0b1110011: { // SYSTEM: ECALL/EBREAK/CSR* (Zicsr), plus Zimop's MOP.R/MOP.RR.
+		// funct3=100 is a slot Zicsr never uses. Bit 31 marks the MOP space,
+		// and bit 25 picks the one-source (MOP.R) or two-source (MOP.RR) form.
+		uint8_t funct3 = (raw_instr >> 12) & 0x07;
+		if (funct3 == 0b100) {
+			// Shared space: Zimop's MOP.R sets bit 31, the hypervisor's
+			// hlv/hsv leave it clear. Without this split hlv decodes as
+			// a may-be-operation and quietly writes zero to rd instead
+			// of reading guest memory.
+			if (raw_instr & 0x80000000u) return Extension::ZIMOP;
+			uint8_t f7 = (raw_instr >> 25) & 0x7F;
+			if (Extensions.H && f7 >= 0x30 && f7 <= 0x37) return Extension::H;
+			return Extension::ILLEGAL;
+		}
+		// Zawrs' wrs.nto/wrs.sto are two more fixed immediates in the
+		// ECALL/EBREAK/xRET/WFI space. Base I reserves these, so gating
+		// Zawrs off correctly makes them illegal rather than reverting them
+		// to some other meaning.
+		if (funct3 == 0b000 && (raw_instr == 0x00D00073u || raw_instr == 0x01D00073u))
+			return Extensions.ZAWRS ? Extension::ZAWRS : Extension::ILLEGAL;
+		// Svinval sits next to SFENCE.VMA (funct7 0x09) at 0x0B and 0x0C.
+		if (funct3 == 0b000 && ((raw_instr >> 7) & 0x1F) == 0) {
+			uint8_t f7 = (raw_instr >> 25) & 0x7F;
+			// hfence.vvma (0x11) and hfence.gvma (0x31). The latter
+			// shares its funct7 with hsv.b -- funct3 is what separates
+			// them, which is why this test is inside the funct3==0 arm.
+			if (Extensions.H && (f7 == 0x11 || f7 == 0x31)) return Extension::H;
+			// hinval.vvma (0x13) and hinval.gvma (0x33) are the Svinval
+			// forms of those two fences and carry the same privilege
+			// rules. They were decoded nowhere at all, so a guest could
+			// issue one and have it quietly succeed -- the exact hole
+			// closing SINVAL.VMA was meant to prevent, one funct7 over.
+			if (Extensions.H && Extensions.SVINVAL && (f7 == 0x13 || f7 == 0x33))
+				return Extension::H;
+			uint8_t rs2 = (raw_instr >> 20) & 0x1F;
+			if (f7 == 0x0B) return Extensions.SVINVAL ? Extension::SVINVAL : Extension::ILLEGAL;
+			if (f7 == 0x0C && ((raw_instr >> 15) & 0x1F) == 0 && (rs2 == 0 || rs2 == 1))
+				return Extensions.SVINVAL ? Extension::SVINVAL : Extension::ILLEGAL;
+		}
 		return Extension::ZICSR;
+	}
 	case 0b0000111: { // LOAD-FP: FLW (F) / FLD (D) / vector loads (V) -- share this opcode with no real
 		// collision: F/D only ever use funct3 (the spec's "width" field) 010/011, V's vector-load
 		// encoding only ever uses 000/101/110/111 (EEW 8/16/32/64), so the two spaces don't overlap.
 		uint8_t funct3 = (raw_instr >> 12) & 0x07;
 		if (funct3 == 0b011) return Extension::D;
 		if (funct3 == 0b010) return Extension::F;
+		// Width 001 is the half-precision slot, which base F/D leave unused.
+		if (funct3 == 0b001) return Extensions.ZFHMIN ? Extension::ZFHMIN : Extension::ILLEGAL;
 		if (funct3 == 0b000 || funct3 == 0b101 || funct3 == 0b110 || funct3 == 0b111) return Extension::V;
 		return Extension::ILLEGAL;
 	}
-	case 0b0100111: { // STORE-FP: FSW (F) / FSD (D) / vector stores (V) -- same split as LOAD-FP above
+	case 0b0100111: { // STORE-FP: FSW (F) / FSD (D) / FSH (Zfhmin) / vector stores (V)
 		uint8_t funct3 = (raw_instr >> 12) & 0x07;
 		if (funct3 == 0b011) return Extension::D;
 		if (funct3 == 0b010) return Extension::F;
+		if (funct3 == 0b001) return Extensions.ZFHMIN ? Extension::ZFHMIN : Extension::ILLEGAL;
 		if (funct3 == 0b000 || funct3 == 0b101 || funct3 == 0b110 || funct3 == 0b111) return Extension::V;
 		return Extension::ILLEGAL;
 	}
@@ -150,12 +235,59 @@ Extension Decoder::classify(uint32_t raw_instr) const
 	case 0b1000111: // FMSUB
 	case 0b1001011: // FNMSUB
 	case 0b1001111: // FNMADD -- funct2 (bits 26:25) splits single/double, same as OP-FP's funct7 bit0
+		// funct2 is the same format field as OP-FP's funct7 low bits.
+		if (Extensions.ZFH && ((raw_instr >> 25) & 0x3) == 0b10) return Extension::ZFH;
 		return (((raw_instr >> 25) & 0x3) == 0b01) ? Extension::D : Extension::F;
-	case 0b1010011: // OP-FP: almost every op's funct7 has single at an even value, double at +1 --
+	case 0b1010011: { // OP-FP: almost every op's funct7 has single at an even value, double at +1 --
 		// except FCVT.S.D/FCVT.D.S (0x20/0x21), which the spec lists under D since both widths are involved.
+		//
+		// Zfa shares five funct7 values with F/D and is separated by a
+		// secondary field in each case, so it has to be checked first --
+		// otherwise fli lands on FMV.W.X, fminm on FMIN, and so on.
+		uint8_t f3 = (raw_instr >> 12) & 0x07;
+		uint8_t rs2 = (raw_instr >> 20) & 0x1F;
+		if (Extensions.ZFA) {
+			switch (funct7) {
+			case 0x78: case 0x79: if (rs2 == 1) return Extension::ZFA; break;         // fli
+			case 0x14: case 0x15: if (f3 == 2 || f3 == 3) return Extension::ZFA; break; // fminm/fmaxm
+			case 0x20: case 0x21: if (rs2 == 4 || rs2 == 5) return Extension::ZFA; break; // fround/froundnx
+			case 0x61: if (rs2 == 8) return Extension::ZFA; break;                    // fcvtmod.w.d
+			case 0x50: case 0x51: if (f3 == 4 || f3 == 5) return Extension::ZFA; break; // fleq/fltq
+			default: break;
+			}
+		}
+		// Zfhmin shares 0x20/0x21 with FCVT.S.D/FCVT.D.S (rs2 == 2 is the
+		// half form) and owns 0x22, 0x72 and 0x7A outright. Together with
+		// Zfa above, funct7 0x20 alone carries three extensions separated
+		// only by rs2.
+		if (Extensions.ZFHMIN) {
+			switch (funct7) {
+			case 0x20: case 0x21: if (rs2 == 2) return Extension::ZFHMIN; break;
+			case 0x22: if (rs2 == 0 || rs2 == 1) return Extension::ZFHMIN; break;
+			// 0x72 carries both fmv.x.h and Zfh's fclass.h, told apart by
+			// funct3: 000 moves the bits, 001 classifies. Claiming the
+			// whole funct7 for Zfhmin made fclass.h execute as a bit move.
+			case 0x72: if (rs2 == 0 && f3 == 0) return Extension::ZFHMIN; break;
+			case 0x7A: if (rs2 == 0) return Extension::ZFHMIN; break;
+			default: break;
+			}
+		}
+		// Every half op is its single counterpart's funct7 with the format
+		// field (bits 26:25) set to 0b10, so the whole extension routes on
+		// one test -- after Zfa and Zfhmin above, which claim particular
+		// rs2 values inside some of the same funct7s.
+		if (Extensions.ZFH && (funct7 & 0x3) == 0b10) return Extension::ZFH;
 		if (funct7 == 0b0100000 || funct7 == 0b0100001) return Extension::D;
 		return (funct7 & 0x1) ? Extension::D : Extension::F;
+	}
 	case 0b1010111: // OP-V: vector arithmetic and vset{i}vl{i} -- its own opcode, no sharing/collision
+	case 0b1110111: // OP-VE: the vector crypto family's own major opcode.
+		// Zvkned/Zvkg/Zvknh/Zvksed/Zvksh do not live in OP-V with the rest
+		// of the vector ISA -- they were given a major opcode of their own,
+		// which is why every one of them decoded as illegal here rather
+		// than as some wrong vector operation. Classifying them as V is
+		// what gets them the vector unit's mstatus.VS enable check and the
+		// vill/vstart handling, all of which apply to them unchanged.
 		return Extension::V;
 	default:
 		return Extension::ILLEGAL;
@@ -175,17 +307,30 @@ DecodedInstruction Decoder::decode(uint32_t raw_instr, Extension ext) const
 	case 0b0101111: // AMO
 		return decode_a(raw_instr);
 	case 0b1110011: // SYSTEM
-		return decode_zicsr(raw_instr);
+		if (ext == Extension::H) return decode_h_ldst(raw_instr);
+		return (ext == Extension::ZIMOP) ? decode_zimop(raw_instr) : decode_zicsr(raw_instr);
+		// Zawrs falls through to decode_zicsr, which names it and keeps
+		// ext as classify() set it -- see ext_zawrs.cpp.
+	case 0b0001111: // MISC-MEM
+		if (ext == Extension::ZICBOM) return decode_zicbom(raw_instr);
+		if (ext == Extension::ZICBOZ) return decode_zicboz(raw_instr);
+		if (ext == Extension::ZIHINTPAUSE) return decode_zihintpause(raw_instr);
+		return decode_i(raw_instr, ext);
 	case 0b0000111: // LOAD-FP / vector load -- ext (already split by classify()) picks the side
 	case 0b0100111: // STORE-FP / vector store
+		if (ext == Extension::ZFHMIN) return decode_zfhmin(raw_instr);
 		return (ext == Extension::V) ? decode_v(raw_instr) : ((ext == Extension::D) ? decode_d(raw_instr) : decode_f(raw_instr));
 	case 0b1000011: // FMADD
 	case 0b1000111: // FMSUB
 	case 0b1001011: // FNMSUB
 	case 0b1001111: // FNMADD
 	case 0b1010011: // OP-FP
+		if (ext == Extension::ZFHMIN) return decode_zfhmin(raw_instr);
+		if (ext == Extension::ZFA) return decode_zfa(raw_instr);
+		if (ext == Extension::ZFH) return decode_zfh(raw_instr);
 		return ((ext == Extension::D) ? decode_d(raw_instr) : decode_f(raw_instr));
 	case 0b1010111: // OP-V
+	case 0b1110111: // OP-VE (vector crypto)
 		return decode_v(raw_instr);
 	case 0b0110011: // OP
 	case 0b0111011: // OP-32
@@ -194,7 +339,10 @@ DecodedInstruction Decoder::decode(uint32_t raw_instr, Extension ext) const
 		if (ext == Extension::ZBA) return decode_zba(raw_instr);
 		if (ext == Extension::ZBB) return decode_zbb(raw_instr);
 		if (ext == Extension::ZBS) return decode_zbs(raw_instr);
+		if (ext == Extension::ZBC || ext == Extension::ZBKB
+		    || ext == Extension::ZBKX) return decode_zbkb(raw_instr);
 		if (ext == Extension::ZICOND) return decode_zicond(raw_instr);
+		if (ext == Extension::ZICBOP) return decode_zicbop(raw_instr);
 		if (ext == Extension::ZIFENCEI) return decode_zifencei(raw_instr);
 		return (ext == Extension::M) ? decode_m(raw_instr) : decode_i(raw_instr, ext);
 	default:
@@ -202,8 +350,75 @@ DecodedInstruction Decoder::decode(uint32_t raw_instr, Extension ext) const
 	}
 }
 
+DecodedInstruction Decoder::describe(uint32_t raw) const
+{
+	DecodedInstruction instr;
+	if ((raw & 0x3) != 0x3) {
+		if (Extensions.C) {
+			instr = decode_compressed((uint16_t)raw);
+		} else {
+			instr = DecodedInstruction{};
+			instr.ext = Extension::ILLEGAL;
+			instr.length = 2;
+		}
+	} else {
+		instr = decode(raw, classify(raw));
+	}
+	instr.raw = raw;
+	return instr;
+}
+
+// Whether an instruction of extension `e` may execute with Extensions as they
+// are now.
+static bool extension_enabled(Extension e)
+{
+	switch (e) {
+	case Extension::I:           return Extensions.I;
+	case Extension::M:           return Extensions.M;
+	case Extension::A:           return Extensions.A;
+	case Extension::C:           return Extensions.C;
+	case Extension::ZICSR:       return Extensions.ZICSR;
+	case Extension::ZIFENCEI:    return Extensions.ZIFENCEI;
+	case Extension::F:           return Extensions.F;
+	case Extension::D:           return Extensions.D;
+	case Extension::V:           return Extensions.V;
+	case Extension::ZBA:         return Extensions.ZBA;
+	case Extension::ZBB:         return Extensions.ZBB;
+	case Extension::ZBS:         return Extensions.ZBS;
+	case Extension::ZFH:         return Extensions.ZFH;
+	case Extension::ZBC:         return Extensions.ZBC;
+	case Extension::ZBKB:        return Extensions.ZBKB;
+	case Extension::ZBKX:        return Extensions.ZBKX;
+	case Extension::ZICOND:      return Extensions.ZICOND;
+	case Extension::ZIHINTPAUSE: return Extensions.ZIHINTPAUSE;
+	case Extension::ZIHINTNTL:   return Extensions.ZIHINTNTL;
+	case Extension::ZIMOP:       return Extensions.ZIMOP;
+	case Extension::ZCMOP:       return Extensions.ZCMOP;
+	case Extension::ZICBOM:      return Extensions.ZICBOM;
+	case Extension::ZICBOP:      return Extensions.ZICBOP;
+	case Extension::ZICBOZ:      return Extensions.ZICBOZ;
+	case Extension::ZAWRS:       return Extensions.ZAWRS;
+	case Extension::ZFA:         return Extensions.ZFA;
+	case Extension::ZFHMIN:      return Extensions.ZFHMIN;
+	case Extension::SVINVAL:     return Extensions.SVINVAL;
+	case Extension::H:           return Extensions.H;
+	default:                     return false;   // ILLEGAL
+	}
+}
+
+void Decoder::sync_extensions()
+{
+	std::fill(cache.begin(), cache.end(), CacheEntry{});
+	cache_epoch = ExtensionsEpoch;
+}
+
 DispatchResult Decoder::decode_and_dispatch(uint64_t pc, uint32_t raw_word)
 {
+	// Decodes depend on the extension set, so a cache made under another one
+	// is thrown away whole. This is rare: misa is written by a test now and
+	// then and by an OS never, and a read of it no longer counts as a change.
+	if (cache_epoch != ExtensionsEpoch) sync_extensions();
+
 	// Bit[1:0] of the first halfword being != 0b11 is what marks an
 	// instruction as compressed -- checked before touching the cache, since
 	// compressed instructions only need (and are only tagged by) their
@@ -214,15 +429,25 @@ DispatchResult Decoder::decode_and_dispatch(uint64_t pc, uint32_t raw_word)
 	// Indexed by halfword, not word: compressed instructions can start on
 	// either 2-byte-aligned half of a 4-byte slot, so >>2 would alias two
 	// unrelated addresses into one cache line half the time.
-	CacheEntry &entry = cache[(pc >> 1) & CACHE_MASK];
+	//
+	// Found by byte offset rather than by index. x86 can scale an index by 8
+	// and no further, so with 32-byte entries an index has to be shifted to
+	// address a field, and with everything inlined into the run loop the
+	// compiler re-did that shift before every field it read rather than keep
+	// the result in a register, which cost DOOM 2-3% under PGO. An offset
+	// needs no scaling, so there is nothing to redo.
+	const uint64_t offset = (pc << 4) & ((uint64_t)CACHE_MASK << 5);   // ((pc >> 1) & CACHE_MASK) * 32
+	CacheEntry &entry = *reinterpret_cast<CacheEntry *>(reinterpret_cast<char *>(cache.data()) + offset);
 
-	DecodedInstruction instr;
-	bool enabled;
-	if (entry.valid && entry.addr == pc && entry.raw_instr == tag) {
-		instr = entry.decoded;
-		enabled = entry.enabled;
-	} else {
-		if (is_compressed) {
+	if (!(entry.addr == pc && entry.decoded.raw == tag)) {
+		DecodedInstruction instr;
+		if (!Extensions.C && (raw_word & 0x3) != 0x3) {
+			// A 16-bit encoding while C is off: fetched as two bytes, as
+			// ever, and illegal, since nothing decodes it.
+			instr = DecodedInstruction{};
+			instr.ext = Extension::ILLEGAL;
+			instr.length = 2;
+		} else if (is_compressed) {
 			instr = decode_compressed((uint16_t)tag);
 		} else {
 			Extension ext = classify(raw_word);
@@ -232,26 +457,51 @@ DispatchResult Decoder::decode_and_dispatch(uint64_t pc, uint32_t raw_word)
 			// dashboard/crash log instead of "???".
 			instr = decode(raw_word, ext);
 		}
+		instr.raw = tag;
+		// Whether it may execute, decided now for as long as the entry lives:
+		// the cache is emptied when the extension set changes. The decode of a
+		// disabled extension's instruction is only ever used for its length.
+		if (!extension_enabled(instr.ext)) instr.ext = Extension::ILLEGAL;
+		instr.fast_op = classify_fast(instr);   // FOP_SLOW for anything ILLEGAL
+		// The name stays behind: only the operation is cached.
+		entry.addr = pc;
+		entry.decoded = instr;
+	}
+	// The instruction is used from the cache entry itself, not copied out of
+	// it. Nothing between here and the return decodes, so the entry cannot
+	// change underneath it.
+	const DecodedOp &instr = entry.decoded;
+	const bool enabled = instr.ext != Extension::ILLEGAL;
 
-		enabled = (instr.ext == Extension::I && Extensions.I)
-		       || (instr.ext == Extension::M && Extensions.M)
-		       || (instr.ext == Extension::A && Extensions.A)
-		       || (instr.ext == Extension::C && Extensions.C)
-		       || (instr.ext == Extension::ZICSR && Extensions.ZICSR)
-		       || (instr.ext == Extension::ZIFENCEI && Extensions.ZIFENCEI)
-		       || (instr.ext == Extension::F && Extensions.F)
-		       || (instr.ext == Extension::D && Extensions.D)
-		       || (instr.ext == Extension::V && Extensions.V)
-		       || (instr.ext == Extension::ZBA && Extensions.ZBA)
-		       || (instr.ext == Extension::ZBB && Extensions.ZBB)
-		       || (instr.ext == Extension::ZBS && Extensions.ZBS)
-		       || (instr.ext == Extension::ZICOND && Extensions.ZICOND);
 
-		entry = {true, pc, tag, instr, enabled};
+	// Zicfilp: with the expectation armed, the only instruction that may
+	// execute is a landing pad. Anything else -- including a perfectly
+	// ordinary instruction that simply happens to follow an indirect jump
+	// into unmarked code -- is a software-check exception.
+	//
+	// This sits before the illegal-instruction rejection below, not after.
+	// The landing-pad check happens as the instruction is decoded, so it
+	// fires even for an encoding this hart does not implement: an attacker
+	// who lands on garbage should be told the *control flow* was wrong,
+	// which is the actionable fact, rather than that the garbage was not a
+	// valid instruction. Reporting cause 2 there loses that.
+	//
+	// LPAD is AUIPC with rd=x0. Recognising it here rather than letting it
+	// dispatch is what keeps the check to one place; ext_i.cpp clears the
+	// expectation and validates the label when it actually runs.
+	if (Extensions.ZICFILP && regs.elp) {
+		const bool is_lpad = instr.ext == Extension::I
+		                  && instr.opcode == 0b0010111 && instr.rd == 0;
+		if (!is_lpad) {
+			// tval 2 names the landing-pad check specifically, which is
+			// what tells a handler this was Zicfilp and not Zicfiss.
+			core.raise_software_check(regs, 2);
+			return {false, &instr};
+		}
 	}
 
 	if (!enabled) {
-		return {true, instr};
+		return {true, &instr};
 	}
 
 	// mstatus.VS is runtime state, not a build-time toggle, so this check
@@ -259,10 +509,11 @@ DispatchResult Decoder::decode_and_dispatch(uint64_t pc, uint32_t raw_word)
 	// (address, encoding) and would otherwise freeze whatever the vector
 	// unit's enable happened to be the first time this address ran.
 	if (instr.ext == Extension::V && !vcommon::vector_unit_enabled(regs)) {
-		return {true, instr};
+		return {true, &instr};
 	}
-	if ((instr.ext == Extension::F || instr.ext == Extension::D) && !vcommon::fp_unit_enabled(regs)) {
-		return {true, instr};
+	if ((instr.ext == Extension::F || instr.ext == Extension::D || instr.ext == Extension::ZFA
+	     || instr.ext == Extension::ZFHMIN) && !vcommon::fp_unit_enabled(regs)) {
+		return {true, &instr};
 	}
 
 	switch (instr.ext) {
@@ -297,15 +548,126 @@ DispatchResult Decoder::decode_and_dispatch(uint64_t pc, uint32_t raw_word)
 	case Extension::ZBS:
 		core.exec_ZBS(instr, regs, mem);
 		break;
+	case Extension::ZFH:
+		core.exec_ZFH(instr, regs, mem);
+		break;
+	case Extension::ZBC:
+	case Extension::ZBKB:
+	case Extension::ZBKX:
+		core.exec_ZBKB(instr, regs, mem);
+		break;
 	case Extension::ZICOND:
 		core.exec_ZICOND(instr, regs, mem);
+		break;
+	case Extension::ZIHINTPAUSE:
+		core.exec_ZIHINTPAUSE(instr, regs, mem);
+		break;
+	case Extension::ZIHINTNTL:
+		core.exec_ZIHINTNTL(instr, regs, mem);
+		break;
+	case Extension::ZIMOP:
+		core.exec_ZIMOP(instr, regs, mem);
+		break;
+	case Extension::ZCMOP:
+		core.exec_ZCMOP(instr, regs, mem);
+		break;
+	case Extension::ZICBOM:
+		core.exec_ZICBOM(instr, regs, mem);
+		break;
+	case Extension::ZICBOP:
+		core.exec_ZICBOP(instr, regs, mem);
+		break;
+	case Extension::ZICBOZ:
+		core.exec_ZICBOZ(instr, regs, mem);
+		break;
+	case Extension::ZAWRS:
+		core.exec_ZAWRS(instr, regs, mem);
+		break;
+	case Extension::ZFA:
+		core.exec_ZFA(instr, regs, mem);
+		break;
+	case Extension::ZFHMIN:
+		core.exec_ZFHMIN(instr, regs, mem);
+		break;
+	case Extension::SVINVAL:
+		core.exec_SVINVAL(instr, regs, mem);
+		break;
+	case Extension::H:
+		core.exec_H(instr, regs, mem);
 		break;
 	case Extension::V:
 		core.exec_V(instr, regs, mem);
 		break;
 	default:
-		return {true, instr};
+		return {true, &instr};
 	}
 
-	return {false, instr};
+	return {false, &instr};
+}
+
+// Prototype. The same predicates exec_32I uses to choose an operation, made
+// once when the entry is filled. Anything not listed is FOP_SLOW.
+FastOp classify_fast(const DecodedOp &d)
+{
+	if (!Extensions.XLEN64) return FOP_SLOW;
+	if (d.ext == Extension::M) return FOP_MEXT;
+	if (d.ext == Extension::ZIHINTPAUSE) return FOP_FENCE;   // exec_ZIHINTPAUSE only advances pc
+	if (d.ext != Extension::I && d.ext != Extension::C) return FOP_SLOW;
+	const unsigned f3 = d.funct3;
+	switch (d.opcode) {
+	case 0b0110111: return FOP_LUI;
+	case 0b0010111: return FOP_AUIPC;
+	case 0b1101111: return FOP_JAL;
+	case 0b1100111: return FOP_JALR;
+	case 0b1100011: {
+		static const FastOp b[8] = {FOP_BEQ, FOP_BNE, FOP_SLOW, FOP_SLOW, FOP_BLT, FOP_BGE, FOP_BLTU, FOP_BGEU};
+		return b[f3 & 7];
+	}
+	case 0b0000011: {
+		static const FastOp l[8] = {FOP_LB, FOP_LH, FOP_LW, FOP_LD, FOP_LBU, FOP_LHU, FOP_LWU, FOP_SLOW};
+		return l[f3 & 7];
+	}
+	case 0b0100011: {
+		static const FastOp st[8] = {FOP_SB, FOP_SH, FOP_SW, FOP_SD, FOP_SLOW, FOP_SLOW, FOP_SLOW, FOP_SLOW};
+		return st[f3 & 7];
+	}
+	case 0b0010011:
+		switch (f3) {
+		case 0b000: return FOP_ADDI;
+		case 0b010: return FOP_SLTI;
+		case 0b011: return FOP_SLTIU;
+		case 0b100: return FOP_XORI;
+		case 0b110: return FOP_ORI;
+		case 0b111: return FOP_ANDI;
+		case 0b001: return FOP_SLLI;
+		default:    return (d.funct7 & 0x7E) == 0b0100000 ? FOP_SRAI : FOP_SRLI;
+		}
+	case 0b0011011:
+		switch (f3) {
+		case 0b000: return FOP_ADDIW;
+		case 0b001: return FOP_SLLIW;
+		case 0b101: return d.funct7 == 0b0100000 ? FOP_SRAIW : FOP_SRLIW;
+		default:    return FOP_SLOW;
+		}
+	case 0b0110011:
+		switch (f3) {
+		case 0b000: return d.funct7 == 0b0100000 ? FOP_SUB : FOP_ADD;
+		case 0b001: return FOP_SLL;
+		case 0b010: return FOP_SLT;
+		case 0b011: return FOP_SLTU;
+		case 0b100: return FOP_XOR;
+		case 0b101: return d.funct7 == 0b0100000 ? FOP_SRA : FOP_SRL;
+		case 0b110: return FOP_OR;
+		default:    return FOP_AND;
+		}
+	case 0b0111011:
+		switch (f3) {
+		case 0b000: return d.funct7 == 0b0100000 ? FOP_SUBW : FOP_ADDW;
+		case 0b001: return FOP_SLLW;
+		case 0b101: return d.funct7 == 0b0100000 ? FOP_SRAW : FOP_SRLW;
+		default:    return FOP_SLOW;
+		}
+	case 0b0001111: return FOP_FENCE;
+	default: return FOP_SLOW;
+	}
 }

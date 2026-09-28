@@ -1,0 +1,37 @@
+doom, 1,000,000,000 steps, 46.464 MIPS while sampled (sampling every 2 ms slows the run a little)
+
+ samples  share  function
+
+    2933  35.6%  ##################################################  DoomSystem::step_execute()
+    1306  15.9%  ######################  RiscvCore::exec_32I(DecodedInstruction const&, Registers&, Memory&)
+    1262  15.3%  ######################  Decoder::decode_and_dispatch(unsigned long long, unsigned int)
+     499   6.1%  #########  DoomSystem::cpu_loop()
+     452   5.5%  ########  Registers::read_x(int) const
+     406   4.9%  #######  mmu_translate(Registers&, Memory&, unsigned long long, AccessType, unsigned long long&, unsigned long long&, unsigned long long&, bool)
+     377   4.6%  ######  RiscvCore::load_virtual(Registers&, Memory&, unsigned long long, unsigned int, unsigned long long&)
+     191   2.3%  ###  pmp::check(Registers&, unsigned long long, unsigned int, int, unsigned char)
+     129   1.6%  ##  Memory::read32(unsigned long long)
+      96   1.2%  ##  Registers::write_x(int, unsigned long long)
+      83   1.0%  #  RiscvCore::store_virtual(Registers&, Memory&, unsigned long long, unsigned int, unsigned long long)
+      68   0.8%  #  Memory::write8(unsigned long long, unsigned char)
+      64   0.8%  #  Registers::read_csr(unsigned short) const
+      60   0.7%  #  Registers::get_pc() const
+      55   0.7%  #  Registers::get_priv() const
+      40   0.5%  #  Registers::set_pc(unsigned long long)
+      38   0.5%  #  mmu_tlb_generation()
+      34   0.4%  #  Memory::write32(unsigned long long, unsigned int)
+      27   0.3%  #  Memory::is_backed(unsigned long long, unsigned int) const
+      26   0.3%  #  Memory::read8(unsigned long long)
+      25   0.3%  #  Memory::read64(unsigned long long)
+      18   0.2%  #  Timer::tick(unsigned int)
+      17   0.2%  #  Memory::write64(unsigned long long, unsigned long long)
+       7   0.1%  #  [ntdll.dll]
+       4   0.0%  #  RiscvCore::exec_32M(DecodedInstruction const&, Registers&, Memory&)
+       3   0.0%  #  [msvcrt.dll]
+       3   0.0%  #  Registers::top_csrs(unsigned short*, int) const
+       2   0.0%  #  Memory::read16(unsigned long long)
+       1   0.0%  #  Decoder::classify(unsigned int) const
+       1   0.0%  #  DoomSystem::service_input(unsigned long long)
+       1   0.0%  #  DoomSystem::run_script(unsigned long long)
+
+8228 samples

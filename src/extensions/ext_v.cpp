@@ -177,6 +177,45 @@ const char *fvv_fvf_name(uint8_t funct6)
 
 } // namespace
 
+// OP-VE mnemonics. funct6 alone is not enough for most of them: the four
+// AES round instructions share one funct6 and are told apart by the vs1
+// field, which for them is an operation selector rather than a register.
+static const char *ve_name(uint8_t funct6, uint8_t vs1)
+{
+	switch (funct6) {
+	case 0x20: return "VSM3ME.VV";
+	case 0x21: return "VSM4K.VI";
+	case 0x2b: return "VSM3C.VI";
+	case 0x2d: return "VSHA2MS.VV";
+	case 0x2e: return "VSHA2CH.VV";
+	case 0x2f: return "VSHA2CL.VV";
+	case 0x22: return "VAESKF1.VI";
+	case 0x2a: return "VAESKF2.VI";
+	case 0x2c: return "VGHSH.VV";
+	case 0x28:
+		switch (vs1) {
+		case 0: return "VAESDM.VV";
+		case 1: return "VAESDF.VV";
+		case 2: return "VAESEM.VV";
+		case 3: return "VAESEF.VV";
+		case 16: return "VSM4R.VV";
+		case 17: return "VGMUL.VV";
+		default: return "???";
+		}
+	case 0x29:
+		switch (vs1) {
+		case 0: return "VAESDM.VS";
+		case 1: return "VAESDF.VS";
+		case 2: return "VAESEM.VS";
+		case 3: return "VAESEF.VS";
+		case 7: return "VAESZ.VS";
+		case 16: return "VSM4R.VS";
+		default: return "???";
+		}
+	default: return "???";
+	}
+}
+
 DecodedInstruction Decoder::decode_v(uint32_t raw_instr) const
 {
 	DecodedInstruction instr{};
@@ -213,7 +252,12 @@ DecodedInstruction Decoder::decode_v(uint32_t raw_instr) const
 		return instr;
 	}
 
-	if (opcode != 0b1010111) return instr; // shouldn't happen -- decode() only routes these three opcodes here
+	if (opcode == 0b1110111) { // OP-VE: vector crypto
+		instr.mnemonic = ve_name(op_v_funct6(funct7), rs1);
+		return instr;
+	}
+
+	if (opcode != 0b1010111) return instr; // shouldn't happen -- decode() only routes these opcodes here
 
 	if (funct3 == 0b111) { // OPCFG: vsetvli / vsetvl / vsetivli
 		bool bit31 = (funct7 >> 6) & 1;
@@ -244,7 +288,7 @@ DecodedInstruction Decoder::decode_v(uint32_t raw_instr) const
 // here rather than duplicated into every category file. Table derived from
 // the authoritative riscv-opcodes rv_v encoding list, not recalled from
 // memory: https://github.com/riscv/riscv-opcodes/blob/master/extensions/rv_v
-void RiscvCore::exec_V(const DecodedInstruction &instr, Registers &regs, Memory &mem)
+void RiscvCore::exec_V(const DecodedOp &instr, Registers &regs, Memory &mem)
 {
 	uint64_t pc = regs.get_pc();
 
@@ -257,6 +301,21 @@ void RiscvCore::exec_V(const DecodedInstruction &instr, Registers &regs, Memory 
 		// A page fault mid-instruction already redirected pc into the trap
 		// handler -- must not then stomp it with the normal advance below.
 		if (exec_v_ldst(instr, regs, mem, *this)) regs.set_pc(pc + instr.length);
+		return;
+	}
+
+	if (instr.opcode == 0b1110111) { // OP-VE: the vector crypto families
+		// Four families share this opcode's funct6 space and two of them
+		// share a funct6 outright: 0x28/0x29 hold both the AES rounds and
+		// SM4's, told apart only by vs1 (16 is SM4, 0-3 and 7 are AES, 17
+		// is Zvkg's vgmul). So the split has to consider vs1, not funct6
+		// alone.
+		const uint8_t ve6 = op_v_funct6(instr.funct7);
+		if ((ve6 == 0x28 || ve6 == 0x29) && instr.rs1 == 16) exec_zvksm(instr, regs);
+		else if (ve6 == 0x20 || ve6 == 0x21 || ve6 == 0x2b) exec_zvksm(instr, regs);
+		else if (ve6 >= 0x2d && ve6 <= 0x2f) exec_zvknh(instr, regs);
+		else exec_zvkned(instr, regs);
+		regs.set_pc(pc + instr.length);
 		return;
 	}
 
@@ -275,7 +334,12 @@ void RiscvCore::exec_V(const DecodedInstruction &instr, Registers &regs, Memory 
 		if (funct6 == 0x0c || funct6 == 0x0e || funct6 == 0x0f) exec_v_perm(instr, regs); // rgather*/slideup/slidedown
 		else if (is_ivi && funct6 == 0x27 && vm) exec_v_perm(instr, regs);                // vmv<n>r.v
 		else if (instr.funct3 == 0b000 && (funct6 == 0x30 || funct6 == 0x31)) exec_v_reduce(instr, regs); // vwredsum(u).vs
-		else if (funct6 == 0x01) exec_zvbb(instr, regs); // vandn -- Zvbb, its own file
+		// Zvbb's OPIV* slots: vandn (0x01), vror (0x14), and 0x15 which is
+		// vrol for .vv/.vx but vror.vi with imm[5] set for .vi. vwsll (0x35)
+		// is widening. All were previously falling through to exec_v_int and
+		// being silently ignored.
+		else if (funct6 == 0x01 || funct6 == 0x14 || funct6 == 0x15 || funct6 == 0x35)
+			exec_zvbb(instr, regs); // Zvbb, its own file
 		else exec_v_int(instr, regs);
 		break;
 	}
@@ -283,8 +347,16 @@ void RiscvCore::exec_V(const DecodedInstruction &instr, Registers &regs, Memory 
 		bool is_mvv = (instr.funct3 == 0b010);
 		if (is_mvv && funct6 <= 0x07) exec_v_reduce(instr, regs);
 		else if (funct6 >= 0x08 && funct6 <= 0x0b) exec_v_muldiv(instr, regs); // averaging add/sub
+		// Zvbc's carry-less multiply. 0x0c and 0x0d are unassigned in the
+		// base vector ISA, so this needs no disambiguation -- and it has to
+		// come before the catch-all below, which was treating both as
+		// multiply-family ops and quietly producing arithmetic products.
+		else if (funct6 == 0x0c || funct6 == 0x0d) exec_zvbc(instr, regs);
 		else if (!is_mvv && (funct6 == 0x0e || funct6 == 0x0f)) exec_v_perm(instr, regs); // vslide1up/down.vx
 		else if (funct6 == 0x10) exec_v_mask(instr, regs); // vmv.x.s/vcpop.m/vfirst.m or vmv.s.x
+		// funct6 0x12 is shared: base V's vzext/vsext use vs1 2..7, Zvbb's
+		// vbrev8/vrev8/vbrev/vclz/vctz/vcpop use 8..14 in the same slot.
+		else if (is_mvv && funct6 == 0x12 && instr.rs1 >= 8) exec_zvbb_unary(instr, regs);
 		else if (is_mvv && funct6 == 0x12) exec_v_mask(instr, regs); // vext (vzext/vsext)
 		else if (is_mvv && funct6 == 0x14) exec_v_mask(instr, regs); // vmsbf/vmsof/vmsif/viota/vid
 		else if (is_mvv && funct6 == 0x17) exec_v_perm(instr, regs); // vcompress.vm

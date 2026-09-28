@@ -127,7 +127,7 @@ inline bool mask_bit(const Registers &regs, uint64_t idx)
 // other register left its real destination untouched and silently
 // clobbered the active mask instead -- `vmsne.vv v9, v1, v2` produced an
 // all-zero v9, which then made vmor.mm and vfirst.m wrong downstream.
-// Caught by the spike differential test in tools/vtest/vector/.
+// Caught by the spike differential test in tools/verification/tests/differential/vector/.
 inline void set_mask_bit(Registers &regs, int vd, uint64_t idx, bool bit)
 {
 	uint8_t *v = regs.write_v(vd);
@@ -161,7 +161,7 @@ inline bool ldst_mew(uint8_t funct7) { return (funct7 >> 3) & 1; }
 // used as an index vector, and indexed-unordered (01) became unit-stride
 // (00), ignoring the index vector entirely. Unit-stride and
 // indexed-ordered happened to survive the mangling, which is why this went
-// unnoticed. Caught by tools/vtest/vector's spike diff.
+// unnoticed. Caught by tools/verification/tests/differential/vector's spike diff.
 inline uint8_t ldst_mop(uint8_t funct7) { return (funct7 >> 1) & 0x3; }
 inline bool ldst_vm(uint8_t funct7) { return funct7 & 1; }
 
@@ -232,17 +232,22 @@ inline __int128 vxrm_round(__int128 v, int shift, uint8_t vxrm)
 // from instr.funct6 (via op_v_funct6 above)/instr.rs1/rs2/rd, matching the
 // project-wide "self-sufficient re-extraction, no shared prelude" decode
 // convention -- exec_V's job is purely routing, not field extraction.
-void exec_v_config(const DecodedInstruction &instr, Registers &regs);
+void exec_v_config(const DecodedOp &instr, Registers &regs);
 // Returns false if a page fault happened partway through (pc has already
 // been redirected into the trap handler by then -- the caller must not
 // then overwrite it by advancing pc normally).
-bool exec_v_ldst(const DecodedInstruction &instr, Registers &regs, Memory &mem, RiscvCore &core);
-void exec_v_int(const DecodedInstruction &instr, Registers &regs);
-void exec_zvbb(const DecodedInstruction &instr, Registers &regs); // Zvbb, ext_zvbb.cpp
-void exec_v_muldiv(const DecodedInstruction &instr, Registers &regs);
-void exec_v_mask(const DecodedInstruction &instr, Registers &regs);
-void exec_v_perm(const DecodedInstruction &instr, Registers &regs);
-void exec_v_reduce(const DecodedInstruction &instr, Registers &regs);
-void exec_v_fp(const DecodedInstruction &instr, Registers &regs);
+bool exec_v_ldst(const DecodedOp &instr, Registers &regs, Memory &mem, RiscvCore &core);
+void exec_v_int(const DecodedOp &instr, Registers &regs);
+void exec_zvbb(const DecodedOp &instr, Registers &regs);       // Zvbb, ext_zvbb.cpp
+void exec_zvbb_unary(const DecodedOp &instr, Registers &regs); // Zvbb's OPMVV funct6=0x12 group
+void exec_zvbc(const DecodedOp &instr, Registers &regs);
+void exec_zvkned(const DecodedOp &instr, Registers &regs);   // Zvkned/Zvkg, opcode 0x77
+void exec_zvknh(const DecodedOp &instr, Registers &regs);     // Zvknha/Zvknhb, ditto
+void exec_zvksm(const DecodedOp &instr, Registers &regs);     // Zvksed/Zvksh, ditto       // Zvbc, ext_zvbb.cpp
+void exec_v_muldiv(const DecodedOp &instr, Registers &regs);
+void exec_v_mask(const DecodedOp &instr, Registers &regs);
+void exec_v_perm(const DecodedOp &instr, Registers &regs);
+void exec_v_reduce(const DecodedOp &instr, Registers &regs);
+void exec_v_fp(const DecodedOp &instr, Registers &regs);
 
 } // namespace vcommon

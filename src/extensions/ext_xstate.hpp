@@ -1,5 +1,6 @@
 #pragma once
 #include "registers.hpp"
+#include "../extensions.hpp"
 #include <cstdint>
 
 // mstatus's extension-state fields: FS (bits 14:13) for floating point and
@@ -33,24 +34,67 @@ constexpr uint64_t MSTATUS_FS_DIRTY = 3ull << 13;
 constexpr uint64_t MSTATUS_VS_MASK  = 3ull << 9;
 constexpr uint64_t MSTATUS_VS_DIRTY = 3ull << 9;
 
+// Under virtualisation there are two fields, not one, and both must be on.
+// mstatus.FS is the hypervisor's switch over the whole hart; vsstatus.FS is
+// the guest's own over its tasks. A guest that has turned its FP unit off
+// must fault on an FP instruction even though the hypervisor left the hart's
+// unit enabled -- otherwise the guest's own context-switching, which relies
+// on that trap to know when to swap FP state in, silently stops working.
+//
+// The exception is an *illegal* instruction, not a virtual one. Nothing here
+// is the hypervisor's to emulate: the guest disabled its own unit, and the
+// guest's supervisor is exactly who should hear about it.
+constexpr uint16_t CSR_VSSTATUS_X = 0x200;
+
 inline bool fp_unit_enabled(Registers &regs)
 {
-	return (regs.read_csr(CSR_MSTATUS_X) & MSTATUS_FS_MASK) != 0;
+	if ((regs.read_csr(CSR_MSTATUS_X) & MSTATUS_FS_MASK) == 0) return false;
+	if (Extensions.H && regs.get_virt())
+		return (regs.read_csr(CSR_VSSTATUS_X) & MSTATUS_FS_MASK) != 0;
+	return true;
 }
 
 inline bool vector_unit_enabled(Registers &regs)
 {
-	return (regs.read_csr(CSR_MSTATUS_X) & MSTATUS_VS_MASK) != 0;
+	if ((regs.read_csr(CSR_MSTATUS_X) & MSTATUS_VS_MASK) == 0) return false;
+	if (Extensions.H && regs.get_virt())
+		return (regs.read_csr(CSR_VSSTATUS_X) & MSTATUS_VS_MASK) != 0;
+	return true;
 }
 
+// Dirtying follows the same pair. A guest's supervisor reads *its* SD bit to
+// decide whether a task has live FP state worth saving, so marking only the
+// hypervisor's copy leaves the guest believing nothing is live and dropping
+// its tasks' registers on every switch.
 inline void mark_fp_dirty(Registers &regs)
 {
 	regs.write_csr(CSR_MSTATUS_X, regs.read_csr(CSR_MSTATUS_X) | MSTATUS_FS_DIRTY);
+	if (Extensions.H && regs.get_virt())
+		regs.write_csr(CSR_VSSTATUS_X, regs.read_csr(CSR_VSSTATUS_X) | MSTATUS_FS_DIRTY);
 }
 
 inline void mark_vector_dirty(Registers &regs)
 {
 	regs.write_csr(CSR_MSTATUS_X, regs.read_csr(CSR_MSTATUS_X) | MSTATUS_VS_DIRTY);
+	if (Extensions.H && regs.get_virt())
+		regs.write_csr(CSR_VSSTATUS_X, regs.read_csr(CSR_VSSTATUS_X) | MSTATUS_VS_DIRTY);
+}
+
+// SD (bit 63) summarises the above: it reads as one whenever FS or VS is
+// Dirty. It is read-only and derived, never stored -- storing it would let
+// a write to mstatus set a summary that contradicts the fields it
+// summarises.
+//
+// It exists so a context switch can test a single sign bit instead of
+// extracting two fields, which is exactly what supervisors do, so a hart
+// that leaves it clear tells every one of them that no extension state is
+// live. DoomV tracked FS and VS correctly and then never published the
+// summary, which riscv-arch-test's mstatus tests caught immediately.
+inline uint64_t with_sd(uint64_t mstatus)
+{
+	bool dirty = (mstatus & MSTATUS_FS_MASK) == MSTATUS_FS_DIRTY
+	          || (mstatus & MSTATUS_VS_MASK) == MSTATUS_VS_DIRTY;
+	return dirty ? (mstatus | (1ull << 63)) : (mstatus & ~(1ull << 63));
 }
 
 } // namespace vcommon

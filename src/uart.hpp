@@ -1,9 +1,12 @@
 #pragma once
+#include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <mutex>
+#include <string>
 
 // Minimal 8250/16550-compatible UART -- just enough register behavior for
-// OpenSBI's own driver (tools/opensbi/src/lib/utils/serial/uart8250.c) to
+// OpenSBI's own driver (tools/linux/opensbi/src/lib/utils/serial/uart8250.c) to
 // treat it as a real console. Register offsets/defaults (reg-shift=0,
 // reg-io-width=1, reg-offset=0 -- confirmed against fdt_helper.c's
 // DEFAULT_UART_REG_* constants) mean this needs no DTS overrides.
@@ -25,9 +28,31 @@ public:
 	void write(uint64_t offset, uint8_t val);
 
 	void push_rx(uint8_t byte);
+	// Same, but says whether the byte fit. A keyboard wants the dropping
+	// version -- a human cannot outrun a 16-byte ring, and if they could,
+	// stalling the GUI thread would be the wrong answer. A pipe can outrun
+	// it trivially, so the headless stdin feed needs to know and wait.
+	bool try_push_rx(uint8_t byte);
+
+	// Watch the transmit side for a string, so an input feed can wait for
+	// the guest to ask before answering. Input sent before the guest's tty
+	// exists is not queued anywhere -- it is read out of this ring by
+	// OpenSBI, handed to a console that has no line discipline yet, and
+	// dropped -- so a pipe that starts talking at reset loses its first
+	// bytes. Waiting on a prompt is the only correct way to avoid that; a
+	// delay is a guess that gets longer every time the guest gets slower.
+	void expect(const char *needle);
+	bool expect_seen() const { return expect_hit; }
 
 private:
 	static constexpr int RX_RING_SIZE = 16;
+
+	// Matched incrementally against the transmit byte stream, so the
+	// needle is found even when it straddles two writes -- which it always
+	// will, since the guest writes one character per store.
+	std::string expect_needle;
+	size_t expect_pos = 0;
+	std::atomic<bool> expect_hit{true}; // no needle set == already satisfied
 
 	uint8_t rx_ring[RX_RING_SIZE];
 	int rx_head;
@@ -42,3 +67,20 @@ private:
 	uint8_t mcr;
 	uint8_t scr;
 };
+
+// The guest's console output, written to the host by a thread of its own.
+//
+// Every byte a guest prints used to be a putchar and an fflush on the CPU
+// thread -- a system call per character, and a Windows console or pipe
+// write can take a good fraction of a millisecond. A kernel log is
+// megabytes. None of that is visible to the guest: the transmitter always
+// reads as empty and nothing waits on the host having written anything, so
+// moving the write elsewhere cannot change a single instruction. Bytes
+// queue in order and a writer thread sends them in batches.
+//
+// console_put is the producer, from the CPU thread. console_drain blocks
+// until everything put before the call has been written; call it before
+// printing anything of the host's own that should come after the guest's
+// output. It also runs at exit.
+void console_put(uint8_t byte);
+void console_drain();

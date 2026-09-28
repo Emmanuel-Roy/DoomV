@@ -4,6 +4,7 @@
 #include "riscv_core.hpp"
 #include "registers.hpp"
 #include "memory.hpp"
+#include "ext_zicfilp.hpp"
 #include "extensions.hpp"
 
 DecodedInstruction Decoder::decode_i(uint32_t raw_instr, Extension ext) const
@@ -160,7 +161,7 @@ DecodedInstruction Decoder::decode_i(uint32_t raw_instr, Extension ext) const
 	return instr;
 }
 
-void RiscvCore::exec_32I(const DecodedInstruction &instr, Registers &regs, Memory &mem)
+void RiscvCore::exec_32I(const DecodedOp &instr, Registers &regs, Memory &mem)
 {
 	uint64_t pc = regs.get_pc();
 	uint64_t next_pc = pc + instr.length;
@@ -176,11 +177,38 @@ void RiscvCore::exec_32I(const DecodedInstruction &instr, Registers &regs, Memor
 		regs.write_x(instr.rd, imm_u);
 		break;
 
-	case 0b0010111: // AUIPC
+	case 0b0010111: // AUIPC -- and, with rd=x0, Zicfilp's LPAD
+		// LPAD is AUIPC discarding its result, so the arithmetic below is
+		// still exactly right and the instruction stays a no-op on a hart
+		// without Zicfilp. What it additionally does here is disarm the
+		// landing-pad expectation an indirect jump armed.
+		//
+		// The label check is the part that carries the security: a nonzero
+		// label must match the top twenty bits of x7, which the caller set
+		// before jumping. Without it every landing pad in the program would
+		// be interchangeable, and an attacker could redirect any indirect
+		// call to any function entry.
+		if (Extensions.ZICFILP && instr.rd == 0 && regs.elp) {
+			uint64_t label = (uint64_t)imm_u >> 12;
+			if (label != 0 && ((regs.read_x(7) >> 12) & 0xFFFFF) != label) {
+				// A wrong label is as much a violation as no landing pad
+				// at all, and reports the same way.
+				regs.elp = false;
+				raise_software_check(regs, 2);
+				return;
+			}
+			regs.elp = false;
+		}
 		regs.write_x(instr.rd, pc + imm_u);
 		break;
 
+	// A jump or taken branch to an address with bit 1 set is only legal while
+	// compressed instructions are enabled. With C off -- misa is writable --
+	// it traps at the jump, naming the target, before the link register is
+	// written: Sail's jump_to, which checks first and writes rd only on
+	// success.
 	case 0b1101111: // JAL
+		if (!Extensions.C && ((pc + imm_u) & 2)) { enter_trap(regs, 0, pc + imm_u); return; }
 		regs.write_x(instr.rd, next_pc);
 		next_pc = pc + imm_u;
 		break;
@@ -188,8 +216,14 @@ void RiscvCore::exec_32I(const DecodedInstruction &instr, Registers &regs, Memor
 	case 0b1100111: // JALR
 		{
 			uint64_t target = (rs1_val + imm_u) & ~1ull;
+			if (!Extensions.C && (target & 2)) { enter_trap(regs, 0, target); return; }
 			regs.write_x(instr.rd, next_pc);
 			next_pc = target;
+			// Arm the landing-pad expectation, unless this jump is a
+			// return or a software-guarded branch -- see
+			// cfilp::arms_expectation for why those two are exempt.
+			if (cfilp::enabled(regs) && cfilp::arms_expectation(instr.rd, instr.rs1))
+				regs.elp = true;
 		}
 		break;
 
@@ -203,30 +237,32 @@ void RiscvCore::exec_32I(const DecodedInstruction &instr, Registers &regs, Memor
 		case 0b110: taken = (rs1_val < rs2_val); break;  // BLTU
 		case 0b111: taken = (rs1_val >= rs2_val); break; // BGEU
 		}
+		if (taken && !Extensions.C && ((pc + imm_u) & 2)) { enter_trap(regs, 0, pc + imm_u); return; }
 		if (taken) next_pc = pc + imm_u;
 		break;
 	}
 
 	case 0b0000011: { // Load
 		uint64_t addr = rs1_val + imm_u;
-		// One translation per instruction, at the base address -- correct
-		// for any naturally-aligned access (the overwhelming common case;
-		// the compiler never emits anything else), since an aligned access
-		// of width <= its own alignment can never itself cross a 4KB page
-		// boundary. A deliberately misaligned access that straddles a page
-		// boundary would read from the wrong second page; not something
-		// worth the per-byte-translation cost until it's an actual problem.
-		uint64_t paddr;
-		if (!translate_or_trap(regs, mem, addr, AccessType::Load, paddr)) return;
+		// The width is passed to the translation so a straddling access
+		// checks both pages. An aligned access of width <= its own
+		// alignment can never cross a 4KB boundary, so this costs nothing
+		// in the common case -- but misaligned accesses are architectural
+		// here, not exotic, and one that runs into an unmapped second page
+		// used to succeed by reading whatever followed the first page
+		// physically.
+		static const unsigned width[8] = {1, 2, 4, 8, 1, 2, 4, 1};
+		const unsigned n = width[instr.funct3 & 0x7];
+		uint64_t raw;
+		if (!load_virtual(regs, mem, addr, n, raw)) return;
+
 		uint64_t val = 0;
 		switch (instr.funct3) {
-		case 0b000: val = (uint64_t)(int64_t)(int8_t)mem.read8(paddr);   break; // LB
-		case 0b001: val = (uint64_t)(int64_t)(int16_t)mem.read16(paddr); break; // LH
-		case 0b010: val = (uint64_t)(int64_t)(int32_t)mem.read32(paddr); break; // LW -- sign-extends on RV64
-		case 0b011: val = mem.read64(paddr);                             break; // LD
-		case 0b100: val = mem.read8(paddr);                              break; // LBU
-		case 0b101: val = mem.read16(paddr);                             break; // LHU
-		case 0b110: val = mem.read32(paddr);                             break; // LWU -- zero-extends
+		case 0b000: val = (uint64_t)(int64_t)(int8_t)(uint8_t)raw;   break; // LB
+		case 0b001: val = (uint64_t)(int64_t)(int16_t)(uint16_t)raw; break; // LH
+		case 0b010: val = (uint64_t)(int64_t)(int32_t)(uint32_t)raw; break; // LW -- sign-extends on RV64
+		case 0b011: val = raw;                                       break; // LD
+		default:    val = raw;                                       break; // LBU/LHU/LWU -- zero-extended already
 		}
 		regs.write_x(instr.rd, val);
 		break;
@@ -234,23 +270,13 @@ void RiscvCore::exec_32I(const DecodedInstruction &instr, Registers &regs, Memor
 
 	case 0b0100011: { // Store
 		uint64_t addr = rs1_val + imm_u;
-		uint64_t paddr; // see the Load case above re: single-translation-per-access
-		if (!translate_or_trap(regs, mem, addr, AccessType::Store, paddr)) return;
-		switch (instr.funct3) {
-		case 0b000: // SB
-			mem.write8(paddr, (uint8_t)rs2_val);
-			break;
-		case 0b001: // SH
-			mem.write8(paddr, (uint8_t)(rs2_val & 0xFF));
-			mem.write8(paddr + 1, (uint8_t)((rs2_val >> 8) & 0xFF));
-			break;
-		case 0b010: // SW
-			mem.write32(paddr, (uint32_t)rs2_val);
-			break;
-		case 0b011: // SD
-			mem.write64(paddr, rs2_val);
-			break;
-		}
+		// Same page-crossing rule as the load above. The whole access is
+		// checked before any of it is written, so a store that straddles
+		// into a read-only page leaves the first page untouched rather
+		// than half-writing it.
+		static const unsigned swidth[4] = {1, 2, 4, 8};
+		if (instr.funct3 > 0b011) break;   // no such store width
+		if (!store_virtual(regs, mem, addr, swidth[instr.funct3 & 0x3], rs2_val)) return;
 		break;
 	}
 

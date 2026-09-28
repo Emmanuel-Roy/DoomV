@@ -1,0 +1,15 @@
+{
+  "time": "20260915-175302",
+  "label": "D: data caches, inline accessors, decode by reference, batched run loop",
+  "workload": "linux",
+  "steps": 300000000,
+  "seconds": 6.393,
+  "mips": 46.928,
+  "crash_log_sha256": "f1e71792e77dc0252c20c00aaef01f6728c43c7f5a1b04e2d6b7f72d3ad12edf",
+  "exe": "Z:\\Code\\Dev\\DoomV\\riscv_doom.exe",
+  "exe_sha256": "f4ba0e270fd78592ef9a8b9f07b246a3cfd3624b815f39de530c02553a6a7236",
+  "commit": "b544ac6",
+  "dirty": true,
+  "host": "AMD64 Family 25 Model 97 Stepping 2, AuthenticAMD / Windows 10",
+  "profiled": false
+}

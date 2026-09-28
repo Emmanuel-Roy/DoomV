@@ -50,6 +50,8 @@ static const char *csr_name(uint16_t addr)
 	case 0x142: return "scause";
 	case 0x143: return "stval";
 	case 0x144: return "sip";
+	case 0x106: return "scounteren"; // Zicntr/Zihpm gating (phase 2)
+	case 0x10A: return "senvcfg";    // Ssnpm's PMM lives here (phase 7)
 	case 0x14D: return "stimecmp"; // Sstc (Stage 2)
 	case 0x150: return "siselect"; // AIA indirect (Stage 2)
 	case 0x151: return "sireg";
@@ -62,6 +64,7 @@ static const char *csr_name(uint16_t addr)
 	case 0x303: return "mideleg";
 	case 0x304: return "mie";
 	case 0x305: return "mtvec";
+	case 0x306: return "mcounteren";
 	case 0x30A: return "menvcfg";
 	case 0x340: return "mscratch";
 	case 0x341: return "mepc";
@@ -71,11 +74,46 @@ static const char *csr_name(uint16_t addr)
 	case 0x350: return "miselect"; // AIA indirect (Stage 2)
 	case 0x351: return "mireg";
 	case 0x35C: return "mtopei";
-	case 0xC01: return "time"; // unprivileged read-only mtime alias (Stage 4)
+	case 0xC00: return "cycle";   // Zicntr: mcycle, mtime and minstret
+	case 0xC01: return "time";    // read unprivileged -- see
+	case 0xC02: return "instret"; // ext_zicntr.cpp
+	case 0xDB0: return "stopi";   // Ssaia top-interrupt
+	case 0xFB0: return "mtopi";   // Smaia top-interrupt
 	case 0xF11: return "mvendorid";
 	case 0xF12: return "marchid";
 	case 0xF13: return "mimpid";
 	case 0xF14: return "mhartid";
+	// Hypervisor (H). Two groups that are easy to confuse in a dashboard,
+	// which is exactly why they are named rather than left as raw
+	// addresses: the h* registers belong to the hypervisor running in
+	// HS-mode, while the vs* registers are the guest's *shadow* copies of
+	// the S-mode registers. When the hart is in VS-mode a guest's write to
+	// "stvec" lands in vstvec, so seeing both here side by side is what
+	// makes a two-stage trap legible at all.
+	case 0x600: return "hstatus";
+	case 0x602: return "hedeleg";
+	case 0x603: return "hideleg";
+	case 0x604: return "hie";
+	case 0x605: return "htimedelta";
+	case 0x606: return "hcounteren";
+	case 0x607: return "hgeie";
+	case 0x643: return "htval";
+	case 0x644: return "hip";
+	case 0x645: return "hvip";
+	case 0x64A: return "htinst";
+	case 0x60A: return "henvcfg";
+	case 0x680: return "hgatp";
+	case 0xE12: return "hgeip";
+	// The VS-mode shadows of the S-mode registers.
+	case 0x200: return "vsstatus";
+	case 0x204: return "vsie";
+	case 0x205: return "vstvec";
+	case 0x240: return "vsscratch";
+	case 0x241: return "vsepc";
+	case 0x242: return "vscause";
+	case 0x243: return "vstval";
+	case 0x244: return "vsip";
+	case 0x280: return "vsatp";
 	default: return nullptr;
 	}
 }
@@ -247,73 +285,332 @@ void Gui::resize_canvas_if_needed()
 	                            SDL_TEXTUREACCESS_STREAMING, canvas_w, canvas_h);
 }
 
-void Gui::render(const Snapshot &snap)
+namespace {
+
+// One kind of dashboard text: the 8x8 font scaled by sx across and sy down,
+// in layout units, with `track` units of extra letter spacing.
+struct TextStyle {
+	float sx, sy;
+	int track;
+};
+
+// Where everything around the display goes. Two of these exist and they
+// draw the same information: the design-unit layout that has always been
+// here, and the compact one every guest uses at 1920x1080 and up.
+struct DashLayout {
+	int box_x, box_y;            // the display's origin, if the layout places it
+	int shadow;                  // drop-shadow offset
+	TextStyle title, reg, trace, trace_title;
+	int title_y, list_y, row_h;  // CSRS / REGISTER FILE headers and rows
+	int csr_x, csr_value_offset;
+	int reg_x, reg_col_w, reg_value_offset;
+	int trace_x, trace_y, trace_row_h;
+	int trace_title_x, trace_title_w, trace_title_h;
+	int trace_max_chars;         // 0: lines may run past trace_title_w
+	int banner_line_h;
+	int banner_y;
+	// 0: right-align the banner to the register file. Otherwise centre it
+	// over [banner_center_x, banner_center_x + banner_center_w).
+	int banner_center_x, banner_center_w;
+};
+
+// The original layout, in design units (see gui.hpp's DESIGN_W/H), built
+// around the display box it is given.
+DashLayout doom_layout(int box_x, int box_y, int box_w, int box_h)
 {
-	resize_canvas_if_needed();
+	DashLayout L{};
+	L.shadow = 1;
+	L.title = {1.0f, 1.0f, 0};
+	// Taller than wide, and sized to track the 960x540 -> 640x360 design
+	// shrink so glyphs land at the same screen size as before it.
+	L.reg = {0.567f, 0.867f, 0};
+	// A disassembled line is ~40 chars; at 1.0 it overhangs the display
+	// box, at 0.75 it stays within a few characters of the box's width.
+	L.trace = {0.75f, 0.75f, 0};
 
-	std::fill(screen_buf.begin(), screen_buf.end(), 0x876A96);
+	L.title_y = 7;
+	L.list_y = 7 + 13;
+	// 32 rows at 10 plus the header offset is the tallest this goes
+	// without the last row clipping past DESIGN_H.
+	L.row_h = 10;
 
-	uint32_t pal_pink  = 0xD580B8;
-	uint32_t pal_white = 0xD7D0D0;
-	uint32_t pal_red   = 0xB95167;
-	uint32_t pal_dark  = 0x25080C;
-	uint32_t pal_stats = 0xC3A9C4;
+	// CSRS anchors off the box's right edge. The corridor between the box
+	// and the register file is only wide enough for a 6/7 split of its
+	// slack, which is why the gap is what it is. The value column sits at
+	// 46 -- nine glyphs, the longest name when it was written -- and is a
+	// floor rather than a fixed position: the hypervisor's ten-character
+	// names push only their own row's value across.
+	L.csr_x = box_x + box_w + 6;
+	L.csr_value_offset = 46;
 
-	// GAME SCREEN: design box is 280x175 at (10,7) -- same box, same 1.6
-	// aspect ratio, just rescaled 2/3 alongside DESIGN_W/H's own 960x540
-	// -> 640x360 shrink (see gui.hpp) so it renders at the same actual
-	// screen size as before. GAME_BOX_Y=7 matches the CSRS/REGISTER FILE
-	// headers' own y (see their draw_shadow_text calls below) so the
-	// display's top edge lines up with them instead of starting lower.
-	// GAME_BOX_* are the design-unit source of truth -- the CSRS panel
-	// below anchors off the box's own right edge, and TRACE LOG's own y
-	// tracks its bottom edge, so neither needs a second edit if this box
-	// ever moves again.
-	const int GAME_BOX_X = 10, GAME_BOX_Y = 7, GAME_BOX_W = 280, GAME_BOX_H = 175;
-	int box_x = (int)(GAME_BOX_X * scale_x);
-	int box_y = (int)(GAME_BOX_Y * scale_y);
-	int box_w = (int)(GAME_BOX_W * scale_x);
-	int box_h = (int)(GAME_BOX_H * scale_y);
+	// Picked so the V column's last hex digit lands just shy of DESIGN_W.
+	L.reg_x = 429;
+	L.reg_col_w = 106;
+	L.reg_value_offset = 19;
+
+	L.trace_x = box_x;
+	L.trace_y = box_y + box_h + 2;
+	// Derived from the glyph height rather than a separate literal: a bare
+	// number here is what let rows overlap when the render scale changed.
+	L.trace_row_h = (int)(8 * L.trace.sy) + 4;
+	L.trace_title_x = box_x;
+	L.trace_title_w = box_w;
+	// The title is the trace text's own size and one row tall, and the
+	// longest lines are allowed to overhang the box by a few characters.
+	L.trace_title = L.trace;
+	L.trace_title_h = L.trace_row_h;
+	L.trace_max_chars = 0;
+
+	L.banner_line_h = 9;
+	L.banner_y = L.list_y + 32 * L.row_h;   // in the corner under x31/v31
+	L.banner_center_x = 0;
+	L.banner_center_w = 0;
+	return L;
+}
+
+// The compact layout, for any guest in a window of 1920x1080 or more, in
+// *pixels*.
+//
+// The design-unit layout spends 13.5 pixels across on each register
+// character and leaves the display a box that shrinks a Linux console to
+// fit. This one draws the same panels with narrower text -- 10 pixels a
+// character -- and packs them into one column, which buys a display area the
+// size of the Linux console: that guest is shown at exactly 1:1, with no
+// resampling at all, and DOOM's 320x200 is scaled up to fill the same area.
+// The column does not move between guests.
+//
+// Pixels rather than design units because the point is pixel-exact glyphs,
+// and that only means something at a known size: this layout needs a
+// 1920x1080 canvas, and render() falls back to the design-unit one below it.
+constexpr int COMPACT_MIN_W = 1920;
+constexpr int COMPACT_MIN_H = 1080;
+
+DashLayout compact_layout(int canvas_w, int canvas_h)
+{
+	DashLayout L{};
+	L.shadow = 1;
+	L.title = {2.0f, 3.0f, 2};   // 16x24, 18 pitch
+	// 10x16 on a 10-pixel pitch. As wide as the column's 728 pixels allow:
+	// the two panels are 70 characters across between them, and the height
+	// is already spoken for by 32 register rows and the trace log, so the
+	// only room to grow is sideways. The 1.25x width puts the font's
+	// two-column strokes at 2 or 3 pixels, and its blank first column
+	// leaves a gap between letters.
+	L.reg = {1.25f, 2.0f, 0};
+	// 12x16 on a 13-pixel pitch, so a typical disassembled line fills the
+	// trace log's width (below). A 1.5x width alternates 1- and 2-pixel
+	// columns, but two adjacent columns always make 3 pixels, so the
+	// font's two-column strokes all come out the same.
+	L.trace = {1.5f, 2.0f, 1};
+
+	const int console_w = Memory::LFB_W;
+	const int console_h = Memory::LFB_H;
+	const int pitch = (int)(8 * L.reg.sx + 0.5f) + L.reg.track;
+	const int hex_w = 16 * pitch;
+
+	// The register file: "X00:" plus a gap, 16 hex digits, and two
+	// characters between the X and V columns.
+	L.reg_value_offset = 5 * pitch;
+	L.reg_col_w = L.reg_value_offset + hex_w + 2 * pitch;
+	const int reg_w = L.reg_col_w + L.reg_value_offset + hex_w;
+	// CSRS: the value column fits a nine-character name and its colon. It
+	// is a floor, so a longer name pushes only its own row's value across.
+	L.csr_value_offset = 10 * pitch;
+	const int csr_w = L.csr_value_offset + hex_w;
+
+	// The console is centred vertically, and the same margin is used on
+	// the left and right, so the window has one margin all the way round.
+	L.box_y = (canvas_h - console_h) / 2;
+	const int margin = L.box_y;
+
+	// Left to right: margin, console, gap, CSRS, gap, register file,
+	// margin. Whatever is left after the fixed margins is split evenly
+	// between the two inner gaps, with an odd pixel going to the second.
+	const int slack_x = canvas_w - 2 * margin - console_w - csr_w - reg_w;
+	const int gap_x = slack_x / 2;
+	L.box_x = margin;
+	L.csr_x = L.box_x + console_w + gap_x;
+	L.reg_x = L.csr_x + csr_w + (slack_x - gap_x);
+	const int column_right = L.reg_x + reg_w;   // canvas_w - margin
+
+	// Top to bottom: the console centred, with equal margins above and
+	// below, and the column beside it spanning exactly the same top and
+	// bottom. Its three blocks -- the panels, the trace log, the paused
+	// banner -- are separated by two equal gaps. The banner's space is kept
+	// even while running, so nothing moves when the machine pauses.
+	const int top = L.box_y;
+	const int bottom = L.box_y + console_h;
+
+	const int glyph_h = 16;
+	// 16-pixel text on a 20-pixel pitch; the font leaves its bottom row
+	// blank and this text is capitals and hex, so the visible gap is six.
+	L.row_h = 20;
+	L.trace_row_h = 18;
+	L.trace_title_h = 24 + 8;
+	L.banner_line_h = 20;
+	const int panels_h = 24 + 14 + 31 * L.row_h + glyph_h;
+	const int trace_h = L.trace_title_h + 14 * L.trace_row_h + glyph_h;   // title + 15 rows
+	const int banner_h = L.banner_line_h + glyph_h;
+	const int gap_y = (bottom - top - panels_h - trace_h - banner_h) / 2;
+
+	L.title_y = top;
+	L.list_y = top + 24 + 14;
+
+	// The trace log runs from the CSR panel's left edge to the register
+	// file's right one, under a title the size of the CSRS and REGISTER
+	// FILE headers. At 13 pixels a character that is 54 characters at
+	// 1920 wide; a line longer than fits is cut at the edge rather than
+	// running into the margin.
+	L.trace_y = top + panels_h + gap_y;
+	L.trace_x = L.csr_x;
+	L.trace_title_x = L.csr_x;
+	L.trace_title_w = column_right - L.csr_x;
+	L.trace_title = L.title;
+	const int trace_pitch = (int)(8 * L.trace.sx + 0.5f) + L.trace.track;
+	L.trace_max_chars = L.trace_title_w / trace_pitch;
+
+	// The paused banner closes the column, bottom-aligned with the console
+	// and centred like the trace log above it.
+	L.banner_y = bottom - banner_h;
+	L.banner_center_x = L.csr_x;
+	L.banner_center_w = L.trace_title_w;
+	return L;
+}
+
+} // namespace
+
+namespace {
+// The fallback layout's display box, in design units: 280x175 at (10,7), the
+// same 1.6 aspect ratio the box has always had. Its y matches the CSRS and
+// REGISTER FILE headers so the display's top edge lines up with them. The
+// CSRS panel anchors off the box's right edge and the trace log off its
+// bottom, so neither needs a second edit if this box ever moves.
+constexpr int GAME_BOX_X = 10, GAME_BOX_Y = 7, GAME_BOX_W = 280, GAME_BOX_H = 175;
+constexpr uint32_t DASH_BG = 0x876A96;
+}
+
+void Gui::set_guest_display(int w, int h)
+{
+	guest_w = w;
+	guest_h = h;
+	frame.assign((size_t)w * (size_t)h, 0);
+	frame_shown.assign((size_t)w * (size_t)h, 0);
+}
+
+Gui::Rect Gui::display_rect(bool full, bool *compact_out) const
+{
+	// With room for it -- a 1920x1080 canvas -- every guest gets the
+	// compact layout: its display on the left in the console-sized area, and
+	// the CSRS, register file and trace log in one column beside it. See
+	// compact_layout. Linux's console fills that area at exactly 1:1; DOOM's
+	// 320x200 is scaled up into it, keeping its shape.
+	//
+	// Below 1920x1080 the design-unit layout is the fallback: the display
+	// goes in its game box, which a Linux console only fits well under 1:1.
+	// Either way a source of a different shape from its box is letterboxed
+	// rather than stretched, and Ctrl+Alt+F hands a Linux framebuffer the
+	// whole window.
+	const bool fullscreen = guest_is_linux() && full;
+	const bool compact = !fullscreen && canvas_w >= COMPACT_MIN_W && canvas_h >= COMPACT_MIN_H;
+	if (compact_out) *compact_out = compact;
+
+	Rect r{ (int)(GAME_BOX_X * scale_x), (int)(GAME_BOX_Y * scale_y),
+	        (int)(GAME_BOX_W * scale_x), (int)(GAME_BOX_H * scale_y) };
+	if (fullscreen) r = { 0, 0, canvas_w, canvas_h };
+	if (compact) {
+		// The display area is the console's size whatever the guest is, so
+		// the column beside it does not move between guests.
+		const DashLayout L = compact_layout(canvas_w, canvas_h);
+		r = { L.box_x, L.box_y, Memory::LFB_W, Memory::LFB_H };
+	}
+	if ((guest_is_linux() || compact) && guest_w > 0 && guest_h > 0) {
+		// Fit, preserving aspect: shrink the long axis and re-centre in
+		// whichever dimension gave way.
+		const long long by_w = (long long)r.w * guest_h;
+		const long long by_h = (long long)r.h * guest_w;
+		if (by_w > by_h) {
+			const int fit_w = (int)(by_h / guest_h);
+			r.x += (r.w - fit_w) / 2;
+			r.w = fit_w;
+		} else if (by_h > by_w) {
+			const int fit_h = (int)(by_w / guest_w);
+			r.y += (r.h - fit_h) / 2;
+			r.h = fit_h;
+		}
+	}
+	return r;
+}
+
+void Gui::submit_frame(std::vector<uint32_t> &pixels)
+{
+	std::lock_guard<std::mutex> lock(frame_mutex);
+	if (pixels.size() != frame.size()) return;
+	frame.swap(pixels);
+	frame_seq++;
+}
+
+void Gui::blit_display(const Rect &r)
+{
+	const int box_x = r.x, box_y = r.y, box_w = r.w, box_h = r.h;
 
 	// Bilinear, not nearest-neighbor: at native 320x200 scaled ~3-4x, hard
 	// pixel blocks looked wrong for the game view (dashboard text stays
 	// sharp block-fills on purpose, this is just the rendered scene).
 	// Fixed-point (8-bit fraction) so the per-pixel blend is pure integer
 	// math, no floats in the hot loop.
+	//
+	// Interpolation is only right when scaling up. Text being scaled down
+	// wants the nearest source pixel, because blending neighbours is
+	// precisely what destroys a one-pixel stem -- so the LUT is built with
+	// a zero fraction and both taps on the same pixel there, which turns
+	// the same blend loop below into a plain copy without a second code
+	// path.
 	struct Sample { int i0, i1; uint32_t frac; };
 	static std::vector<Sample> sx_lut, sy_lut;
-	static int last_box_w = -1, last_box_h = -1;
-	if (box_w != last_box_w || box_h != last_box_h) {
+	static int last_box_w = -1, last_box_h = -1, last_src_w = -1, last_src_h = -1;
+	// Nearest whenever the source is at least as big as the box it is
+	// going into. Interpolation is only right when scaling up, and at the
+	// compact layout's exact 1:1 this makes the copy exact by construction
+	// rather than by a blend weight happening to come out as zero.
+	const bool nearest = (guest_w >= box_w || guest_h >= box_h);
+	if (box_w != last_box_w || box_h != last_box_h
+	    || guest_w != last_src_w || guest_h != last_src_h) {
 		sx_lut.resize(box_w > 0 ? box_w : 0);
 		sy_lut.resize(box_h > 0 ? box_h : 0);
 		for (int x = 0; x < box_w; x++) {
-			float src = ((float)x + 0.5f) * Memory::FB_W / box_w - 0.5f;
+			float src = ((float)x + 0.5f) * guest_w / box_w - 0.5f;
 			int i0 = (int)std::floor(src);
 			float frac = src - (float)i0;
 			if (i0 < 0) { i0 = 0; frac = 0.0f; }
-			int i1 = (i0 + 1 < Memory::FB_W) ? i0 + 1 : i0;
+			if (i0 >= guest_w) i0 = guest_w - 1;
+			int i1 = (i0 + 1 < guest_w) ? i0 + 1 : i0;
+			if (nearest) { if (frac >= 0.5f) i0 = i1; i1 = i0; frac = 0.0f; }
 			sx_lut[x] = { i0, i1, (uint32_t)(frac * 256.0f) };
 		}
 		for (int y = 0; y < box_h; y++) {
-			float src = ((float)y + 0.5f) * Memory::FB_H / box_h - 0.5f;
+			float src = ((float)y + 0.5f) * guest_h / box_h - 0.5f;
 			int i0 = (int)std::floor(src);
 			float frac = src - (float)i0;
 			if (i0 < 0) { i0 = 0; frac = 0.0f; }
-			int i1 = (i0 + 1 < Memory::FB_H) ? i0 + 1 : i0;
+			if (i0 >= guest_h) i0 = guest_h - 1;
+			int i1 = (i0 + 1 < guest_h) ? i0 + 1 : i0;
+			if (nearest) { if (frac >= 0.5f) i0 = i1; i1 = i0; frac = 0.0f; }
 			sy_lut[y] = { i0, i1, (uint32_t)(frac * 256.0f) };
 		}
 		last_box_w = box_w;
 		last_box_h = box_h;
+		last_src_w = guest_w;
+		last_src_h = guest_h;
 	}
 
-	const uint32_t *fb32 = snap.framebuffer.data();
+	const uint32_t *fb32 = frame_shown.data();
 	for (int y = 0; y < box_h; y++) {
 		int ty = box_y + y;
 		if (ty < 0 || ty >= canvas_h) continue;
 
 		const Sample &ys = sy_lut[y];
-		const uint32_t *row0 = fb32 + ys.i0 * Memory::FB_W;
-		const uint32_t *row1 = fb32 + ys.i1 * Memory::FB_W;
+		const uint32_t *row0 = fb32 + (size_t)ys.i0 * guest_w;
+		const uint32_t *row1 = fb32 + (size_t)ys.i1 * guest_w;
 		uint32_t *dst_row = &screen_buf[(size_t)ty * canvas_w];
 
 		for (int x = 0; x < box_w; x++) {
@@ -336,196 +633,376 @@ void Gui::render(const Snapshot &snap)
 			dst_row[tx] = out;
 		}
 	}
+}
+
+void Gui::render_dashboard(const Snapshot &snap)
+{
+	uint32_t pal_pink  = 0xD580B8;
+	uint32_t pal_white = 0xD7D0D0;
+	uint32_t pal_red   = 0xB95167;
+	uint32_t pal_dark  = 0x25080C;
+	uint32_t pal_stats = 0xC3A9C4;
+
+	// Always the layout that shares the window. In the full-window mode the
+	// compositor does not show this layer, but it is kept current so that
+	// leaving that mode shows the machine's state now, not from before.
+	bool compact = false;
+	display_rect(false, &compact);
+	const DashLayout L = compact ? compact_layout(canvas_w, canvas_h)
+	                             : doom_layout(GAME_BOX_X, GAME_BOX_Y, GAME_BOX_W, GAME_BOX_H);
+
+	dash_work.assign((size_t)canvas_w * (size_t)canvas_h, DASH_BG);
 
 	char buf[96];
 
-	auto draw_shadow_text = [&](int x, int y, const char *s, uint32_t col, float scale_x_ = 1.0f, float scale_y_ = -1.0f) {
-		draw_string(x + 1, y + 1, s, pal_dark, scale_x_, scale_y_);
-		draw_string(x, y, s, col, scale_x_, scale_y_);
+	text_ux = compact ? 1.0f : scale_x;
+	text_uy = compact ? 1.0f : scale_y;
+
+	auto draw_shadow_text = [&](int x, int y, const char *s, uint32_t col, const TextStyle &st) {
+		draw_string(x + L.shadow, y + L.shadow, s, pal_dark, st.sx, st.sy, st.track);
+		draw_string(x, y, s, col, st.sx, st.sy, st.track);
+	};
+	// Matches draw_string's own advance exactly, so a centred title lines
+	// up with the glyphs pixel for pixel rather than approximately.
+	auto glyph_adv = [&](const TextStyle &st) {
+		int adv = (int)(8 * st.sx + 0.5f); if (adv < 1) adv = 1;
+		return adv + st.track;
+	};
+	auto text_w = [&](const char *s, const TextStyle &st) {
+		return (int)strlen(s) * glyph_adv(st);
+	};
+	auto draw_centered_title = [&](int col_x, int col_w, int y, const char *s, uint32_t col, const TextStyle &st) {
+		draw_shadow_text(col_x + (col_w - text_w(s, st)) / 2, y, s, col, st);
 	};
 
-	// Header centering -- matches draw_string's own advance formula
-	// exactly (8*scale, rounded, min 1) so a centered title lines up
-	// with the actual glyphs pixel-for-pixel, not just approximately.
-	auto glyph_adv = [&](float scale_x_) {
-		int adv = (int)(8 * scale_x_ + 0.5f); return adv < 1 ? 1 : adv;
-	};
-	auto text_w = [&](const char *s, float scale_x_) {
-		return (int)strlen(s) * glyph_adv(scale_x_);
-	};
-	auto draw_centered_title = [&](int col_x, int col_w, int y, const char *s, uint32_t col, float scale_x_ = 1.0f) {
-		draw_shadow_text(col_x + (col_w - text_w(s, scale_x_)) / 2, y, s, col, scale_x_);
-	};
+	const int REG_HEX_W = 16 * glyph_adv(L.reg);
 
-	// Shared register-entry sizing -- "roughly the size of one of the
-	// normal registers" applies to the CSRs panel too, so both use the
-	// same scale/row-height constants. REG_SCALE_X (0.6 -> 0.7 -> 0.85 ->
-	// 0.567) widens the actual hex digits themselves, not just the row
-	// height -- the 0.85 -> 0.567 drop tracks DESIGN_W/H's own 2/3
-	// shrink (960x540 -> 640x360, see gui.hpp), so glyphs land at the
-	// same actual screen size as before despite the smaller design space.
-	const float REG_SCALE_X = 0.567f;
-	const float REG_SCALE_Y = 0.867f;
-	// 32 rows * 10 + the header offset is the tallest this can go without
-	// the last row clipping past DESIGN_H=360 -- picked to stretch the
-	// CSRs/register rows down until there's not much space left at the
-	// bottom, not just an arbitrary round number.
-	const int REG_ROW_H = 10;
-	const int REG_COL_W = 106; // label (4 chars) + 16 hex digits at REG_SCALE_X, plus a small gap
-	const int REG_VALUE_OFFSET = 19; // label -> hex value gap, X/V columns and CSRS' name column both use it
-	const int REG_HEX_W = 16 * glyph_adv(REG_SCALE_X); // 16 hex digits at REG_SCALE_X's own glyph advance
-
-	// REGISTER FILE's left edge is a fixed design-space anchor, not
-	// derived from the CSRs panel's own width -- so pulling the CSRs
-	// panel closer (below) doesn't also drag the register file sideways
-	// with it. Picked so the V column's rightmost hex digit lands just
-	// shy of DESIGN_W=640, not clipped by it -- see gui.hpp's comment on
-	// why that's a hard bound.
-	const int hud_x = 429;
-
-	// CSRS -- a separate, updating list of every CSR address a CSRR*/
-	// CSRR*I instruction has actually touched (Registers::csr_history,
-	// most-recently-used first -- see registers.hpp), each shown with its
-	// *live* current value (RiscvCore::read_csr_effective, not a raw
-	// csr[] read -- several of the most interesting ones, like sstatus/
-	// mip/misa/time, are computed rather than stored, see that function's
-	// comment). Only entries actually seen so far are drawn, not a fixed
-	// 20 blank rows -- an "updating list", not a static table. Longest
-	// name (e.g. "mvendorid"/"siselect") is 9 chars, so the value column
-	// sits at +46 instead of the register file's +19. csr_x anchors off
-	// the game box's own right edge (moved "more to the left", as close
-	// to the box as still leaves a visible gap) instead of working
-	// backward from hud_x -- the corridor between the box and the
-	// register file is only wide enough for one anchor choice at a time,
-	// and pushing CSRs toward the box is what actually moves them left
-	// (working from hud_x just trades box-gap for register-gap, it
-	// can't shift the block itself).
-	const int CSR_VALUE_OFFSET = 46;
-	// box->CSRS and CSRS->REGISTER FILE gaps are now equal (6/7, as close
-	// as the corridor's odd total slack allows) -- was 2/11, which read as
-	// CSRS sitting flush against the display but oddly distant from the
-	// register file. "Aligned" spacing means matching, not just small.
-	const int CSR_BOX_GAP = 6;
-	const int CSR_COL_W = CSR_VALUE_OFFSET + REG_HEX_W; // name column + 16 hex digits -- the title centers over this
-	int csr_x = GAME_BOX_X + GAME_BOX_W + CSR_BOX_GAP; // box's own design-unit position, not the scaled box_x/box_w below
-
-	draw_centered_title(csr_x, CSR_COL_W, 7, "--- CSRS ---", pal_pink);
-	int csr_start_y = 7 + 13;
+	// CSRS -- the CSRs the guest uses most across its last 1024 CSR
+	// instructions, most frequent first (Registers::top_csrs), each with
+	// its *live* value, since several of the interesting ones (sstatus,
+	// mip, time) are computed rather than stored.
+	const int CSR_COL_W = L.csr_value_offset + REG_HEX_W;
+	draw_centered_title(L.csr_x, CSR_COL_W, L.title_y, "--- CSRS ---", pal_pink, L.title);
 	for (int i = 0; i < snap.csr_count; i++) {
-		int cy = csr_start_y + (i * REG_ROW_H);
+		int cy = L.list_y + (i * L.row_h);
 		const Snapshot::CsrEntry &c = snap.csrs[i];
 		const char *name = csr_name(c.addr);
 		char name_buf[16];
 		if (!name) { sprintf(name_buf, "0x%03x", c.addr); name = name_buf; }
 		sprintf(buf, "%s:", name);
-		draw_shadow_text(csr_x, cy, buf, pal_red, REG_SCALE_X, REG_SCALE_Y);
+		// A floor, not a position: a name longer than the column pushes
+		// only its own value across rather than drawing over it.
+		int value_x = L.csr_value_offset;
+		int label_w = text_w(buf, L.reg) + glyph_adv(L.reg); // one glyph of gap
+		if (label_w > value_x) value_x = label_w;
+		draw_shadow_text(L.csr_x, cy, buf, pal_red, L.reg);
 		sprintf(buf, "%016llX", (unsigned long long)c.value);
-		draw_shadow_text(csr_x + CSR_VALUE_OFFSET, cy, buf, pal_white, REG_SCALE_X, REG_SCALE_Y);
+		draw_shadow_text(L.csr_x + value_x, cy, buf, pal_white, L.reg);
 	}
 
-	// REGISTER FILE
-	int current_y = 7;
-
-	// Two columns (X, V). Each glyph is drawn taller-not-wider
-	// (REG_SCALE_Y > REG_SCALE_X, see draw_char/draw_string's independent
-	// x/y scale) and rows sit further apart (REG_ROW_H grown well past
-	// the taller glyph height, so there's real gap between rows, not
-	// just bigger text touching). DESIGN_H has the extra room this needs
-	// set aside (see gui.hpp). V is currently all zeros -- storage only,
-	// see registers.hpp -- but the layout doesn't assume that.
-	const int REG_TOTAL_W = REG_COL_W + REG_VALUE_OFFSET + REG_HEX_W; // X column + V column -- the title centers over both together
-	draw_centered_title(hud_x, REG_TOTAL_W, current_y, "--- REGISTER FILE ---", pal_pink);
-	int reg_start_y = current_y + 13;
-	int x_col = hud_x;
-	int v_col = hud_x + REG_COL_W;
+	// REGISTER FILE -- two columns, X and V.
+	const int REG_TOTAL_W = L.reg_col_w + L.reg_value_offset + REG_HEX_W;
+	draw_centered_title(L.reg_x, REG_TOTAL_W, L.title_y, "--- REGISTER FILE ---", pal_pink, L.title);
+	int x_col = L.reg_x;
+	int v_col = L.reg_x + L.reg_col_w;
 	for (int i = 0; i < 32; i++) {
-		int cy = reg_start_y + (i * REG_ROW_H);
+		int cy = L.list_y + (i * L.row_h);
 
 		sprintf(buf, "X%02d:", i);
-		draw_shadow_text(x_col, cy, buf, pal_red, REG_SCALE_X, REG_SCALE_Y);
+		draw_shadow_text(x_col, cy, buf, pal_red, L.reg);
 		sprintf(buf, "%016llX", (unsigned long long)snap.x[i]);
-		draw_shadow_text(x_col + REG_VALUE_OFFSET, cy, buf, pal_white, REG_SCALE_X, REG_SCALE_Y);
+		draw_shadow_text(x_col + L.reg_value_offset, cy, buf, pal_white, L.reg);
 
 		sprintf(buf, "V%02d:", i);
-		draw_shadow_text(v_col, cy, buf, pal_red, REG_SCALE_X, REG_SCALE_Y);
+		draw_shadow_text(v_col, cy, buf, pal_red, L.reg);
 		sprintf(buf, "%016llX", (unsigned long long)snap.v_lo[i]);
-		draw_shadow_text(v_col + REG_VALUE_OFFSET, cy, buf, pal_white, REG_SCALE_X, REG_SCALE_Y);
+		draw_shadow_text(v_col + L.reg_value_offset, cy, buf, pal_white, L.reg);
 	}
 
-	// TRACE LOG -- lives below the game view box instead of the right
-	// panel, which the register file now needs in full. trace_y tracks
-	// GAME_BOX_Y/H's own bottom edge instead of a bare literal, so the
-	// two can't silently drift out of sync again.
-	//
-	// TRACE_SCALE shrinks this text below the default 1.0 for two
-	// reasons: (1) a disassembled line ("0000000080021B94: BNE A4, A0,
-	// 0X80021B98", ~40 chars) at full size runs well past GAME_BOX_W --
-	// 0.75 keeps even the longest lines within a few chars of the box's
-	// own width, so the trace log and the display "try to be near the
-	// same width" instead of overhanging it. (2) TRACE_ROW_H is derived
-	// FROM TRACE_SCALE's actual glyph height plus a fixed gap, instead
-	// of being a separate hand-picked number that can silently drift out
-	// of sync with it again (that mismatch is exactly what caused lines
-	// to overlap/garble after DESIGN_W/H's 960x540 -> 640x360 shrink
-	// raised the global render scale from 2.0 to 3.0, enlarging every
-	// glyph, while the row step here stayed a bare unrelated literal) --
-	// this construction makes that class of bug structurally impossible,
-	// not just fixed for the current scale.
-	const float TRACE_SCALE = 0.75f;
-	const int TRACE_LINE_GAP = 4; // extra breathing room between rows, on top of glyph height
-	const int TRACE_ROW_H = (int)(8 * TRACE_SCALE) + TRACE_LINE_GAP;
-	int trace_x = GAME_BOX_X;
-	int trace_y = GAME_BOX_Y + GAME_BOX_H + 2;
-	draw_centered_title(GAME_BOX_X, GAME_BOX_W, trace_y, "--- TRACE LOG ---", pal_pink, TRACE_SCALE);
-	trace_y += TRACE_ROW_H;
+	// TRACE LOG -- under the display, since the right side is the
+	// register file's.
+	int trace_y = L.trace_y;
+	draw_centered_title(L.trace_title_x, L.trace_title_w, trace_y, "--- TRACE LOG ---", pal_pink, L.trace_title);
+	trace_y += L.trace_title_h;
+	// Cut a line at the layout's width, if it has one.
+	auto fit_trace = [&](char *line) {
+		if (L.trace_max_chars > 0 && (int)strlen(line) > L.trace_max_chars)
+			line[L.trace_max_chars] = '\0';
+	};
 
 	char op_buf[64];
 
 	// Most recently recorded history entry == the instruction that just executed.
 	format_operands(op_buf, sizeof(op_buf), snap.active.pc, snap.active.decoded);
 	sprintf(buf, "ACTIVE: %08X %s %s", snap.active.instr, snap.active.decoded.mnemonic, op_buf);
-	draw_shadow_text(trace_x, trace_y, buf, pal_pink, TRACE_SCALE);
-	trace_y += TRACE_ROW_H;
+	fit_trace(buf);
+	draw_shadow_text(L.trace_x, trace_y, buf, pal_pink, L.trace);
+	trace_y += L.trace_row_h;
 
 	sprintf(buf, "CURR PC: %016llX", (unsigned long long)snap.pc);
-	draw_shadow_text(trace_x, trace_y, buf, pal_white, TRACE_SCALE);
-	trace_y += TRACE_ROW_H;
+	draw_shadow_text(L.trace_x, trace_y, buf, pal_white, L.trace);
+	trace_y += L.trace_row_h;
 
 	for (int i = 0; i < 13; i++) {
 		const HistoryEntry &h = snap.trace[i];
 		format_operands(op_buf, sizeof(op_buf), h.pc, h.decoded);
 		sprintf(buf, "%016llX: %s %s", (unsigned long long)h.pc, h.decoded.mnemonic, op_buf);
-		draw_shadow_text(trace_x, trace_y, buf, pal_stats, TRACE_SCALE);
-		trace_y += TRACE_ROW_H;
+		fit_trace(buf);
+		draw_shadow_text(L.trace_x, trace_y, buf, pal_stats, L.trace);
+		trace_y += L.trace_row_h;
 	}
 
-	// Paused banner, drawn last so nothing overdraws it. Without this the
-	// dashboard looks identical whether the machine is running or frozen --
-	// the trace panel simply stops changing, which is indistinguishable from
-	// a guest stuck in a tight loop.
+	// Paused indicator, drawn last so nothing overdraws it -- without it a
+	// frozen machine looks exactly like one stuck in a tight loop. Two
+	// lines in the corner under the last register row, right-aligned to
+	// the register block, rather than across the display.
 	if (snap.halted) {
-		const char *msg = "PAUSED -- F9 TO RESUME (DELIVERS THE TRAP)";
-		const float BANNER_SCALE = 1.0f;
-		int bw = text_w(msg, BANNER_SCALE);
-		int bx = (int)((DESIGN_W - bw) * scale_x) / 2;
-		int by = (int)(2 * scale_y);
-		draw_shadow_text(bx, by, msg, pal_red, BANNER_SCALE);
+		const char *msg_top = "PAUSED -- F9 TO RESUME";
+		const char *msg_bot = "(DELIVERS THE TRAP)";
+		const int by = L.banner_y;
+		if (L.banner_center_w > 0) {
+			draw_centered_title(L.banner_center_x, L.banner_center_w, by, msg_top, pal_red, L.reg);
+			draw_centered_title(L.banner_center_x, L.banner_center_w, by + L.banner_line_h, msg_bot, pal_red, L.reg);
+		} else {
+			const int right_edge = L.reg_x + REG_TOTAL_W;
+			draw_shadow_text(right_edge - text_w(msg_top, L.reg), by, msg_top, pal_red, L.reg);
+			draw_shadow_text(right_edge - text_w(msg_bot, L.reg), by + L.banner_line_h, msg_bot, pal_red, L.reg);
+		}
 	}
 
-	SDL_UpdateTexture(texture, nullptr, screen_buf.data(), canvas_w * 4);
+	std::lock_guard<std::mutex> lock(dash_mutex);
+	dash_ready.swap(dash_work);
+	dash_seq++;
+}
+
+void Gui::present()
+{
+	// Composite only when something changed: a new guest frame, a new
+	// dashboard, or the full-window mode toggling. Otherwise the texture
+	// already holds the right picture and presenting it again is free.
+	bool changed = false;
+	{
+		std::lock_guard<std::mutex> lock(frame_mutex);
+		if (frame_seq != frame_seen) {
+			frame_shown.swap(frame);
+			frame_seen = frame_seq;
+			changed = true;
+		}
+	}
+	{
+		std::lock_guard<std::mutex> lock(dash_mutex);
+		if (dash_seq != dash_seen) {
+			dash_shown.swap(dash_ready);
+			dash_seen = dash_seq;
+			changed = true;
+		}
+	}
+	if (fb_full != composed_full) {
+		composed_full = fb_full;
+		changed = true;
+	}
+
+	if (changed) {
+		// In the full-window mode there is nowhere to put the dashboard, and
+		// half-drawing it over the guest's console would be worse than not
+		// drawing it.
+		const bool fullscreen = guest_is_linux() && fb_full;
+		if (!fullscreen && dash_shown.size() == screen_buf.size())
+			std::copy(dash_shown.begin(), dash_shown.end(), screen_buf.begin());
+		else
+			std::fill(screen_buf.begin(), screen_buf.end(), DASH_BG);
+		blit_display(display_rect(fb_full));
+		SDL_UpdateTexture(texture, nullptr, screen_buf.data(), canvas_w * (int)sizeof(uint32_t));
+	}
+
 	SDL_RenderCopy(renderer, texture, nullptr, nullptr);
+	dump_canvas();
 	SDL_RenderPresent(renderer);
 }
 
-std::vector<RawKeyEvent> Gui::poll_input()
+void Gui::dump_canvas()
 {
-	std::vector<RawKeyEvent> events;
+	if (canvas_dump_path.empty()) return;
+	// Every 60th frame rather than every frame: this is a debugging aid
+	// watched from outside the process, and what it needs is a file that
+	// is never very stale, not one rewritten at the frame rate.
+	if (canvas_dump_frames++ % 60 != 0) return;
+	if (screen_buf.empty() || canvas_w <= 0 || canvas_h <= 0) return;
+
+	FILE *f = std::fopen(canvas_dump_path.c_str(), "wb");
+	if (!f) return;
+	std::fprintf(f, "P6\n%d %d 255\n", canvas_w, canvas_h);
+	// screen_buf is SDL_PIXELFORMAT_RGB888, which is 32-bit xRGB in host
+	// order despite the name -- the byte the name leaves out is the unused
+	// one. PPM wants three bytes per pixel, so drop it.
+	std::vector<uint8_t> row((size_t)canvas_w * 3);
+	for (int y = 0; y < canvas_h; y++) {
+		const uint32_t *src = &screen_buf[(size_t)y * canvas_w];
+		for (int x = 0; x < canvas_w; x++) {
+			row[x * 3 + 0] = (uint8_t)(src[x] >> 16);
+			row[x * 3 + 1] = (uint8_t)(src[x] >> 8);
+			row[x * 3 + 2] = (uint8_t)(src[x]);
+		}
+		std::fwrite(row.data(), 1, row.size(), f);
+	}
+	std::fclose(f);
+}
+
+void Gui::set_mouse_captured(bool on)
+{
+	captured = on;
+	apply_mouse_rect();
+	if (absolute_pointer) {
+		// The guest's cursor follows the host pointer exactly, so there is
+		// nothing to warp and no deltas to ask for: confine the pointer to
+		// the display and hide the host's copy of it. Start it inside, or
+		// the first motion would be clamped from wherever it was.
+		SDL_ShowCursor(on ? SDL_DISABLE : SDL_ENABLE);
+		if (on) {
+			const Rect r = display_rect(fb_full);
+			SDL_WarpMouseInWindow(window, r.x + r.w / 2, r.y + r.h / 2);
+		}
+	} else {
+		// SDL_SetRelativeMouseMode hides the cursor, warps it back after
+		// every motion event, and reports deltas -- the only way to give
+		// DOOM a pointer that can keep turning in one direction.
+		if (SDL_SetRelativeMouseMode(on ? SDL_TRUE : SDL_FALSE) != 0 && on) {
+			captured = false;
+			apply_mouse_rect();
+		}
+	}
+}
+
+void Gui::apply_mouse_rect()
+{
+	// The display area, not the window. The rest of the window is the
+	// dashboard, and a pointer that can wander over it while captured is a
+	// pointer that stops following the guest.
+	if (!window) return;
+	if (captured) {
+		const Rect r = display_rect(fb_full);
+		const SDL_Rect sr{ r.x, r.y, r.w, r.h };
+		SDL_SetWindowMouseRect(window, &sr);
+	} else {
+		SDL_SetWindowMouseRect(window, nullptr);
+	}
+}
+
+void Gui::toggle_fb_fullscreen()
+{
+	fb_full = !fb_full;
+	// The display just changed size, so a captured pointer's fence has to
+	// move with it.
+	apply_mouse_rect();
+}
+
+bool Gui::map_pointer(int wx, int wy, int &gx, int &gy) const
+{
+	// SDL reports the pointer in window coordinates, which are canvas
+	// pixels: the process is per-monitor DPI aware (see init), so there is
+	// no logical-to-physical scale between them.
+	const Rect r = display_rect(fb_full);
+	if (r.w <= 0 || r.h <= 0 || guest_w <= 0 || guest_h <= 0) return false;
+	const bool inside = wx >= r.x && wx < r.x + r.w && wy >= r.y && wy < r.y + r.h;
+	long long x = (long long)(wx - r.x) * guest_w / r.w;
+	long long y = (long long)(wy - r.y) * guest_h / r.h;
+	gx = (int)(x < 0 ? 0 : x >= guest_w ? guest_w - 1 : x);
+	gy = (int)(y < 0 ? 0 : y >= guest_h ? guest_h - 1 : y);
+	return inside;
+}
+
+std::vector<RawInputEvent> Gui::poll_input()
+{
+	std::vector<RawInputEvent> events;
 
 	SDL_Event e;
 	while (SDL_PollEvent(&e)) {
 		if (e.type == SDL_QUIT) exit(0);
-		if (e.type == SDL_KEYDOWN) events.push_back({(uint32_t)e.key.keysym.sym, true});
-		if (e.type == SDL_KEYUP) events.push_back({(uint32_t)e.key.keysym.sym, false});
+
+		switch (e.type) {
+		case SDL_KEYDOWN:
+		case SDL_KEYUP: {
+			RawInputEvent ev;
+			ev.kind = RawInputEvent::Kind::Key;
+			ev.sdl_keysym = (uint32_t)e.key.keysym.sym;
+			ev.sdl_scancode = (uint32_t)e.key.keysym.scancode;
+			ev.mods = (uint16_t)e.key.keysym.mod;
+			ev.pressed = (e.type == SDL_KEYDOWN);
+			// Repeats are passed along rather than filtered. A guest with
+			// its own input layer does its own repeat from the held state,
+			// so forwarding the host's would double it; a serial console
+			// has no held state and needs the host's, or holding a key
+			// types one character. The consumer knows which it is, so
+			// both get the event and one of them ignores it -- see the
+			// repeat handling in DoomSystem::run.
+			ev.repeat = (e.key.repeat != 0);
+			events.push_back(ev);
+			break;
+		}
+		case SDL_TEXTINPUT: {
+			// One event per composed character. SDL hands over UTF-8 with
+			// the host's keyboard layout, modifiers and any dead-key
+			// composition already resolved, which is the whole reason to
+			// use it rather than deriving characters from keysyms.
+			RawInputEvent ev;
+			ev.kind = RawInputEvent::Kind::Text;
+			std::snprintf(ev.text, sizeof(ev.text), "%s", e.text.text);
+			events.push_back(ev);
+			break;
+		}
+		// The mouse belongs to the guest only over its display. Everywhere
+		// else in the window is the dashboard, so motion there is not
+		// reported at all, and neither is a click. The one exception is a
+		// release whose press was reported: dropping that would leave the
+		// guest holding a button down after the pointer wandered off.
+		case SDL_MOUSEMOTION: {
+			RawInputEvent ev;
+			ev.kind = RawInputEvent::Kind::MouseMotion;
+			ev.dx = e.motion.xrel;
+			ev.dy = e.motion.yrel;
+			if (captured && !absolute_pointer) {
+				// Relative mode: the pointer is hidden and pinned, so its
+				// position means nothing and only the deltas count.
+				if (ev.dx == 0 && ev.dy == 0) break;
+			} else if (!map_pointer(e.motion.x, e.motion.y, ev.x, ev.y)) {
+				break;
+			}
+			events.push_back(ev);
+			break;
+		}
+		case SDL_MOUSEBUTTONDOWN:
+		case SDL_MOUSEBUTTONUP: {
+			RawInputEvent ev;
+			ev.kind = RawInputEvent::Kind::MouseButton;
+			ev.button = e.button.button;
+			ev.pressed = (e.type == SDL_MOUSEBUTTONDOWN);
+			const uint32_t bit = 1u << (ev.button & 31);
+			const bool inside = map_pointer(e.button.x, e.button.y, ev.x, ev.y)
+			                    || (captured && !absolute_pointer);
+			if (ev.pressed) {
+				if (!inside) break;
+				buttons_down |= bit;
+			} else {
+				if (!(buttons_down & bit)) break;
+				buttons_down &= ~bit;
+			}
+			events.push_back(ev);
+			break;
+		}
+		case SDL_MOUSEWHEEL: {
+			RawInputEvent ev;
+			ev.kind = RawInputEvent::Kind::MouseWheel;
+			ev.dx = e.wheel.x;
+			ev.dy = e.wheel.y;
+			const bool inside = map_pointer(e.wheel.mouseX, e.wheel.mouseY, ev.x, ev.y)
+			                    || (captured && !absolute_pointer);
+			if (!inside) break;
+			events.push_back(ev);
+			break;
+		}
+		default:
+			break;
+		}
 	}
 
 	return events;
@@ -539,26 +1016,47 @@ void Gui::draw_char(int x, int y, char c, uint32_t col, float scale_x_, float sc
 	// The glyph's origin (x,y) stays in the normal design-unit grid --
 	// only the 8x8 bitmap's own pixels shrink -- so a smaller-scale
 	// string still lines up with normal-scale text around it.
-	float px_scale = scale_x * scale_x_;
-	float py_scale = scale_y * scale_y_;
-	int bw = (int)(px_scale + 0.5f); if (bw < 1) bw = 1;
-	int bh = (int)(py_scale + 0.5f); if (bh < 1) bh = 1;
-	int origin_x = (int)(x * scale_x);
-	int origin_y = (int)(y * scale_y);
+	float px_scale = text_ux * scale_x_;
+	float py_scale = text_uy * scale_y_;
+	int origin_x = (int)(x * text_ux);
+	int origin_y = (int)(y * text_uy);
 
+	// Each source pixel covers the span from where it starts to where the
+	// *next* one starts. That sounds like a long way of saying "draw a
+	// block of size px_scale", and it is not: a fixed rounded size and a
+	// truncated position disagree whenever the scale is not an integer,
+	// and the disagreement leaves undrawn columns and rows scattered
+	// through the glyph.
+	//
+	// Concretely, at px_scale 2.25 a rounded size of 2 puts source column
+	// 3 at pixels 6-7 and column 4 at pixel 9 -- pixel 8 is never written.
+	// Repeated down the glyph that reads as a transparent line straight
+	// through every character, and since the same arithmetic runs on the
+	// other axis, the two cross. It only showed up at some window sizes,
+	// because it needs a fractional scale to appear at all: the trace text
+	// draws at 0.75, so a 1920-wide window (scale_x 3.0) lands exactly on
+	// it while a 1280-wide one (2.0, giving 1.5) happens not to.
+	//
+	// Deriving the extent from the next start makes the blocks tile with
+	// no gaps and no overlap at any scale, which is what nearest-neighbour
+	// scaling should have been doing in the first place.
 	for (int r = 0; r < 8; r++) {
 		uint8_t b = font8x8[(uint8_t)c][r];
+		int py0 = origin_y + (int)(r * py_scale);
+		int py1 = origin_y + (int)((r + 1) * py_scale);
+		if (py1 <= py0) py1 = py0 + 1; // never collapse a row away entirely
+
 		for (int cl = 0; cl < 8; cl++) {
 			if (!(b & (0x80 >> cl))) continue;
 
-			int px = origin_x + (int)(cl * px_scale);
-			int py = origin_y + (int)(r * py_scale);
-			for (int by = 0; by < bh; by++) {
-				int ty = py + by;
+			int px0 = origin_x + (int)(cl * px_scale);
+			int px1 = origin_x + (int)((cl + 1) * px_scale);
+			if (px1 <= px0) px1 = px0 + 1;
+
+			for (int ty = py0; ty < py1; ty++) {
 				if (ty < 0 || ty >= canvas_h) continue;
-				uint32_t *row = &screen_buf[(size_t)ty * canvas_w];
-				for (int bx = 0; bx < bw; bx++) {
-					int tx = px + bx;
+				uint32_t *row = &dash_work[(size_t)ty * canvas_w];
+				for (int tx = px0; tx < px1; tx++) {
 					if (tx < 0 || tx >= canvas_w) continue;
 					row[tx] = col;
 				}
@@ -567,12 +1065,13 @@ void Gui::draw_char(int x, int y, char c, uint32_t col, float scale_x_, float sc
 	}
 }
 
-void Gui::draw_string(int x, int y, const char *s, uint32_t c, float scale_x_, float scale_y_)
+void Gui::draw_string(int x, int y, const char *s, uint32_t c, float scale_x_, float scale_y_, int track)
 {
 	// Advance (character pitch) tracks only scale_x_ -- a taller-but-not-
 	// wider string (scale_y_ > scale_x_) still lays its characters out at
 	// their normal horizontal spacing, it just draws each one taller.
 	int advance = (int)(8 * scale_x_ + 0.5f); if (advance < 1) advance = 1;
+	advance += track;
 	while (*s) { draw_char(x, y, *s++, c, scale_x_, scale_y_); x += advance; }
 }
 

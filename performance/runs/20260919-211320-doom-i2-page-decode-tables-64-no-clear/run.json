@@ -1,0 +1,15 @@
+{
+  "time": "20260919-211320",
+  "label": "I2: page decode tables, 64, no clear",
+  "workload": "doom",
+  "steps": 1000000000,
+  "seconds": 15.038,
+  "mips": 66.498,
+  "crash_log_sha256": "3d73dac132f396aa505f0bc0ca70860519d439b38267eadb95954786cf97ee99",
+  "exe": "build\\perf-predecode2.exe",
+  "exe_sha256": "c13db3822fb6d8e39dd6b703dbc789798850c09c46fb2e80ec1f5adac2a42a01",
+  "commit": "7e8e827",
+  "dirty": true,
+  "host": "AMD64 Family 25 Model 97 Stepping 2, AuthenticAMD / Windows 10",
+  "profiled": false
+}

@@ -1,5 +1,10 @@
 # DoomV Restructure Plan
 
+> **Historical.** This is the plan for the original restructure of an RV32IMA
+> core into separate files. That layout was carried out and has since grown
+> well past it; see the [README](README.md#code-layout) and the
+> [documentation](docs/README.md) for the current machine.
+
 Splitting the current single-blob core into the layout below, plus a punch list
 of things this restructure surfaces that aren't decided yet.
 
@@ -190,7 +195,7 @@ exposes.
 Compact and contiguous, not the sparse `0x80000000`-based layout the
 original single-file code had. MMIO first, framebuffer right after, RAM
 grows up from there, WAD sits past the end of RAM. Defined in
-`tools/doombuild/doomv_mmio.h` and `tools/doombuild/riscv.lds`:
+`tools/doom/doombuild/doomv_mmio.h` and `tools/doom/doombuild/riscv.lds`:
 
 ```
 0x10000000 - 0x10000FFF   MMIO (input reg, tick reg, headroom for later) - 4K
@@ -249,7 +254,7 @@ the CPU side just hasn't caught up yet.
   internally). See the libc-linking bullet below — this ended up mattering
   a lot more than expected.
 - **doomgeneric vendored** — added as a git submodule at
-  `tools/doombuild/doomgeneric` (pointing at `ozkl/doomgeneric`), not a
+  `tools/doom/doombuild/doomgeneric` (pointing at `ozkl/doomgeneric`), not a
   frozen copy, so it can be updated/pinned deliberately later.
 - **Startup code** — since Zicsr isn't enabled, whatever boots the Doom
   binary can't rely on the toolchain's own `crt0.o` (it touches CSRs and
@@ -363,7 +368,7 @@ the CPU side just hasn't caught up yet.
   Splitting into this many files just means updating its source list for
   now; only worth reconsidering (e.g. CMake) if the file count keeps
   growing.
-- **Guest build pipeline — resolved.** `tools/doombuild/Makefile`, separate
+- **Guest build pipeline — resolved.** `tools/doom/doombuild/Makefile`, separate
   from the emulator's own root `Makefile` (two independent build systems:
   one produces the emulator, the other the guest binary it loads). Lists
   all ~80 engine sources + the 3 platform files, `WAD=doom1|doom2|final`
