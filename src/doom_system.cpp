@@ -1942,15 +1942,15 @@ void DoomSystem::run()
 				// belongs to the thread that set the video mode, which is
 				// this one.
 				//
-				// Two keys for it, Ctrl+Alt+V and Shift+F8, because a chord
-				// and a function key get taken by different things and having
-				// both means one is usually free. Shift rather than a bare F8
-				// so the guest keeps F8 for itself -- a lone function key is
-				// not free, DOOM binds all twelve and plenty of terminal
-				// programs bind them too. Linux-only, since pasting into DOOM
-				// is not a thing to want.
+				// Two keys for it, Ctrl+Alt+V and F8, because a chord and a
+				// function key get taken by different things and having both
+				// means one is usually free. F8 costs the guest that key --
+				// it is intercepted here and never forwarded -- which is the
+				// trade for a paste that needs no modifier to arrive.
+				// Linux-only, since pasting into DOOM is not a thing to want,
+				// and DOOM binds every function key.
 				if ((ctrl_alt && ev.sdl_keysym == SDLK_v)
-				    || (linux_mode && ev.sdl_keysym == SDLK_F8 && (ev.mods & KMOD_SHIFT))) {
+				    || (linux_mode && ev.sdl_keysym == SDLK_F8)) {
 					if (char *text = SDL_GetClipboardText()) {
 						submit_paste(text);
 						SDL_free(text);
