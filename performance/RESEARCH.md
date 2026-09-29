@@ -535,6 +535,166 @@ nothing caches them. The interrupt enables are outside it too and must be:
 4. `python scripts/ci.py`.
 5. Retrain the PGO profile, since the hot code has moved.
 
+<a id="round-2"></a>
+## Round 2: where the Linux guests lose time (2026-09-29)
+
+With the fast loop in, DOOM runs 99.98% of its steps in `run_fast` and the
+Ubuntu boot 97.4%. The question for this round was what the 2.6% costs, and
+what the fast loop itself costs on a guest with a real userland. Every number
+here is from this Windows host, Clang with the committed PGO profile (not
+retrained), against the binary built from `82a34b1`.
+
+### What the counters said
+
+An instrumented build counted, over `bench.py ubuntu` (3G steps):
+
+| | count |
+|---|---:|
+| fetch / load / store cache misses | 18.2M / 16.5M / 7.3M |
+| ... of the fetch misses, the right page with a stale key | 21.2M of 21.2M* |
+| page walks (TLB misses on an eligible access) | 22.6M |
+| ... where the slot already held *that page*, for another access type or privilege | 16.3M |
+| full TLB flushes | 146.5K |
+| ... `sfence.vma` naming one address | 119.5K |
+| ... `csrr misa` | 25.4K |
+| ... `satp` writes | 1.2K |
+
+\* counted per `fetch16`, so a split instruction counts twice.
+
+Almost none of it is capacity. The caches are being *invalidated*, for four
+reasons, none of which change a cached answer:
+
+1. **A privilege change bumped `state_gen`.** Every trap and every `sret`
+   emptied every fetch and data cache entry, although privilege is one of two
+   or three values and could simply be part of the key.
+2. **Every CSR access bumped it, reads included.** A CSR read goes through
+   the write path with the old value, so `csrr sstatus` counted as a change,
+   and so did Linux's `csrrw sscratch` on every trap entry, the kernel's
+   `sepc`/`scause`/`stval` traffic, and DoomV's own write of `time` on each
+   `rdtime`. A `csrr satp` or `csrr misa` also flushed the whole TLB.
+3. **`SUM` was a `state_gen` bit**, so every `copy_from_user` (the kernel
+   sets and clears SUM around each one) emptied the fetch cache too, which
+   SUM cannot affect.
+4. **The TLB indexes on the page but keys on page *and* access type**, so a
+   load, a store and a fetch to one page evicted each other. And a flush
+   cleared all 4096 entries (64 KB) each time: 9.6 GB of stores over the
+   boot.
+
+### The patch, measured
+
+[`patches/cache-keys.patch`](patches/cache-keys.patch), 5 files, +43/-25:
+
+* privilege folded into the cache and counter keys instead of bumping `state_gen`;
+* separate fetch and data keys, SUM and MXR in the data key only;
+* a CSR write that stores the value already there leaves `state_gen` alone, and so
+  does any write to a CSR no cached decision reads (the scratch, epc, cause
+  and tval registers, `fflags`/`frm`/`fcsr`, `vstart`/`vxsat`/`vxrm`,
+  `cycle`/`time`/`instret`, `stimecmp`);
+* `mstatus.MPP`/`MPV` only count when MPRV is set, which is the only time they
+  change a translation;
+* a `satp` write of the value already there, and a `misa` write that changes
+  no extension, no longer flush the TLB;
+* the TLB is flushed by generation rather than by clearing it, and indexed by
+  page and access type (2^14 entries);
+* `run_fast` keeps the history ring's index in a register for the run and
+  stores it once at the end (the member was loaded and stored every step:
+  11% of the Ubuntu profile was `record_history`).
+
+| workload | shipped `82a34b1` | patched | |
+|---|---:|---:|---|
+| ubuntu 3000M | 165.2 MIPS | 191.8 MIPS | **1.161x** |
+| linux 300M | 205.0 | 221.4 | **1.080x** |
+| doom 1000M | 291.2 | 297.8 | **1.023x** |
+| crash.log | | | identical, all three |
+
+Also checked: strict lock-step against Sail, **373 pass, 0 fail**, with no
+values taken from the reference; and `DOOMV_FAST=0` against `DOOMV_FAST=1`
+in the patched binary, identical crash.log on linux and doom. `verify.py` has
+not been run on it, and the PGO profile has not been retrained.
+
+After it, Ubuntu's misses fall to 2.6M / 3.5M / 1.3M (fetch / load / store),
+and page walks to 7.9M.
+
+**Why it stays deterministic.** Each change either widens a key (so
+more entries survive, but only when every input to the answer is the same)
+or narrows the set of events that invalidate it to the ones that change an
+input. The two TLB changes are the only ones the guest could in principle
+see, and only a guest that edits a PTE and relies on `csrr satp` or `csrr
+misa` to flush it. The architecture gives it no such right: Zicsr says a read
+performs no write and has no write side effects, and Sail agrees.
+
+**What needs a reviewer's eye.** The deny-list of CSRs in
+`Registers::write_csr`: any CSR on it must be one no `state_gen`-keyed
+decision reads. Missing one from the list only costs speed; wrongly adding
+one breaks caching. The same test as the `mstatus` mask before it: check the
+list against every reader of `state_gen`, of which there are three (the
+fetch cache, the data caches and `counter_key`).
+
+### Where the time goes now
+
+A line-level profile (`-gline-tables-only` build, samples mapped with
+`llvm-symbolizer`, innermost inlined frame) of the patched Ubuntu boot puts
+about 87% of samples in `run_fast` and the two helpers it inlines (taken
+before the history change). The hottest line is the register read just after
+the decode lookup, at 11% -- most likely skid from the decode-entry load: the
+table is 16 MB and Ubuntu's code does not fit in host cache. The history write
+was another 11%, which is what the register-held index went after. Page
+walks, `pmp::check` and the CSR path are about 5% between them.
+
+What still leaves the fast loop on Ubuntu, per 3G steps:
+
+| reason | count |
+|---|---:|
+| decode cache miss (all 10.7M are *conflicts*: another pc in the slot) | 10.7M |
+| run entry refused (the interrupt key moved: every CSR write, every trap) | 10.5M |
+| a Zicsr instruction (`csrr`/`csrw`, `sret`, `ecall`, `sfence.vma`...) | 8.9M |
+| an atomic (`amo*`, `lr`, `sc`) | 5.2M |
+| load / fetch / store miss | 3.5M / 2.6M / 1.3M |
+| Zbb / Zba / Zbs | 0.6M |
+| `fence`, `cbo.zero` | 0.4M / 0.4M |
+
+### What to do next, in order
+
+| # | change | expected | evidence |
+|---|---|---|---|
+| 1 | ~~Land `cache-keys.patch` after `verify.py` and a PGO retrain~~ landed | 1.12-1.16x ubuntu, 1.08-1.10x linux | measured above and below |
+| 2 | `sfence.vma` with an address drops that page only | most of the remaining 7.9M walks | 119.5K of 121K flushes name an address; each refills ~60 pages |
+| 3 | A second way in the decode cache, probed only on a miss | up to 10.7M decodes | every miss is a conflict |
+| 4 | Atomics, Zba/Zbb/Zbs and `cbo.zero` in the fast loop on a data-cache hit | ~6M fewer exits | all are plain loads/stores/ALU once the page is cached |
+| 5 | Pre-decoded blocks (item 3 of the first round) | the largest left, on every workload | 87% of Ubuntu and ~100% of DOOM is now the per-step loop |
+| 6 | Guest RAM and the decode table in large pages | unmeasured | Windows `MEM_LARGE_PAGES`, needs `SeLockMemoryPrivilege`; guest-invisible |
+| 7 | Snapshots (item 6 of the first round) | a boot becomes a load | unchanged |
+
+**2** is where the care goes. A fence naming an address must also drop any
+translation cached from a *superpage* that covers it, so the TLB either records
+the leaf's size or falls back to a full flush while any superpage entry is
+live. The fetch and data caches, indexed by page, drop that one page's entry;
+the global generation stays for everything else.
+
+**3** was tried once in the other direction (hashing high bits into the index
+made the BusyBox boot worse, see above). A second way probed only after the
+first misses leaves the hit path exactly as it is, which is the reason to
+try it that way round.
+
+**4** has to keep the one property the fast loop rests on: a simple step
+changes only x registers, pc and plain RAM. An AMO or `sc` on a cached page
+does exactly that, provided the reservation is handled the way `step()`
+handles it; `lr` sets the reservation, which is state `step()` reads, so it
+either stays slow or the reservation moves into what the run settles at its end.
+
+**Landed.** The patch is in `src/` with its comments filled in, and the
+profile was retrained with `pgo.py`. Against `82a34b1` with its own profile,
+ubuntu 1.115x, linux 1.099x, doom 0.966x, crash.log identical on all three.
+The retrained profile and the old one are within noise of each other on the
+patched sources (doom 0.950x and 1.007x, ubuntu 1.038x and 1.011x in two
+paired repeats), and doom moves by about 5% between repeats on this host, so
+doom is best read as unchanged. Strict Sail lock-step and `verify.py` were run
+on the landed binary.
+
+**Not worth doing:** skipping idle time. An idle guest sits in the kernel's
+`wfi` loop, and a WFI already ends after Sail's `max_time_to_wait` of 10
+ticks; waiting longer would change the trace.
+
 ## Sources
 
 * QEMU, [TCG Instruction Counting](https://github.com/qemu/qemu/blob/master/docs/devel/tcg-icount.rst)

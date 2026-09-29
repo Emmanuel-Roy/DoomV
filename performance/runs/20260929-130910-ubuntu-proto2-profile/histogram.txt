@@ -1,0 +1,29 @@
+ubuntu, 3,000,000,000 steps, 174.58 MIPS while sampled (sampling every 2 ms slows the run a little)
+
+ samples  share  function
+
+    5976  91.8%  ##################################################  DoomSystem::cpu_loop()
+     207   3.2%  ##  RiscvCore::translate_or_trap(Registers&, Memory&, unsigned long long, AccessType, unsigned long long&, unsigned int)
+      74   1.1%  #  pmp::check(Registers&, unsigned long long, unsigned int, int, unsigned char)
+      65   1.0%  #  RiscvCore::exec_32ZICSR(DecodedOp const&, Registers&, Memory&)
+      48   0.7%  #  RiscvCore::load_virtual(Registers&, Memory&, unsigned long long, unsigned int, unsigned long long&)
+      20   0.3%  #  Decoder::decode_compressed(unsigned short) const
+      15   0.2%  #  [ntdll.dll]
+      15   0.2%  #  vcommon::exec_v_ldst(DecodedOp const&, Registers&, Memory&, RiscvCore&)
+      11   0.2%  #  Memory::write32(unsigned long long, unsigned int)
+      10   0.2%  #  Decoder::decode_i(unsigned int, Extension) const
+      10   0.2%  #  RiscvCore::store_virtual(Registers&, Memory&, unsigned long long, unsigned int, unsigned long long)
+       9   0.1%  #  Decoder::classify(unsigned int) const
+       9   0.1%  #  Memory::read32(unsigned long long)
+       7   0.1%  #  RiscvCore::read_csr_effective(Registers&, Memory&, unsigned short)
+       6   0.1%  #  Memory::read8(unsigned long long)
+       6   0.1%  #  pmp::page_permits(Registers&, unsigned long long, int, unsigned char)
+       5   0.1%  #  RiscvCore::exec_32A(DecodedOp const&, Registers&, Memory&)
+       5   0.1%  #  Memory::write64(unsigned long long, unsigned long long)
+       4   0.1%  #  Registers::write_csr(unsigned short, unsigned long long)
+       3   0.0%  #  [msvcrt.dll]
+       2   0.0%  #  RiscvCore::exec_ZBB(DecodedOp const&, Registers&, Memory&)
+       1   0.0%  #  (anonymous namespace)::compute_mip(Registers&, Memory&)
+       1   0.0%  #  Registers::write_f(int, double)
+
+6509 samples

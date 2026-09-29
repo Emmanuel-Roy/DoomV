@@ -1,0 +1,8 @@
+doom, 1,000,000,000 steps, 279.644 MIPS while sampled (sampling every 2 ms slows the run a little)
+
+ samples  share  function
+
+     982  99.7%  ##################################################  DoomSystem::cpu_loop()
+       3   0.3%  #  [ntdll.dll]
+
+985 samples

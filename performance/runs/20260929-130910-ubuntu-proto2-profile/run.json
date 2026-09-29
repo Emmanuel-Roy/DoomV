@@ -1,0 +1,78 @@
+{
+  "time": "20260929-130910",
+  "label": "proto2 profile",
+  "workload": "ubuntu",
+  "steps": 3000000000,
+  "seconds": 17.184,
+  "mips": 174.58,
+  "crash_log_sha256": "9be8284ab1d9fdb66943586427f4328761caa56ef478ec0065ec8585039c9ada",
+  "exe": "C:\\Users\\EMMANU~1\\AppData\\Local\\Temp\\claude\\C--Users-Emmanuel-Roy\\dba5500d-2660-4a20-84a0-a2b86ce90174\\scratchpad\\wt\\proto2.exe",
+  "exe_sha256": "4b0f3b5b61202f447d9e68ba2867474e399468d9cca3cf34a404c4baf9c318f1",
+  "commit": "82a34b1",
+  "dirty": false,
+  "host": "AMD64 Family 25 Model 97 Stepping 2, AuthenticAMD / Windows 10",
+  "profiled": true,
+  "samples": 6509,
+  "top": [
+    [
+      "DoomSystem::cpu_loop()",
+      5976
+    ],
+    [
+      "RiscvCore::translate_or_trap(Registers&, Memory&, unsigned long long, AccessType, unsigned long long&, unsigned int)",
+      207
+    ],
+    [
+      "pmp::check(Registers&, unsigned long long, unsigned int, int, unsigned char)",
+      74
+    ],
+    [
+      "RiscvCore::exec_32ZICSR(DecodedOp const&, Registers&, Memory&)",
+      65
+    ],
+    [
+      "RiscvCore::load_virtual(Registers&, Memory&, unsigned long long, unsigned int, unsigned long long&)",
+      48
+    ],
+    [
+      "Decoder::decode_compressed(unsigned short) const",
+      20
+    ],
+    [
+      "[ntdll.dll]",
+      15
+    ],
+    [
+      "vcommon::exec_v_ldst(DecodedOp const&, Registers&, Memory&, RiscvCore&)",
+      15
+    ],
+    [
+      "Memory::write32(unsigned long long, unsigned int)",
+      11
+    ],
+    [
+      "Decoder::decode_i(unsigned int, Extension) const",
+      10
+    ],
+    [
+      "RiscvCore::store_virtual(Registers&, Memory&, unsigned long long, unsigned int, unsigned long long)",
+      10
+    ],
+    [
+      "Decoder::classify(unsigned int) const",
+      9
+    ],
+    [
+      "Memory::read32(unsigned long long)",
+      9
+    ],
+    [
+      "RiscvCore::read_csr_effective(Registers&, Memory&, unsigned short)",
+      7
+    ],
+    [
+      "Memory::read8(unsigned long long)",
+      6
+    ]
+  ]
+}

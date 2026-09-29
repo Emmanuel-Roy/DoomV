@@ -1,0 +1,267 @@
+diff --git a/src/doom_system.cpp b/src/doom_system.cpp
+index 79f19da..31c1bf2 100644
+--- a/src/doom_system.cpp
++++ b/src/doom_system.cpp
+@@ -241,7 +241,7 @@ static bool filtered_here(const Registers &regs, uint16_t cfg)
+ // the call sites, since it runs on every step.
+ void DoomSystem::refresh_counter_enables()
+ {
+-	counter_key = regs.state_gen + ExtensionsEpoch;
++	counter_key = regs.keyed(regs.state_gen + ExtensionsEpoch);
+ 	counts_instret = !(regs.read_csr(0x320) & 4) && !filtered_here(regs, 0x322);
+ 	counts_cycle = !(regs.read_csr(0x320) & 1) && !filtered_here(regs, 0x321);
+ }
+@@ -316,7 +316,7 @@ void DoomSystem::run_fast(uint64_t n)
+ 		    || decoder.cache_epoch != ExtensionsEpoch
+ 		    || !Extensions.C || !Extensions.XLEN64 || Extensions.ZICFILP
+ 		    || core.wait_request != RiscvCore::Wait::None
+-		    || regs.state_gen + ExtensionsEpoch != counter_key
++		    || regs.keyed(regs.state_gen + ExtensionsEpoch) != counter_key
+ 		    || EventGen != irq_key || timer.get_mtime() >= irq_deadline) {
+ 			fs_slow_entry++;
+ 			step();
+@@ -331,7 +331,7 @@ void DoomSystem::run_fast(uint64_t n)
+ 			const uint64_t steps = (d > (~0ull >> 2)) ? ~0ull : 2 * d - tick_phase;
+ 			if (steps < limit) limit = steps;
+ 		}
+-		const uint64_t key = regs.state_gen + mmu_tlb_generation() + ExtensionsEpoch;
++		const uint64_t key = regs.fetch_key(regs.state_gen + mmu_tlb_generation() + ExtensionsEpoch), dkey = regs.data_key(regs.state_gen + mmu_tlb_generation() + ExtensionsEpoch);
+ 		regs.minstret_increment = counts_instret;
+ 
+ 		uint64_t pc = regs.get_pc();
+@@ -339,6 +339,8 @@ void DoomSystem::run_fast(uint64_t n)
+ 		uint32_t last_insn = 0;
+ 		uint8_t last_len = 4;
+ 		uint64_t code_vpage = ~0ull;
++		Registers::HistoryRecord *const hist = regs.history_base();
++		unsigned hp = (unsigned)regs.history_index();
+ 		const uint8_t *code = nullptr;
+ 		while (done < limit) {
+ 			// Fetch: the code page stays valid for the whole run.
+@@ -398,7 +400,7 @@ void DoomSystem::run_fast(uint64_t n)
+ 				const uint64_t addr = a + imm;
+ 				if (((addr + size - 1) >> 12) != (addr >> 12)) goto out;
+ 				const RiscvCore::DataPage &e = core.load_cache[(addr >> 12) & (RiscvCore::DATA_CACHE_SIZE - 1)];
+-				if (!(e.vpage == (addr >> 12) && e.key == key)) { fs_ld++; goto out; }
++				if (!(e.vpage == (addr >> 12) && e.key == dkey)) { fs_ld++; goto out; }
+ 				uint64_t v = 0;
+ 				std::memcpy(&v, e.host + (addr & 0xFFF), size);
+ 				switch (d.fast_op) {
+@@ -415,7 +417,7 @@ void DoomSystem::run_fast(uint64_t n)
+ 				const uint64_t addr = a + imm;
+ 				if (((addr + size - 1) >> 12) != (addr >> 12)) goto out;
+ 				const RiscvCore::DataPage &e = core.store_cache[(addr >> 12) & (RiscvCore::DATA_CACHE_SIZE - 1)];
+-				if (!(e.vpage == (addr >> 12) && e.key == key)) { fs_st++; goto out; }
++				if (!(e.vpage == (addr >> 12) && e.key == dkey)) { fs_st++; goto out; }
+ 				std::memcpy(e.host + (addr & 0xFFF), &b, size);
+ 				if (e.backing != Memory::Backing::Ram) memory.framebuffer_stored(e.backing, size);
+ 				break;
+@@ -456,13 +458,15 @@ void DoomSystem::run_fast(uint64_t n)
+ 				next = regs.get_pc();
+ 				break;
+ 			}
+-			regs.record_history(pc, tag);
++			hist[hp] = { pc, tag };
++			hp = (hp + 1) & (Registers::HISTORY_SIZE - 1);
+ 			pc = next;
+ 			last_insn = tag;
+ 			last_len = (uint8_t)len;
+ 			done++;
+ 		}
+ 	out:
++		regs.history_index() = (int)hp;
+ 		regs.set_pc(pc);
+ 		fs_fast += done;
+ 		if (done == limit && limit < n) fs_deadline++;
+@@ -502,7 +506,7 @@ void DoomSystem::step()
+ // filtered out in the current mode.
+ void DoomSystem::clock_tick()
+ {
+-	if (regs.state_gen + ExtensionsEpoch != counter_key) refresh_counter_enables();
++	if (regs.keyed(regs.state_gen + ExtensionsEpoch) != counter_key) refresh_counter_enables();
+ 	if (counts_cycle) regs.bump_csr(0xB00);
+ 	memory.tick_clock();
+ }
+@@ -537,7 +541,7 @@ void DoomSystem::run_wait()
+ 	int trap = 0;   // 2 illegal, 22 virtual instruction
+ 	for (;;) {
+ 		const bool timed_out = remaining == 0;
+-		if (regs.state_gen + ExtensionsEpoch != counter_key) refresh_counter_enables();
++		if (regs.keyed(regs.state_gen + ExtensionsEpoch) != counter_key) refresh_counter_enables();
+ 		regs.minstret_increment = counts_instret;
+ 		if (core.wake_for_interrupt(regs, memory)) break;
+ 		if (kind != RiscvCore::Wait::Wfi && !core.reservation_held()) break;
+@@ -578,7 +582,7 @@ void DoomSystem::run_wait()
+ // flushes the TLB for its own reasons), or a change to the extensions.
+ bool DoomSystem::fetch16(uint64_t vaddr, uint16_t &out)
+ {
+-	const uint64_t key = regs.state_gen + mmu_tlb_generation() + ExtensionsEpoch;
++	const uint64_t key = regs.fetch_key(regs.state_gen + mmu_tlb_generation() + ExtensionsEpoch);
+ 	const uint64_t vpage = vaddr >> 12;
+ 	const unsigned offset = (unsigned)(vaddr & 0xFFF);
+ 	FetchPage &e = fetch_cache[vpage & (FETCH_CACHE_SIZE - 1)];
+@@ -626,7 +630,7 @@ bool DoomSystem::fetch16(uint64_t vaddr, uint16_t &out)
+ // step_execute masks them off before anything records the encoding.
+ bool DoomSystem::fetch_instr(uint64_t vaddr, uint32_t &out)
+ {
+-	const uint64_t key = regs.state_gen + mmu_tlb_generation() + ExtensionsEpoch;
++	const uint64_t key = regs.fetch_key(regs.state_gen + mmu_tlb_generation() + ExtensionsEpoch);
+ 	const uint64_t vpage = vaddr >> 12;
+ 	const unsigned offset = (unsigned)(vaddr & 0xFFF);
+ 	const FetchPage &e = fetch_cache[vpage & (FETCH_CACHE_SIZE - 1)];
+@@ -653,7 +657,7 @@ void DoomSystem::step_execute()
+ 	const uint64_t traps_before = core.trap_count;
+ 	step_committed = false;
+ 	step_decoded = false;
+-	if (regs.state_gen + ExtensionsEpoch != counter_key) refresh_counter_enables();
++	if (regs.keyed(regs.state_gen + ExtensionsEpoch) != counter_key) refresh_counter_enables();
+ 	regs.minstret_increment = counts_instret;
+ 
+ 	// In lenient lock-step the reference decides when an interrupt is taken
+diff --git a/src/extensions/ext_zicsr.cpp b/src/extensions/ext_zicsr.cpp
+index a053133..04c224f 100644
+--- a/src/extensions/ext_zicsr.cpp
++++ b/src/extensions/ext_zicsr.cpp
+@@ -499,7 +499,7 @@ static void write_misa(uint64_t value, uint64_t next_pc)
+ 	if (std::memcmp(&before, &Extensions, sizeof before) != 0)
+ 		ExtensionsEpoch++;
+ 	bump_event_gen();
+-	mmu_tlb_flush();
++	if (std::memcmp(&before, &Extensions, sizeof before) != 0) mmu_tlb_flush();
+ }
+ 
+ // The address an xepc names as an instruction start: bit 0 is never one,
+@@ -553,6 +553,7 @@ uint64_t compute_misa()
+ // satp.MODE=0xa (Sv57) already active.
+ void write_satp_warl(Registers &regs, uint16_t csr, uint64_t value)
+ {
++	if (regs.read_csr(csr) == value) return;
+ 	// The root of translation just moved, so every cached translation
+ 	// describes a page table that is no longer the one in force.
+ 	mmu_tlb_flush();
+@@ -1192,7 +1193,7 @@ uint64_t RiscvCore::read_csr_effective(Registers &regs, Memory &mem, uint16_t cs
+ // check did not reach. Reporting instead of bypassing puts them under it.
+ static uint64_t data_cache_key(const Registers &regs)
+ {
+-	return regs.state_gen + mmu_tlb_generation() + ExtensionsEpoch;
++	return regs.data_key(regs.state_gen + mmu_tlb_generation() + ExtensionsEpoch);
+ }
+ 
+ static void remember_data_page(Registers &regs, Memory &mem, RiscvCore::DataPage &e,
+diff --git a/src/mmu.cpp b/src/mmu.cpp
+index 6359d68..b1755bd 100644
+--- a/src/mmu.cpp
++++ b/src/mmu.cpp
+@@ -215,13 +215,14 @@ uint64_t guest_fault_cause(AccessType type)
+ // must flush, and the flush list is in mmu.hpp.
+ namespace {
+ 
+-constexpr unsigned TLB_BITS = 12;              // 4096 entries
++constexpr unsigned TLB_BITS = 14;              // 4096 pages x 4 access types
+ constexpr unsigned TLB_SIZE = 1u << TLB_BITS;
+ constexpr uint64_t TLB_MASK = TLB_SIZE - 1;
+ 
+ struct TlbEntry {
+ 	uint64_t key;   // 0 means empty; see tlb_key below
+ 	uint64_t ppn;   // physical address of the page, low 12 bits clear
++	uint64_t gen;
+ };
+ 
+ TlbEntry tlb[TLB_SIZE];
+@@ -399,7 +400,6 @@ uint64_t mmu_tlb_gen = 0;
+ 
+ void mmu_tlb_flush()
+ {
+-	for (unsigned i = 0; i < TLB_SIZE; i++) tlb[i].key = 0;
+ 	mmu_tlb_gen++;
+ }
+ 
+@@ -626,8 +626,8 @@ bool mmu_translate(Registers &regs, Memory &mem, uint64_t vaddr, AccessType type
+ 		const uint64_t st = regs.read_csr(CSR_MSTATUS);
+ 		tlb_k = tlb_key(vaddr >> 12, eff_priv, type,
+ 		                (st & MSTATUS_SUM) != 0, (st & MSTATUS_MXR) != 0);
+-		tlb_i = (unsigned)((vaddr >> 12) & TLB_MASK);
+-		if (tlb[tlb_i].key == tlb_k) {
++		tlb_i = (unsigned)((((vaddr >> 12) << 2) | ((unsigned)type & 3)) & TLB_MASK);
++		if (tlb[tlb_i].key == tlb_k && tlb[tlb_i].gen == mmu_tlb_gen) {
+ 			paddr = tlb[tlb_i].ppn | (vaddr & 0xFFF);
+ 			return true;
+ 		}
+@@ -1046,7 +1046,7 @@ bool mmu_translate(Registers &regs, Memory &mem, uint64_t vaddr, AccessType type
+ 	// access after this one finds A and D already set and is cached then,
+ 	// which is the access that actually repeats.
+ 	if (tlb_eligible && !ad_was_updated) {
+-		tlb[tlb_i].key = tlb_k;
++		tlb[tlb_i].key = tlb_k; tlb[tlb_i].gen = mmu_tlb_gen;
+ 		tlb[tlb_i].ppn = paddr & ~0xFFFull;
+ 	}
+ 	return true;
+diff --git a/src/registers.cpp b/src/registers.cpp
+index 945fe40..a601803 100644
+--- a/src/registers.cpp
++++ b/src/registers.cpp
+@@ -50,7 +50,6 @@ uint8_t *Registers::write_v(int i)
+ void Registers::set_priv(PrivMode mode)
+ {
+ 	priv = mode;
+-	state_gen++;
+ 	bump_event_gen();
+ }
+ 
+@@ -65,10 +64,9 @@ void Registers::write_csr(uint16_t addr, uint64_t value)
+ 	// DOOMV_COARSE=1 restores the old behaviour, for comparison.
+ 	static const bool coarse = std::getenv("DOOMV_COARSE") != nullptr;
+ 	if (addr == 0x300 && !coarse) {
+-		constexpr uint64_t KEYED = (1ull << 17) /*MPRV*/ | (3ull << 11) /*MPP*/ | (1ull << 18) /*SUM*/
+-		                         | (1ull << 19) /*MXR*/ | (1ull << 20) /*TVM*/ | (1ull << 6) /*UBE*/
+-		                         | (1ull << 36) /*SBE*/ | (1ull << 37) /*MBE*/ | (1ull << 38) /*GVA*/
+-		                         | (1ull << 39) /*MPV*/;
++		const uint64_t KEYED = (1ull << 17) /*MPRV*/ | (((csr[addr] | value) & (1ull << 17)) ? (3ull << 11) | (1ull << 39) : 0) /*MPP MPV only matter under MPRV*/
++		                         | (1ull << 20) /*TVM*/ | (1ull << 6) /*UBE*/
++		                         | (1ull << 36) /*SBE*/ | (1ull << 37) /*MBE*/ | (1ull << 38) /*GVA*/;
+ 		const uint64_t diff = csr[addr] ^ value;
+ 		csr[addr] = value;
+ 		if (diff & KEYED) state_gen++;
+@@ -76,8 +74,18 @@ void Registers::write_csr(uint16_t addr, uint64_t value)
+ 		if (csr_log) csr_log->push_back(addr);
+ 		return;
+ 	}
++	const bool same = csr[addr] == value;
+ 	csr[addr] = value;
+-	state_gen++;
++	switch (addr) {
++	case 0x140: case 0x141: case 0x142: case 0x143:   // sscratch sepc scause stval
++	case 0x340: case 0x341: case 0x342: case 0x343:   // mscratch mepc mcause mtval
++	case 0x001: case 0x002: case 0x003:               // fflags frm fcsr
++	case 0x008: case 0x009: case 0x00A:               // vstart vxsat vxrm
++	case 0xC00: case 0xC01: case 0xC02: case 0x14D:   // cycle time instret stimecmp
++		break;
++	default:
++		if (!same) state_gen++;
++	}
+ 	bump_event_gen();
+ 	if (csr_log) csr_log->push_back(addr);
+ }
+diff --git a/src/registers.hpp b/src/registers.hpp
+index f8896eb..8af36f5 100644
+--- a/src/registers.hpp
++++ b/src/registers.hpp
+@@ -74,6 +74,9 @@ public:
+ 	// taken, which counters count, whether a code page may be fetched from --
+ 	// compare it with the value they were made under.
+ 	uint64_t state_gen = 0;
++	uint64_t keyed(uint64_t g) const { return (g << 2) | (uint64_t)priv; }
++	uint64_t fetch_key(uint64_t g) const { return (g << 4) | (uint64_t)priv; }
++	uint64_t data_key(uint64_t g) const { return (g << 4) | (((csr[0x300] >> 18) & 3) << 2) | (uint64_t)priv; }
+ 
+ 	// Virtualisation mode (the H extension's V bit). Orthogonal to the
+ 	// privilege level rather than another value of it: the hart is in one
+@@ -148,6 +151,8 @@ public:
+ 	}
+ 	const HistoryRecord &history_at(int index) const { return history[index]; }
+ 	int history_pos() const { return history_ptr; }
++	HistoryRecord *history_base() { return history; }
++	int &history_index() { return history_ptr; }
+ 
+ 	// Which CSRs the guest is busy with, for the dashboard's CSRs panel.
+ 	//

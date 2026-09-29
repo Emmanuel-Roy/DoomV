@@ -1,0 +1,30 @@
+ubuntu, 3,000,000,000 steps, 156.7 MIPS while sampled (sampling every 2 ms slows the run a little)
+
+ samples  share  function
+
+    6107  83.6%  ##################################################  DoomSystem::cpu_loop()
+     528   7.2%  ####  mmu_translate(Registers&, Memory&, unsigned long long, AccessType, unsigned long long&, unsigned long long&, unsigned long long&, bool)
+     227   3.1%  ##  RiscvCore::translate_or_trap(Registers&, Memory&, unsigned long long, AccessType, unsigned long long&, unsigned int)
+     123   1.7%  #  RiscvCore::exec_32ZICSR(DecodedOp const&, Registers&, Memory&)
+      81   1.1%  #  RiscvCore::load_virtual(Registers&, Memory&, unsigned long long, unsigned int, unsigned long long&)
+      40   0.5%  #  pmp::page_permits(Registers&, unsigned long long, int, unsigned char)
+      27   0.4%  #  Memory::write32(unsigned long long, unsigned int)
+      26   0.4%  #  RiscvCore::store_virtual(Registers&, Memory&, unsigned long long, unsigned int, unsigned long long)
+      19   0.3%  #  Decoder::decode_compressed(unsigned short) const
+      16   0.2%  #  Memory::read32(unsigned long long)
+      16   0.2%  #  [ntdll.dll]
+      15   0.2%  #  RiscvCore::exec_32A(DecodedOp const&, Registers&, Memory&)
+      14   0.2%  #  Registers::write_csr(unsigned short, unsigned long long)
+      14   0.2%  #  Decoder::decode_i(unsigned int, Extension) const
+      12   0.2%  #  vcommon::exec_v_ldst(DecodedOp const&, Registers&, Memory&, RiscvCore&)
+      11   0.2%  #  Decoder::classify(unsigned int) const
+       8   0.1%  #  Memory::read8(unsigned long long)
+       8   0.1%  #  RiscvCore::read_csr_effective(Registers&, Memory&, unsigned short)
+       6   0.1%  #  Memory::write8(unsigned long long, unsigned char)
+       4   0.1%  #  Memory::write64(unsigned long long, unsigned long long)
+       2   0.0%  #  VirtioInput::pump(Memory&, Aplic&)
+       2   0.0%  #  RiscvCore::enter_trap(Registers&, unsigned long long, unsigned long long, bool)
+       1   0.0%  #  RiscvCore::exec_ZBB(DecodedOp const&, Registers&, Memory&)
+       1   0.0%  #  Decoder::decode_zicsr(unsigned int) const
+
+7308 samples

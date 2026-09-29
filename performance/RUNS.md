@@ -166,3 +166,52 @@ and nothing else.
 | 20260925-114106 | linux 300M | Z: fast loop + retrained PGO vs merged | 288b1df+ | 204.08 | 1.5 | `f5894f934a68` |  |
 | 20260925-114107 | ubuntu 3000M | Z: fast loop + retrained PGO vs merged (reference) | 288b1df+ | 81.45 | 36.8 | `74c11f512233` |  |
 | 20260925-114146 | ubuntu 3000M | Z: fast loop + retrained PGO vs merged | 288b1df+ | 161.68 | 18.6 | `74c11f512233` |  |
+| 20260929-125439 | doom 1000M | research 09-29 profile | 82a34b1 | 279.64 | 3.6 | `3d73dac132f3` | [histogram](runs/20260929-125439-doom-research-09-29-profile/histogram.txt) |
+| 20260929-125443 | linux 300M | research 09-29 profile | 82a34b1 | 196.12 | 1.5 | `38c23122994c` | [histogram](runs/20260929-125443-linux-research-09-29-profile/histogram.txt) |
+| 20260929-125444 | ubuntu 3000M | research 09-29 profile | 82a34b1 | 156.70 | 19.1 | `9be8284ab1d9` | [histogram](runs/20260929-125444-ubuntu-research-09-29-profile/histogram.txt) |
+| 20260929-125540 | linux 300M | faststats | 82a34b1 | 201.93 | 1.5 | `38c23122994c` |  |
+| 20260929-125541 | ubuntu 3000M | faststats | 82a34b1 | 161.25 | 18.6 | `9be8284ab1d9` |  |
+| 20260929-125602 | doom 1000M | faststats | 82a34b1 | 285.44 | 3.5 | `3d73dac132f3` |  |
+| 20260929-130405 | linux 300M | proto: priv key, csr no-op writes, tlb gen+type (reference) | 82a34b1 | 192.89 | 1.6 | `38c23122994c` |  |
+| 20260929-130406 | linux 300M | proto: priv key, csr no-op writes, tlb gen+type | 82a34b1 | 190.66 | 1.6 | `38c23122994c` |  |
+| 20260929-130408 | doom 1000M | proto: priv key, csr no-op writes, tlb gen+type (reference) | 82a34b1 | 291.97 | 3.4 | `3d73dac132f3` |  |
+| 20260929-130412 | doom 1000M | proto: priv key, csr no-op writes, tlb gen+type | 82a34b1 | 279.37 | 3.6 | `3d73dac132f3` |  |
+| 20260929-130415 | ubuntu 3000M | proto: priv key, csr no-op writes, tlb gen+type (reference) | 82a34b1 | 163.02 | 18.4 | `9be8284ab1d9` |  |
+| 20260929-130435 | ubuntu 3000M | proto: priv key, csr no-op writes, tlb gen+type | 82a34b1 | 172.21 | 17.4 | `9be8284ab1d9` |  |
+| 20260929-130750 | ubuntu 3000M | proto2: split fetch/data keys, SUM/MXR in key, MPP only under MPRV (reference) | 82a34b1 | 165.86 | 18.1 | `9be8284ab1d9` |  |
+| 20260929-130809 | ubuntu 3000M | proto2: split fetch/data keys, SUM/MXR in key, MPP only under MPRV | 82a34b1 | 175.27 | 17.1 | `9be8284ab1d9` |  |
+| 20260929-130828 | linux 300M | proto2: split fetch/data keys, SUM/MXR in key, MPP only under MPRV (reference) | 82a34b1 | 204.13 | 1.5 | `38c23122994c` |  |
+| 20260929-130830 | linux 300M | proto2: split fetch/data keys, SUM/MXR in key, MPP only under MPRV | 82a34b1 | 212.50 | 1.4 | `38c23122994c` |  |
+| 20260929-130910 | ubuntu 3000M | proto2 profile | 82a34b1 | 174.58 | 17.2 | `9be8284ab1d9` | [histogram](runs/20260929-130910-ubuntu-proto2-profile/histogram.txt) |
+| 20260929-131215 | ubuntu 3000M | proto3: history index kept local in run_fast (vs proto2) (reference) | 82a34b1 | 180.62 | 16.6 | `9be8284ab1d9` |  |
+| 20260929-131234 | ubuntu 3000M | proto3: history index kept local in run_fast (vs proto2) | 82a34b1 | 188.21 | 15.9 | `9be8284ab1d9` |  |
+| 20260929-131251 | linux 300M | proto3: history index kept local in run_fast (vs proto2) (reference) | 82a34b1 | 211.34 | 1.4 | `38c23122994c` |  |
+| 20260929-131253 | linux 300M | proto3: history index kept local in run_fast (vs proto2) | 82a34b1 | 220.02 | 1.4 | `38c23122994c` |  |
+| 20260929-131254 | doom 1000M | proto3: history index kept local in run_fast (vs proto2) (reference) | 82a34b1 | 284.89 | 3.5 | `3d73dac132f3` |  |
+| 20260929-131258 | doom 1000M | proto3: history index kept local in run_fast (vs proto2) | 82a34b1 | 290.37 | 3.4 | `3d73dac132f3` |  |
+| 20260929-131413 | ubuntu 3000M | proto3 (cache keys, tlb gen+type, local history) vs shipped 82a34b1 (reference) | 82a34b1 | 169.10 | 17.7 | `9be8284ab1d9` |  |
+| 20260929-131432 | ubuntu 3000M | proto3 (cache keys, tlb gen+type, local history) vs shipped 82a34b1 | 82a34b1 | 191.21 | 15.7 | `9be8284ab1d9` |  |
+| 20260929-131450 | linux 300M | proto3 (cache keys, tlb gen+type, local history) vs shipped 82a34b1 (reference) | 82a34b1 | 203.16 | 1.5 | `38c23122994c` |  |
+| 20260929-131451 | linux 300M | proto3 (cache keys, tlb gen+type, local history) vs shipped 82a34b1 | 82a34b1 | 218.49 | 1.4 | `38c23122994c` |  |
+| 20260929-131453 | doom 1000M | proto3 (cache keys, tlb gen+type, local history) vs shipped 82a34b1 (reference) | 82a34b1 | 292.86 | 3.4 | `3d73dac132f3` |  |
+| 20260929-131456 | doom 1000M | proto3 (cache keys, tlb gen+type, local history) vs shipped 82a34b1 | 82a34b1 | 293.69 | 3.4 | `3d73dac132f3` |  |
+| 20260929-131830 | ubuntu 3000M | cache-keys.patch (clean) vs shipped 82a34b1 (reference) | 82a34b1 | 165.15 | 18.2 | `9be8284ab1d9` |  |
+| 20260929-131851 | ubuntu 3000M | cache-keys.patch (clean) vs shipped 82a34b1 | 82a34b1 | 191.81 | 15.6 | `9be8284ab1d9` |  |
+| 20260929-131908 | linux 300M | cache-keys.patch (clean) vs shipped 82a34b1 (reference) | 82a34b1 | 204.99 | 1.5 | `38c23122994c` |  |
+| 20260929-131910 | linux 300M | cache-keys.patch (clean) vs shipped 82a34b1 | 82a34b1 | 221.35 | 1.4 | `38c23122994c` |  |
+| 20260929-131911 | doom 1000M | cache-keys.patch (clean) vs shipped 82a34b1 (reference) | 82a34b1 | 291.19 | 3.4 | `3d73dac132f3` |  |
+| 20260929-131915 | doom 1000M | cache-keys.patch (clean) vs shipped 82a34b1 | 82a34b1 | 297.81 | 3.4 | `3d73dac132f3` |  |
+| 20260929-145814 | ubuntu 3000M | cache keys landed, PGO retrained, vs 82a34b1 (reference) | 82a34b1+ | 168.38 | 17.8 | `9be8284ab1d9` |  |
+| 20260929-145834 | ubuntu 3000M | cache keys landed, PGO retrained, vs 82a34b1 | 82a34b1+ | 187.70 | 16.0 | `9be8284ab1d9` |  |
+| 20260929-145851 | linux 300M | cache keys landed, PGO retrained, vs 82a34b1 (reference) | 82a34b1+ | 195.70 | 1.5 | `38c23122994c` |  |
+| 20260929-145853 | linux 300M | cache keys landed, PGO retrained, vs 82a34b1 | 82a34b1+ | 215.03 | 1.4 | `38c23122994c` |  |
+| 20260929-145854 | doom 1000M | cache keys landed, PGO retrained, vs 82a34b1 (reference) | 82a34b1+ | 298.94 | 3.3 | `3d73dac132f3` |  |
+| 20260929-145858 | doom 1000M | cache keys landed, PGO retrained, vs 82a34b1 | 82a34b1+ | 288.69 | 3.5 | `3d73dac132f3` |  |
+| 20260929-145931 | doom 1000M | patch: old profile vs retrained profile, rep 1 (reference) | 82a34b1+ | 299.23 | 3.3 | `3d73dac132f3` |  |
+| 20260929-145935 | doom 1000M | patch: old profile vs retrained profile, rep 1 | 82a34b1+ | 284.34 | 3.5 | `3d73dac132f3` |  |
+| 20260929-145938 | ubuntu 3000M | patch: old profile vs retrained profile, rep 1 (reference) | 82a34b1+ | 184.60 | 16.3 | `9be8284ab1d9` |  |
+| 20260929-145957 | ubuntu 3000M | patch: old profile vs retrained profile, rep 1 | 82a34b1+ | 191.65 | 15.7 | `9be8284ab1d9` |  |
+| 20260929-150015 | doom 1000M | patch: old profile vs retrained profile, rep 2 (reference) | 82a34b1+ | 298.15 | 3.4 | `3d73dac132f3` |  |
+| 20260929-150018 | doom 1000M | patch: old profile vs retrained profile, rep 2 | 82a34b1+ | 300.28 | 3.3 | `3d73dac132f3` |  |
+| 20260929-150022 | ubuntu 3000M | patch: old profile vs retrained profile, rep 2 (reference) | 82a34b1+ | 188.64 | 15.9 | `9be8284ab1d9` |  |
+| 20260929-150039 | ubuntu 3000M | patch: old profile vs retrained profile, rep 2 | 82a34b1+ | 190.69 | 15.7 | `9be8284ab1d9` |  |

@@ -1,0 +1,15 @@
+{
+  "time": "20260929-130435",
+  "label": "proto: priv key, csr no-op writes, tlb gen+type",
+  "workload": "ubuntu",
+  "steps": 3000000000,
+  "seconds": 17.421,
+  "mips": 172.209,
+  "crash_log_sha256": "9be8284ab1d9fdb66943586427f4328761caa56ef478ec0065ec8585039c9ada",
+  "exe": "C:\\Users\\EMMANU~1\\AppData\\Local\\Temp\\claude\\C--Users-Emmanuel-Roy\\dba5500d-2660-4a20-84a0-a2b86ce90174\\scratchpad\\wt\\proto.exe",
+  "exe_sha256": "d7eb8c1fef427ae8ee60816b522cc92a225bca0b81aa704e8355c24738ba0d76",
+  "commit": "82a34b1",
+  "dirty": false,
+  "host": "AMD64 Family 25 Model 97 Stepping 2, AuthenticAMD / Windows 10",
+  "profiled": false
+}

@@ -1,0 +1,78 @@
+{
+  "time": "20260929-125444",
+  "label": "research 09-29 profile",
+  "workload": "ubuntu",
+  "steps": 3000000000,
+  "seconds": 19.145,
+  "mips": 156.7,
+  "crash_log_sha256": "9be8284ab1d9fdb66943586427f4328761caa56ef478ec0065ec8585039c9ada",
+  "exe": "Z:\\Code\\Dev\\DoomV\\riscv_doom.exe",
+  "exe_sha256": "5f3f5d5ec2339aab1b4a0286aa46b8e321c886c858eda649ae1f0f3ed6297b5a",
+  "commit": "82a34b1",
+  "dirty": false,
+  "host": "AMD64 Family 25 Model 97 Stepping 2, AuthenticAMD / Windows 10",
+  "profiled": true,
+  "samples": 7308,
+  "top": [
+    [
+      "DoomSystem::cpu_loop()",
+      6107
+    ],
+    [
+      "mmu_translate(Registers&, Memory&, unsigned long long, AccessType, unsigned long long&, unsigned long long&, unsigned long long&, bool)",
+      528
+    ],
+    [
+      "RiscvCore::translate_or_trap(Registers&, Memory&, unsigned long long, AccessType, unsigned long long&, unsigned int)",
+      227
+    ],
+    [
+      "RiscvCore::exec_32ZICSR(DecodedOp const&, Registers&, Memory&)",
+      123
+    ],
+    [
+      "RiscvCore::load_virtual(Registers&, Memory&, unsigned long long, unsigned int, unsigned long long&)",
+      81
+    ],
+    [
+      "pmp::page_permits(Registers&, unsigned long long, int, unsigned char)",
+      40
+    ],
+    [
+      "Memory::write32(unsigned long long, unsigned int)",
+      27
+    ],
+    [
+      "RiscvCore::store_virtual(Registers&, Memory&, unsigned long long, unsigned int, unsigned long long)",
+      26
+    ],
+    [
+      "Decoder::decode_compressed(unsigned short) const",
+      19
+    ],
+    [
+      "Memory::read32(unsigned long long)",
+      16
+    ],
+    [
+      "[ntdll.dll]",
+      16
+    ],
+    [
+      "RiscvCore::exec_32A(DecodedOp const&, Registers&, Memory&)",
+      15
+    ],
+    [
+      "Registers::write_csr(unsigned short, unsigned long long)",
+      14
+    ],
+    [
+      "Decoder::decode_i(unsigned int, Extension) const",
+      14
+    ],
+    [
+      "vcommon::exec_v_ldst(DecodedOp const&, Registers&, Memory&, RiscvCore&)",
+      12
+    ]
+  ]
+}

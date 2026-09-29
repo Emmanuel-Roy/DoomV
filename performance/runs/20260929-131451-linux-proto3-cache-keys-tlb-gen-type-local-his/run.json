@@ -1,0 +1,15 @@
+{
+  "time": "20260929-131451",
+  "label": "proto3 (cache keys, tlb gen+type, local history) vs shipped 82a34b1",
+  "workload": "linux",
+  "steps": 300000000,
+  "seconds": 1.373,
+  "mips": 218.49,
+  "crash_log_sha256": "38c23122994c1b8715f47265e9bd9f9ab7dbaf0be1f69ba73cde0f18683b30f5",
+  "exe": "C:\\Users\\EMMANU~1\\AppData\\Local\\Temp\\claude\\C--Users-Emmanuel-Roy\\dba5500d-2660-4a20-84a0-a2b86ce90174\\scratchpad\\wt\\proto3.exe",
+  "exe_sha256": "48c2e969324c77b393588f0b0dfbe4fb3a42850207f7de1e61da1f6ac1ebb1d4",
+  "commit": "82a34b1",
+  "dirty": false,
+  "host": "AMD64 Family 25 Model 97 Stepping 2, AuthenticAMD / Windows 10",
+  "profiled": false
+}

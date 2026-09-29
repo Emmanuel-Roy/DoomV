@@ -1,0 +1,14 @@
+linux, 300,000,000 steps, 196.123 MIPS while sampled (sampling every 2 ms slows the run a little)
+
+ samples  share  function
+
+     178  92.2%  ##################################################  DoomSystem::cpu_loop()
+       4   2.1%  #  RiscvCore::exec_32ZICSR(DecodedOp const&, Registers&, Memory&)
+       3   1.6%  #  Memory::write32(unsigned long long, unsigned int)
+       3   1.6%  #  mmu_translate(Registers&, Memory&, unsigned long long, AccessType, unsigned long long&, unsigned long long&, unsigned long long&, bool)
+       2   1.0%  #  [ntdll.dll]
+       1   0.5%  #  RiscvCore::exec_ZBB(DecodedOp const&, Registers&, Memory&)
+       1   0.5%  #  RiscvCore::store_virtual(Registers&, Memory&, unsigned long long, unsigned int, unsigned long long)
+       1   0.5%  #  RiscvCore::translate_or_trap(Registers&, Memory&, unsigned long long, AccessType, unsigned long long&, unsigned int)
+
+193 samples
