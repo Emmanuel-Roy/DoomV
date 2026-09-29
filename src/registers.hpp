@@ -69,11 +69,24 @@ public:
 	PrivMode get_priv() const { return priv; }
 	void set_priv(PrivMode mode);
 
-	// Bumped by every CSR write and every change of privilege or V. Caches of
-	// decisions that depend only on those -- whether an interrupt could be
-	// taken, which counters count, whether a code page may be fetched from --
-	// compare it with the value they were made under.
+	// Bumped by every CSR write that changes a value some cached decision
+	// reads, and by every change of V. Caches of those decisions -- which
+	// counters count, whether a code page may be fetched from, where a data
+	// page is -- compare it with the value they were made under.
+	//
+	// Privilege is not a bump: it is one of three values, so it goes into the
+	// key itself, and a trap and its sret come back to caches that are still
+	// warm. Likewise SUM and MXR, which only data accesses read, go into the
+	// data key and not the fetch key -- the kernel toggles SUM around every
+	// user copy. The generation sits above those bits rather than being added
+	// to them, so a lower privilege can never produce an older key.
 	uint64_t state_gen = 0;
+	uint64_t keyed(uint64_t g) const { return (g << 2) | (uint64_t)priv; }
+	uint64_t fetch_key(uint64_t g) const { return (g << 4) | (uint64_t)priv; }
+	uint64_t data_key(uint64_t g) const
+	{
+		return (g << 4) | (((csr[0x300] >> 18) & 3) << 2) /*SUM, MXR*/ | (uint64_t)priv;
+	}
 
 	// Virtualisation mode (the H extension's V bit). Orthogonal to the
 	// privilege level rather than another value of it: the hart is in one
@@ -148,6 +161,8 @@ public:
 	}
 	const HistoryRecord &history_at(int index) const { return history[index]; }
 	int history_pos() const { return history_ptr; }
+	HistoryRecord *history_base() { return history; }
+	int &history_index() { return history_ptr; }
 
 	// Which CSRs the guest is busy with, for the dashboard's CSRs panel.
 	//

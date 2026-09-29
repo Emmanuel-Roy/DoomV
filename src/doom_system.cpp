@@ -241,7 +241,7 @@ static bool filtered_here(const Registers &regs, uint16_t cfg)
 // the call sites, since it runs on every step.
 void DoomSystem::refresh_counter_enables()
 {
-	counter_key = regs.state_gen + ExtensionsEpoch;
+	counter_key = regs.keyed(regs.state_gen + ExtensionsEpoch);
 	counts_instret = !(regs.read_csr(0x320) & 4) && !filtered_here(regs, 0x322);
 	counts_cycle = !(regs.read_csr(0x320) & 1) && !filtered_here(regs, 0x321);
 }
@@ -316,7 +316,7 @@ void DoomSystem::run_fast(uint64_t n)
 		    || decoder.cache_epoch != ExtensionsEpoch
 		    || !Extensions.C || !Extensions.XLEN64 || Extensions.ZICFILP
 		    || core.wait_request != RiscvCore::Wait::None
-		    || regs.state_gen + ExtensionsEpoch != counter_key
+		    || regs.keyed(regs.state_gen + ExtensionsEpoch) != counter_key
 		    || EventGen != irq_key || timer.get_mtime() >= irq_deadline) {
 			fs_slow_entry++;
 			step();
@@ -331,7 +331,7 @@ void DoomSystem::run_fast(uint64_t n)
 			const uint64_t steps = (d > (~0ull >> 2)) ? ~0ull : 2 * d - tick_phase;
 			if (steps < limit) limit = steps;
 		}
-		const uint64_t key = regs.state_gen + mmu_tlb_generation() + ExtensionsEpoch;
+		const uint64_t key = regs.fetch_key(regs.state_gen + mmu_tlb_generation() + ExtensionsEpoch), dkey = regs.data_key(regs.state_gen + mmu_tlb_generation() + ExtensionsEpoch);
 		regs.minstret_increment = counts_instret;
 
 		uint64_t pc = regs.get_pc();
@@ -339,6 +339,11 @@ void DoomSystem::run_fast(uint64_t n)
 		uint32_t last_insn = 0;
 		uint8_t last_len = 4;
 		uint64_t code_vpage = ~0ull;
+		// The history ring's index, held here for the run and stored once at the
+		// end: as a member it was loaded and stored every step, 11% of a Ubuntu
+		// boot's profile.
+		Registers::HistoryRecord *const hist = regs.history_base();
+		unsigned hp = (unsigned)regs.history_index();
 		const uint8_t *code = nullptr;
 		while (done < limit) {
 			// Fetch: the code page stays valid for the whole run.
@@ -398,7 +403,7 @@ void DoomSystem::run_fast(uint64_t n)
 				const uint64_t addr = a + imm;
 				if (((addr + size - 1) >> 12) != (addr >> 12)) goto out;
 				const RiscvCore::DataPage &e = core.load_cache[(addr >> 12) & (RiscvCore::DATA_CACHE_SIZE - 1)];
-				if (!(e.vpage == (addr >> 12) && e.key == key)) { fs_ld++; goto out; }
+				if (!(e.vpage == (addr >> 12) && e.key == dkey)) { fs_ld++; goto out; }
 				uint64_t v = 0;
 				std::memcpy(&v, e.host + (addr & 0xFFF), size);
 				switch (d.fast_op) {
@@ -415,7 +420,7 @@ void DoomSystem::run_fast(uint64_t n)
 				const uint64_t addr = a + imm;
 				if (((addr + size - 1) >> 12) != (addr >> 12)) goto out;
 				const RiscvCore::DataPage &e = core.store_cache[(addr >> 12) & (RiscvCore::DATA_CACHE_SIZE - 1)];
-				if (!(e.vpage == (addr >> 12) && e.key == key)) { fs_st++; goto out; }
+				if (!(e.vpage == (addr >> 12) && e.key == dkey)) { fs_st++; goto out; }
 				std::memcpy(e.host + (addr & 0xFFF), &b, size);
 				if (e.backing != Memory::Backing::Ram) memory.framebuffer_stored(e.backing, size);
 				break;
@@ -456,13 +461,15 @@ void DoomSystem::run_fast(uint64_t n)
 				next = regs.get_pc();
 				break;
 			}
-			regs.record_history(pc, tag);
+			hist[hp] = { pc, tag };
+			hp = (hp + 1) & (Registers::HISTORY_SIZE - 1);
 			pc = next;
 			last_insn = tag;
 			last_len = (uint8_t)len;
 			done++;
 		}
 	out:
+		regs.history_index() = (int)hp;
 		regs.set_pc(pc);
 		fs_fast += done;
 		if (done == limit && limit < n) fs_deadline++;
@@ -502,7 +509,7 @@ void DoomSystem::step()
 // filtered out in the current mode.
 void DoomSystem::clock_tick()
 {
-	if (regs.state_gen + ExtensionsEpoch != counter_key) refresh_counter_enables();
+	if (regs.keyed(regs.state_gen + ExtensionsEpoch) != counter_key) refresh_counter_enables();
 	if (counts_cycle) regs.bump_csr(0xB00);
 	memory.tick_clock();
 }
@@ -537,7 +544,7 @@ void DoomSystem::run_wait()
 	int trap = 0;   // 2 illegal, 22 virtual instruction
 	for (;;) {
 		const bool timed_out = remaining == 0;
-		if (regs.state_gen + ExtensionsEpoch != counter_key) refresh_counter_enables();
+		if (regs.keyed(regs.state_gen + ExtensionsEpoch) != counter_key) refresh_counter_enables();
 		regs.minstret_increment = counts_instret;
 		if (core.wake_for_interrupt(regs, memory)) break;
 		if (kind != RiscvCore::Wait::Wfi && !core.reservation_held()) break;
@@ -578,7 +585,7 @@ void DoomSystem::run_wait()
 // flushes the TLB for its own reasons), or a change to the extensions.
 bool DoomSystem::fetch16(uint64_t vaddr, uint16_t &out)
 {
-	const uint64_t key = regs.state_gen + mmu_tlb_generation() + ExtensionsEpoch;
+	const uint64_t key = regs.fetch_key(regs.state_gen + mmu_tlb_generation() + ExtensionsEpoch);
 	const uint64_t vpage = vaddr >> 12;
 	const unsigned offset = (unsigned)(vaddr & 0xFFF);
 	FetchPage &e = fetch_cache[vpage & (FETCH_CACHE_SIZE - 1)];
@@ -626,7 +633,7 @@ bool DoomSystem::fetch16(uint64_t vaddr, uint16_t &out)
 // step_execute masks them off before anything records the encoding.
 bool DoomSystem::fetch_instr(uint64_t vaddr, uint32_t &out)
 {
-	const uint64_t key = regs.state_gen + mmu_tlb_generation() + ExtensionsEpoch;
+	const uint64_t key = regs.fetch_key(regs.state_gen + mmu_tlb_generation() + ExtensionsEpoch);
 	const uint64_t vpage = vaddr >> 12;
 	const unsigned offset = (unsigned)(vaddr & 0xFFF);
 	const FetchPage &e = fetch_cache[vpage & (FETCH_CACHE_SIZE - 1)];
@@ -653,7 +660,7 @@ void DoomSystem::step_execute()
 	const uint64_t traps_before = core.trap_count;
 	step_committed = false;
 	step_decoded = false;
-	if (regs.state_gen + ExtensionsEpoch != counter_key) refresh_counter_enables();
+	if (regs.keyed(regs.state_gen + ExtensionsEpoch) != counter_key) refresh_counter_enables();
 	regs.minstret_increment = counts_instret;
 
 	// In lenient lock-step the reference decides when an interrupt is taken

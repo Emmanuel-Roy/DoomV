@@ -215,13 +215,14 @@ uint64_t guest_fault_cause(AccessType type)
 // must flush, and the flush list is in mmu.hpp.
 namespace {
 
-constexpr unsigned TLB_BITS = 12;              // 4096 entries
+constexpr unsigned TLB_BITS = 14;              // 4096 pages x 4 access types
 constexpr unsigned TLB_SIZE = 1u << TLB_BITS;
 constexpr uint64_t TLB_MASK = TLB_SIZE - 1;
 
 struct TlbEntry {
 	uint64_t key;   // 0 means empty; see tlb_key below
 	uint64_t ppn;   // physical address of the page, low 12 bits clear
+	uint64_t gen;   // mmu_tlb_gen when cached; an older one is a flushed entry
 };
 
 TlbEntry tlb[TLB_SIZE];
@@ -397,9 +398,10 @@ bool gstage_translate(Registers &regs, Memory &mem, uint64_t gpa, AccessType typ
 
 uint64_t mmu_tlb_gen = 0;
 
+// By generation rather than by clearing every entry: a flush used to be 64 KB
+// of stores, and a Ubuntu boot does ~120K of them.
 void mmu_tlb_flush()
 {
-	for (unsigned i = 0; i < TLB_SIZE; i++) tlb[i].key = 0;
 	mmu_tlb_gen++;
 }
 
@@ -626,8 +628,11 @@ bool mmu_translate(Registers &regs, Memory &mem, uint64_t vaddr, AccessType type
 		const uint64_t st = regs.read_csr(CSR_MSTATUS);
 		tlb_k = tlb_key(vaddr >> 12, eff_priv, type,
 		                (st & MSTATUS_SUM) != 0, (st & MSTATUS_MXR) != 0);
-		tlb_i = (unsigned)((vaddr >> 12) & TLB_MASK);
-		if (tlb[tlb_i].key == tlb_k) {
+		// The access type is in the index as well as the key: with the page
+		// alone, a load, a store and a fetch to one page evicted each other --
+		// 16.3M of a Ubuntu boot's 22.6M walks.
+		tlb_i = (unsigned)((((vaddr >> 12) << 2) | ((unsigned)type & 3)) & TLB_MASK);
+		if (tlb[tlb_i].key == tlb_k && tlb[tlb_i].gen == mmu_tlb_gen) {
 			paddr = tlb[tlb_i].ppn | (vaddr & 0xFFF);
 			return true;
 		}
@@ -1046,7 +1051,7 @@ bool mmu_translate(Registers &regs, Memory &mem, uint64_t vaddr, AccessType type
 	// access after this one finds A and D already set and is cached then,
 	// which is the access that actually repeats.
 	if (tlb_eligible && !ad_was_updated) {
-		tlb[tlb_i].key = tlb_k;
+		tlb[tlb_i].key = tlb_k; tlb[tlb_i].gen = mmu_tlb_gen;
 		tlb[tlb_i].ppn = paddr & ~0xFFFull;
 	}
 	return true;

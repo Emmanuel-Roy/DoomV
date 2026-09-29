@@ -50,7 +50,6 @@ uint8_t *Registers::write_v(int i)
 void Registers::set_priv(PrivMode mode)
 {
 	priv = mode;
-	state_gen++;
 	bump_event_gen();
 }
 
@@ -58,17 +57,18 @@ void Registers::set_priv(PrivMode mode)
 
 void Registers::write_csr(uint16_t addr, uint64_t value)
 {
-	// Prototype: an mstatus write that changes none of the bits translation,
-	// PMP or the counter enables depend on -- the interrupt enables, FS/VS/XS
-	// and the like -- leaves every cache keyed on state_gen valid. EventGen
-	// still moves, since the interrupt enables are exactly what it is for.
-	// DOOMV_COARSE=1 restores the old behaviour, for comparison.
+	// An mstatus write that changes none of the bits translation, PMP or the
+	// counter enables depend on -- the interrupt enables, FS/VS/XS and the
+	// like -- leaves every cache keyed on state_gen valid. EventGen still
+	// moves, since the interrupt enables are exactly what it is for. SUM and
+	// MXR are in the data key instead (see Registers::data_key), and MPP and
+	// MPV change a translation only while MPRV borrows them, so they count
+	// only then. DOOMV_COARSE=1 restores the old behaviour, for comparison.
 	static const bool coarse = std::getenv("DOOMV_COARSE") != nullptr;
 	if (addr == 0x300 && !coarse) {
-		constexpr uint64_t KEYED = (1ull << 17) /*MPRV*/ | (3ull << 11) /*MPP*/ | (1ull << 18) /*SUM*/
-		                         | (1ull << 19) /*MXR*/ | (1ull << 20) /*TVM*/ | (1ull << 6) /*UBE*/
-		                         | (1ull << 36) /*SBE*/ | (1ull << 37) /*MBE*/ | (1ull << 38) /*GVA*/
-		                         | (1ull << 39) /*MPV*/;
+		const uint64_t KEYED = (1ull << 17) /*MPRV*/ | (((csr[addr] | value) & (1ull << 17)) ? (3ull << 11) | (1ull << 39) : 0) /*MPP MPV only matter under MPRV*/
+		                         | (1ull << 20) /*TVM*/ | (1ull << 6) /*UBE*/
+		                         | (1ull << 36) /*SBE*/ | (1ull << 37) /*MBE*/ | (1ull << 38) /*GVA*/;
 		const uint64_t diff = csr[addr] ^ value;
 		csr[addr] = value;
 		if (diff & KEYED) state_gen++;
@@ -76,8 +76,24 @@ void Registers::write_csr(uint16_t addr, uint64_t value)
 		if (csr_log) csr_log->push_back(addr);
 		return;
 	}
+	// Every other CSR bumps state_gen when its value changes -- a CSR read
+	// comes through here with the old value, and a read changes nothing --
+	// except the ones below, which no state_gen-keyed decision reads at all.
+	// Linux writes the first row on every trap, and DoomV writes `time` on
+	// every rdtime. Leaving a CSR off this list costs speed; putting one on it
+	// that translation, PMP or the counter enables read breaks the caches.
+	const bool same = csr[addr] == value;
 	csr[addr] = value;
-	state_gen++;
+	switch (addr) {
+	case 0x140: case 0x141: case 0x142: case 0x143:   // sscratch sepc scause stval
+	case 0x340: case 0x341: case 0x342: case 0x343:   // mscratch mepc mcause mtval
+	case 0x001: case 0x002: case 0x003:               // fflags frm fcsr
+	case 0x008: case 0x009: case 0x00A:               // vstart vxsat vxrm
+	case 0xC00: case 0xC01: case 0xC02: case 0x14D:   // cycle time instret stimecmp
+		break;
+	default:
+		if (!same) state_gen++;
+	}
 	bump_event_gen();
 	if (csr_log) csr_log->push_back(addr);
 }

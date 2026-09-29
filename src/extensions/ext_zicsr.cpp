@@ -492,14 +492,16 @@ static void write_misa(uint64_t value, uint64_t next_pc)
 	// (memcmp rather than a defaulted ==, which GCC 8 cannot compile;
 	// ExtensionConfig is bools only, so it has no padding to compare.)
 	//
-	// The TLB flush below stays unconditional. The decode cache is invisible
-	// to the guest; the TLB is not, to a guest that edits a PTE without
-	// sfence.vma, so whether a read of misa flushes it is a question of
-	// matching Sail rather than of speed.
-	if (std::memcmp(&before, &Extensions, sizeof before) != 0)
+	// The TLB is flushed on the same condition. Unlike the decode cache it is
+	// visible to a guest that edits a PTE without sfence.vma -- but Zicsr says
+	// a read performs no write and has none of a write's side effects, and
+	// Sail flushes nothing on one, so a read that flushed was the divergence.
+	// It was also 25K full flushes in a 3G-step Ubuntu boot.
+	if (std::memcmp(&before, &Extensions, sizeof before) != 0) {
 		ExtensionsEpoch++;
+		mmu_tlb_flush();
+	}
 	bump_event_gen();
-	mmu_tlb_flush();
 }
 
 // The address an xepc names as an instruction start: bit 0 is never one,
@@ -553,6 +555,9 @@ uint64_t compute_misa()
 // satp.MODE=0xa (Sv57) already active.
 void write_satp_warl(Registers &regs, uint16_t csr, uint64_t value)
 {
+	// The value already there -- a csrr satp comes through here too -- moves
+	// nothing, and there is nothing to flush.
+	if (regs.read_csr(csr) == value) return;
 	// The root of translation just moved, so every cached translation
 	// describes a page table that is no longer the one in force.
 	mmu_tlb_flush();
@@ -1192,7 +1197,7 @@ uint64_t RiscvCore::read_csr_effective(Registers &regs, Memory &mem, uint16_t cs
 // check did not reach. Reporting instead of bypassing puts them under it.
 static uint64_t data_cache_key(const Registers &regs)
 {
-	return regs.state_gen + mmu_tlb_generation() + ExtensionsEpoch;
+	return regs.data_key(regs.state_gen + mmu_tlb_generation() + ExtensionsEpoch);
 }
 
 static void remember_data_page(Registers &regs, Memory &mem, RiscvCore::DataPage &e,
