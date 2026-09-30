@@ -240,4 +240,9 @@ bool page_permits(Registers &regs, uint64_t page, int access, uint8_t priv)
 	return priv == (uint8_t)3;
 }
 
+void invalidate_cache()
+{
+	cache_gen++;
+}
+
 } // namespace pmp

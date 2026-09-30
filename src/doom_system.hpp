@@ -18,6 +18,8 @@
 #include <vector>
 
 class DoomSystem {
+	// Machine state is saved and restored field by field in savestate.cpp.
+	friend struct SaveState;
 public:
 	DoomSystem();
 
@@ -52,6 +54,11 @@ public:
 	// instruction count and the last 4096 instructions -- whatever the
 	// host's threads were doing meanwhile. This is how that is checked.
 	void set_stop_at(uint64_t n) { stop_at = n; }
+	// Snapshots (savestate.cpp): the machine at step `at`, saved to `dir` as
+	// the run goes past it; and a saved machine put back before run().
+	void set_snapshot(uint64_t at, const std::string &dir) { snapshot_at = at; snapshot_dir = dir; }
+	bool save_snapshot(const std::string &dir);
+	bool restore_snapshot(const std::string &dir);
 
 	// Headless: no SDL window, and the process exits as soon as the guest
 	// stops rather than sitting in a render loop nobody is watching. A
@@ -313,6 +320,8 @@ private:
 	Snapshot shared_snapshot;
 	uint64_t snapshot_seq = 0;   // CPU thread only
 	uint64_t stop_at = 0;
+	uint64_t snapshot_at = 0;
+	std::string snapshot_dir;
 	void stop_at_limit();
 
 	// The periodic -fbdump refresh, on a thread of its own. The dumps taken

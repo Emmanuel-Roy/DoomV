@@ -67,6 +67,7 @@ bool VirtioBlk::open(const std::string &path, bool read_only)
 	// confusing ways if writes appear to succeed without landing. Falling
 	// back to read-only beats refusing to boot, and the caller is told
 	// which it got so it can say so.
+	close();
 	file = std::fopen(path.c_str(), read_only ? "rb" : "r+b");
 	if (!file) {
 		file = std::fopen(path.c_str(), "rb");
@@ -74,11 +75,19 @@ bool VirtioBlk::open(const std::string &path, bool read_only)
 	}
 	if (!file) return false;
 	ro = read_only;
+	image_path = path;
 	if (seek64(file, 0, SEEK_END) != 0) return false;
 	const int64_t end = tell64(file);
 	capacity = end > 0 ? (uint64_t)end : 0;
 	seek64(file, 0, SEEK_SET);
 	return true;
+}
+
+void VirtioBlk::close()
+{
+	if (file) std::fclose(file);
+	file = nullptr;
+	image_path.clear();
 }
 
 uint32_t VirtioBlk::read32(uint64_t offset) const

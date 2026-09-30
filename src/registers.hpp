@@ -26,6 +26,8 @@ struct HistoryEntry {
 };
 
 class Registers {
+	// Machine state is saved and restored field by field in savestate.cpp.
+	friend struct SaveState;
 public:
 	static constexpr int HISTORY_SIZE = 4096; // a power of two -- record_history masks with it
 	static_assert((HISTORY_SIZE & (HISTORY_SIZE - 1)) == 0, "HISTORY_SIZE must be a power of two");

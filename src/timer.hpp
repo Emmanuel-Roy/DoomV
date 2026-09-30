@@ -14,6 +14,8 @@
 // unreproducible as the existing MMIO_TICK/tick_counter pacing hack,
 // which is explicitly not a real timer.
 class Timer {
+	// Machine state is saved and restored field by field in savestate.cpp.
+	friend struct SaveState;
 public:
 	static constexpr uint64_t MTIMECMP_OFF = 0x4000;
 	static constexpr uint64_t MTIME_OFF    = 0xBFF8;

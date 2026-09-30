@@ -509,6 +509,8 @@ riscv_doom.exe -opensbi=<f> -kernel=<f> -dtb=<f> -initrd=<f> [options]   # Linux
 | `-stopat=<n>` | Stop after exactly `n` instructions and write the machine state to `crash.log`. Two runs of the same guest with the same inputs leave identical files -- see [Determinism](#determinism). |
 | `-record=<path>` | Log every input the guest receives -- keys, pointer, serial bytes -- with the instruction it arrived at. |
 | `-replay=<path>` | Deliver a `-record` log's input at exactly those instructions, and ignore the window, stdin and `-input`. Reproduces a recorded run instruction for instruction. |
+| `-snapshotat=<n>` `-snapshot=<dir>` | Save the whole machine to `dir` as the run goes past instruction `n`, and carry on. See [Snapshots](#snapshots). |
+| `-restore=<dir>` | Start from a snapshot instead of from reset. The rest of the command line must describe the same machine. |
 | `-trace=<path>` | Write a trace of every instruction, register and CSR write, store and trap, in Sail's trace format. |
 | `-lockstep=<path>` | Run against a reference trace -- Sail's, or an RTL simulation's -- and halt at the first record that does not match. See [Lock-stepping](#lockstep). |
 | `-lockstep-strict` | With `-lockstep`, compare everything, counters, time and interrupt timing included, and take nothing from the reference. How DoomV is held to Sail. |
@@ -759,6 +761,37 @@ to the Windows file too. Inode numbers count up in the order the guest first
 sees each file, listings are sorted by name, and `df` reports a fixed 1 TiB.
 
 <a id="own-programs"></a>
+<a id="snapshots"></a>
+### Snapshots
+
+A snapshot is the whole machine at one instruction, so that a boot that takes
+minutes -- Ubuntu to its desktop -- is paid for once:
+
+```
+riscv_doom.exe <the usual machine> -snapshotat=3000000000 -snapshot=snap/booted
+riscv_doom.exe <the same machine> -restore=snap/booted
+```
+
+The first saves the machine as it goes past instruction 3,000,000,000 and runs
+on; the second starts from there. A restored run is the same run: carried on to
+any later instruction, it leaves the same `crash.log`, RAM, framebuffers and
+disk as a run that never stopped. `tools/verification/snapshot_check.py` checks
+exactly that, on any `bench.py` workload.
+
+- **Same machine.** `-restore` checks the RAM size, `-march`, Linux or DOOM,
+  which disks are attached and whether there is a shared folder, and says which
+  one differs. The boot files still have to be given, since that is how the
+  machine is put together, though what they loaded is replaced.
+- **Disks.** Each attached image is copied into the snapshot, because the guest
+  goes on writing to it. A restored machine runs on `disk.work.img` (and
+  `driveN.work.img`) in the snapshot folder, a fresh copy made at every
+  restore, so neither the snapshot nor the images you started with are
+  changed. A 4 GB image makes a snapshot of about 4 GB and adds about ten seconds
+  each way.
+- **Not yet:** a snapshot is refused while the guest has files open on the
+  shared folder. `-input` scripts start from their beginning after a restore;
+  a `-replay` log carries on from the snapshot's instruction.
+
 ### Running your own programs in the guest
 
 The Ubuntu guest is a normal riscv64 Linux, so anything built for riscv64

@@ -47,6 +47,8 @@ class Memory;
 class Aplic;
 
 class VirtioInput {
+	// Machine state is saved and restored field by field in savestate.cpp.
+	friend struct SaveState;
 public:
 	// The MMIO transport's registers are the same set virtio-blk uses --
 	// the transport does not vary by device type, only the device id and

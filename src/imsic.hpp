@@ -13,6 +13,8 @@
 // range -- kept at full width anyway since it costs nothing and avoids
 // a second, narrower convention to remember.
 class Imsic {
+	// Machine state is saved and restored field by field in savestate.cpp.
+	friend struct SaveState;
 public:
 	static constexpr int NUM_WORDS = 64;
 

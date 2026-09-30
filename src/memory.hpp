@@ -12,6 +12,8 @@
 #include <vector>
 
 class Memory {
+	// Machine state is saved and restored field by field in savestate.cpp.
+	friend struct SaveState;
 public:
 	// MMIO/RAM/WAD addresses are still small values that fit comfortably in
 	// 64 bits -- RV64 doesn't require actually using a 64-bit-wide address

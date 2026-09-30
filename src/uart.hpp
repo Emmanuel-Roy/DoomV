@@ -21,6 +21,8 @@
 // THRE before every byte, so reporting "busy" here would hang OpenSBI's
 // own boot exactly the way the missing misa CSR did in Stage 3.
 class Uart {
+	// Machine state is saved and restored field by field in savestate.cpp.
+	friend struct SaveState;
 public:
 	Uart();
 

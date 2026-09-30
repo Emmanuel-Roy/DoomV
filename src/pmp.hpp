@@ -68,6 +68,9 @@ uint64_t read_cfg(Registers &regs, uint16_t csr);
 uint64_t read_addr(Registers &regs, uint16_t csr);
 void write_cfg(Registers &regs, uint16_t csr, uint64_t value);
 void write_addr(Registers &regs, uint16_t csr, uint64_t value);
+// Rebuild the decoded regions before the next check: for a restored snapshot,
+// whose pmpcfg/pmpaddr arrive without going through write_cfg/write_addr.
+void invalidate_cache();
 
 // The access check itself.
 //

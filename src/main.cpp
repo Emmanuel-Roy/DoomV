@@ -89,6 +89,8 @@ int main(int argc, char *argv[])
 	std::string shared_dir = "shared";
 	bool headless = false;
 	uint64_t stop_at = 0;
+	uint64_t snapshot_at = 0;
+	std::string snapshot_dir, restore_dir;
 	std::string record_path, replay_path;
 	std::string trace_path, lockstep_path;
 	bool lockstep_strict = false;
@@ -172,6 +174,16 @@ int main(int argc, char *argv[])
 			// Stop after exactly this many instructions and write the
 			// machine state to crash.log. Decimal, or hex with 0x.
 			stop_at = std::stoull(arg.substr(8), nullptr, 0);
+		} else if (arg.rfind("-snapshotat=", 0) == 0) {
+			// Save the whole machine to -snapshot's directory as the run goes
+			// past this step. Decimal, or hex with 0x.
+			snapshot_at = std::stoull(arg.substr(12), nullptr, 0);
+		} else if (arg.rfind("-snapshot=", 0) == 0) {
+			snapshot_dir = arg.substr(10);
+		} else if (arg.rfind("-restore=", 0) == 0) {
+			// Start from a snapshot instead of from reset. The rest of the
+			// command line must describe the same machine.
+			restore_dir = arg.substr(9);
 		} else if (arg.rfind("-disk=", 0) == 0) {
 			// A raw disk image, attached as virtio-blk. This is what lets a
 			// real distribution root filesystem be mounted rather than
@@ -255,6 +267,13 @@ int main(int argc, char *argv[])
 	if (!gui_dump_path.empty()) system.set_canvas_dump(gui_dump_path.c_str());
 	if (tohost_addr) system.watch_tohost(tohost_addr);
 	if (stop_at) system.set_stop_at(stop_at);
+	if (snapshot_at || !snapshot_dir.empty()) {
+		if (!snapshot_at || snapshot_dir.empty()) {
+			std::cout << "-snapshot=<dir> and -snapshotat=<step> go together\n";
+			return -1;
+		}
+		system.set_snapshot(snapshot_at, snapshot_dir);
+	}
 	if (!replay_path.empty() && !system.set_input_replay(replay_path.c_str())) {
 		std::cout << "cannot read input log: " << replay_path << "\n";
 		return -1;
@@ -272,6 +291,8 @@ int main(int argc, char *argv[])
 		std::cout << "cannot read reference commit log: " << lockstep_path << "\n";
 		return -1;
 	}
+
+	if (!restore_dir.empty() && !system.restore_snapshot(restore_dir)) return -1;
 
 	system.run();
 	return 0;

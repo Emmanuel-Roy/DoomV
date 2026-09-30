@@ -34,6 +34,8 @@ class Memory;
 class Aplic;
 
 class Virtio9p {
+	// Machine state is saved and restored field by field in savestate.cpp.
+	friend struct SaveState;
 public:
 	enum : uint64_t {
 		REG_MAGIC           = 0x000,

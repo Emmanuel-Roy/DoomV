@@ -16,6 +16,8 @@ class Imsic;
 // OpenSBI+Linux platform hands peripheral interrupts to the kernel
 // rather than firmware.
 class Aplic {
+	// Machine state is saved and restored field by field in savestate.cpp.
+	friend struct SaveState;
 public:
 	static constexpr int NUM_SOURCES = 32; // indices 1..31 used
 

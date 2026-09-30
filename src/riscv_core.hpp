@@ -23,6 +23,8 @@ struct AccessRecord {
 };
 
 class RiscvCore {
+	// Machine state is saved and restored field by field in savestate.cpp.
+	friend struct SaveState;
 public:
 	RiscvCore();
 

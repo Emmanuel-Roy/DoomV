@@ -1114,6 +1114,7 @@ void DoomSystem::cpu_loop()
 			} else {
 				uint64_t n = INPUT_PERIOD - (before & (INPUT_PERIOD - 1));
 				if (stop_at) n = std::min<uint64_t>(n, stop_at > before ? stop_at - before : 1);
+				if (snapshot_at > before) n = std::min<uint64_t>(n, snapshot_at - before);
 				n = std::min<uint64_t>(n, (uint64_t)budget);
 				if (fast_enabled()) run_fast(n);
 				else for (uint64_t k = 0; k < n && !debugger.halted; k++) step();
@@ -1125,6 +1126,12 @@ void DoomSystem::cpu_loop()
 				break;
 			}
 			if ((now & (INPUT_PERIOD - 1)) == 0) service_input(now);
+			// After the step's input, as a restored run resumes with the step
+			// after it.
+			if (snapshot_at && now == snapshot_at) {
+				snapshot_at = 0;
+				save_snapshot(snapshot_dir);
+			}
 			if (stop_at && now >= stop_at) {
 				stop_at_limit();
 				break;

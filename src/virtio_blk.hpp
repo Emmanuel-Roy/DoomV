@@ -34,6 +34,8 @@ class Memory;
 class Aplic;
 
 class VirtioBlk {
+	// Machine state is saved and restored field by field in savestate.cpp.
+	friend struct SaveState;
 public:
 	// Register offsets, from the virtio 1.x MMIO transport. Named rather
 	// than commented individually -- the spec's own names are the clearest
@@ -75,6 +77,8 @@ public:
 	// the caller reports rather than booting a machine whose disk silently
 	// reads zeros.
 	bool open(const std::string &path, bool read_only);
+	void close();
+	const std::string &path() const { return image_path; }
 	bool attached() const { return file != nullptr; }
 	uint64_t capacity_sectors() const { return capacity / SECTOR; }
 
@@ -100,6 +104,7 @@ private:
 
 	const uint32_t irq;
 	FILE *file = nullptr;
+	std::string image_path;
 	uint64_t capacity = 0;   // bytes
 	bool ro = false;
 	std::vector<uint8_t> io_buf;   // one request's data, between the file and guest RAM
