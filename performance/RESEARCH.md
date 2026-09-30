@@ -659,7 +659,7 @@ What still leaves the fast loop on Ubuntu, per 3G steps:
 |---|---|---|---|
 | 1 | ~~Land `cache-keys.patch` after `verify.py` and a PGO retrain~~ landed | 1.12-1.16x ubuntu, 1.08-1.10x linux | measured above and below |
 | 2 | ~~`sfence.vma` with an address drops that page only~~ landed | 1.04x ubuntu | full flushes 146.5K to 1.5K; see below |
-| 3 | A second way in the decode cache, probed only on a miss | up to 10.7M decodes | every miss is a conflict |
+| 3 | ~~A second way in the decode cache, probed only on a miss~~ tried, slower | 0.96-0.97x ubuntu | see below |
 | 4 | Atomics, Zba/Zbb/Zbs and `cbo.zero` in the fast loop on a data-cache hit | ~6M fewer exits | all are plain loads/stores/ALU once the page is cached |
 | 5 | Pre-decoded blocks (item 3 of the first round) | the largest left, on every workload | 87% of Ubuntu and ~100% of DOOM is now the per-step loop |
 | 6 | Guest RAM and the decode table in large pages | unmeasured | Windows `MEM_LARGE_PAGES`, needs `SeLockMemoryPrivilege`; guest-invisible |
@@ -720,6 +720,24 @@ fences each one by address (once with an ASID operand, once via `sinval.vma`),
 then remaps a 2 MB superpage and fences a *different* page inside it. With
 the superpage fallback disabled, DoomV reads the stale value there and the
 test fails.
+
+**3, tried and dropped (2026-09-30).** A second 16 MB array of decode
+entries, the same index, looked at only when the first misses. Over `bench.py
+ubuntu` it did what it was meant to: decode misses fell from 10.76M to 2.61M
+and fast steps rose from 98.7% to 99.0%. The boot still got slower, with
+crash.log identical, against `35dd091`, both with retrained PGO:
+
+| variant | ubuntu | linux | doom |
+|---|---:|---:|---|
+| hit in way 2 swaps it into way 1 | 0.970x | 0.971x | 0.999x |
+| hit in way 2 used in place, no swap | 0.956x | 0.990x | 1.016x |
+
+(Before retraining the profile, all three were 0.90-0.93x: the fast loop's
+code changed, and a stale profile costs that much.) A decode miss was cheap
+to begin with: a decode and a run restart. A probe of a
+second 16 MB array is a cache miss to DRAM of its own, and the array doubles
+the footprint the decode table already cannot fit in host cache. What would
+help is fewer bytes per instruction, not more ways: item 5, or a smaller entry.
 
 **Not worth doing:** skipping idle time. An idle guest sits in the kernel's
 `wfi` loop, and a WFI already ends after Sail's `max_time_to_wait` of 10

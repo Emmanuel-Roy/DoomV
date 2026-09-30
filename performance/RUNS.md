@@ -221,3 +221,23 @@ and nothing else.
 | 20260929-224955 | linux 300M | fence-page (sfence.vma addr drops one page) vs 11ff5b3 | 11ff5b3+ | 214.34 | 1.4 | `38c23122994c` |  |
 | 20260929-224957 | doom 1000M | fence-page (sfence.vma addr drops one page) vs 11ff5b3 (reference) | 11ff5b3+ | 295.63 | 3.4 | `3d73dac132f3` |  |
 | 20260929-225000 | doom 1000M | fence-page (sfence.vma addr drops one page) vs 11ff5b3 | 11ff5b3+ | 293.36 | 3.4 | `3d73dac132f3` |  |
+| 20260930-135454 | ubuntu 3000M | decode cache second way vs 35dd091 (reference) | 35dd091+ | 195.15 | 15.4 | `9be8284ab1d9` |  |
+| 20260930-135513 | ubuntu 3000M | decode cache second way vs 35dd091 | 35dd091+ | 181.02 | 16.6 | `9be8284ab1d9` |  |
+| 20260930-135540 | linux 300M | decode cache second way vs 35dd091 (reference) | 35dd091+ | 217.50 | 1.4 | `38c23122994c` |  |
+| 20260930-135542 | linux 300M | decode cache second way vs 35dd091 | 35dd091+ | 201.87 | 1.5 | `38c23122994c` |  |
+| 20260930-135543 | doom 1000M | decode cache second way vs 35dd091 (reference) | 35dd091+ | 293.32 | 3.4 | `3d73dac132f3` |  |
+| 20260930-135547 | doom 1000M | decode cache second way vs 35dd091 | 35dd091+ | 263.40 | 3.8 | `3d73dac132f3` |  |
+| 20260930-135707 | ubuntu 3000M | decode cache second way, PGO retrained, vs 35dd091 (reference) | 35dd091+ | 201.06 | 14.9 | `9be8284ab1d9` |  |
+| 20260930-135723 | ubuntu 3000M | decode cache second way, PGO retrained, vs 35dd091 | 35dd091+ | 194.98 | 15.4 | `9be8284ab1d9` |  |
+| 20260930-135740 | linux 300M | decode cache second way, PGO retrained, vs 35dd091 (reference) | 35dd091+ | 222.36 | 1.3 | `38c23122994c` |  |
+| 20260930-135742 | linux 300M | decode cache second way, PGO retrained, vs 35dd091 | 35dd091+ | 215.87 | 1.4 | `38c23122994c` |  |
+| 20260930-135743 | doom 1000M | decode cache second way, PGO retrained, vs 35dd091 (reference) | 35dd091+ | 301.50 | 3.3 | `3d73dac132f3` |  |
+| 20260930-135746 | doom 1000M | decode cache second way, PGO retrained, vs 35dd091 | 35dd091+ | 301.27 | 3.3 | `3d73dac132f3` |  |
+| 20260930-135801 | ubuntu 3000M | faststats decode2 (reference) | 35dd091+ | 197.50 | 15.2 | `9be8284ab1d9` |  |
+| 20260930-135819 | ubuntu 3000M | faststats decode2 | 35dd091+ | 195.65 | 15.3 | `9be8284ab1d9` |  |
+| 20260930-140118 | ubuntu 3000M | decode cache second way, no swap, PGO retrained, vs 35dd091 (reference) | 35dd091+ | 201.04 | 14.9 | `9be8284ab1d9` |  |
+| 20260930-140135 | ubuntu 3000M | decode cache second way, no swap, PGO retrained, vs 35dd091 | 35dd091+ | 192.21 | 15.6 | `9be8284ab1d9` |  |
+| 20260930-140154 | linux 300M | decode cache second way, no swap, PGO retrained, vs 35dd091 (reference) | 35dd091+ | 219.53 | 1.4 | `38c23122994c` |  |
+| 20260930-140155 | linux 300M | decode cache second way, no swap, PGO retrained, vs 35dd091 | 35dd091+ | 217.34 | 1.4 | `38c23122994c` |  |
+| 20260930-140157 | doom 1000M | decode cache second way, no swap, PGO retrained, vs 35dd091 (reference) | 35dd091+ | 300.36 | 3.3 | `3d73dac132f3` |  |
+| 20260930-140200 | doom 1000M | decode cache second way, no swap, PGO retrained, vs 35dd091 | 35dd091+ | 305.28 | 3.3 | `3d73dac132f3` |  |
