@@ -660,7 +660,7 @@ What still leaves the fast loop on Ubuntu, per 3G steps:
 | 1 | ~~Land `cache-keys.patch` after `verify.py` and a PGO retrain~~ landed | 1.12-1.16x ubuntu, 1.08-1.10x linux | measured above and below |
 | 2 | ~~`sfence.vma` with an address drops that page only~~ landed | 1.04x ubuntu | full flushes 146.5K to 1.5K; see below |
 | 3 | ~~A second way in the decode cache, probed only on a miss~~ tried, slower | 0.96-0.97x ubuntu | see below |
-| 4 | Atomics, Zba/Zbb/Zbs and `cbo.zero` in the fast loop on a data-cache hit | ~6M fewer exits | all are plain loads/stores/ALU once the page is cached |
+| 4 | ~~Atomics, Zba/Zbb/Zbs and `cbo.zero` in the fast loop on a data-cache hit~~ atomics tried, no gain | 1.000x ubuntu | see below |
 | 5 | Pre-decoded blocks (item 3 of the first round) | the largest left, on every workload | 87% of Ubuntu and ~100% of DOOM is now the per-step loop |
 | 6 | Guest RAM and the decode table in large pages | unmeasured | Windows `MEM_LARGE_PAGES`, needs `SeLockMemoryPrivilege`; guest-invisible |
 | 7 | Snapshots (item 6 of the first round) | a boot becomes a load | unchanged |
@@ -738,6 +738,24 @@ to begin with: a decode and a run restart. A probe of a
 second 16 MB array is a cache miss to DRAM of its own, and the array doubles
 the footprint the decode table already cannot fit in host cache. What would
 help is fewer bytes per instruction, not more ways: item 5, or a smaller entry.
+
+**4, atomics tried and dropped (2026-09-30).** `lr`, `sc` and the nine
+standard AMOs (.W and .D) ran in the fast loop on a cached page: `lr` needed
+a load-cache hit, `sc` a store-cache hit whether or not it succeeded, and an
+AMO both (a store-cache entry alone says nothing of PMP's R). The reservation
+was set and consumed in place, since only LR and SC ever touch it.
+crash.log stayed identical on all three workloads, and the 5.2M exits on
+atomics went away, 1.1M of them turning into store-cache misses on pages only
+atomics had touched. Against `35dd091`, PGO retrained: ubuntu 1.000x, linux
+1.024x, doom 1.008x, all within this host's noise.
+
+**What 3 and 4 together say.** Both removed millions of fast-loop exits and
+neither paid, for the same reason: 10.7M decode misses and 5.2M atomics are
+0.36% and 0.17% of a 3G-step boot. Even at ten times the cost of a fast step,
+a slow step there is worth a few percent at most, and making the slow path
+rarer costs something on the fast one. The rest of the exit table (the CSR
+instructions, the run-entry refusals) has the same bound. What is left is
+the cost of the ordinary step, 87% of the Ubuntu profile, which is item 5.
 
 **Not worth doing:** skipping idle time. An idle guest sits in the kernel's
 `wfi` loop, and a WFI already ends after Sail's `max_time_to_wait` of 10

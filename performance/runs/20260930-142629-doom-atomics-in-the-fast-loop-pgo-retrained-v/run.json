@@ -1,0 +1,15 @@
+{
+  "time": "20260930-142629",
+  "label": "atomics in the fast loop, PGO retrained, vs 35dd091",
+  "workload": "doom",
+  "steps": 1000000000,
+  "seconds": 3.305,
+  "mips": 302.614,
+  "crash_log_sha256": "3d73dac132f396aa505f0bc0ca70860519d439b38267eadb95954786cf97ee99",
+  "exe": "Z:\\Code\\Dev\\DoomV\\riscv_doom.exe",
+  "exe_sha256": "83d2d1b3bedbdabe50a53c4cf284cc05f17ab10d74f841b19e6054166eba446b",
+  "commit": "df544f0",
+  "dirty": true,
+  "host": "AMD64 Family 25 Model 97 Stepping 2, AuthenticAMD / Windows 10",
+  "profiled": false
+}

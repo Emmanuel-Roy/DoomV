@@ -241,3 +241,9 @@ and nothing else.
 | 20260930-140155 | linux 300M | decode cache second way, no swap, PGO retrained, vs 35dd091 | 35dd091+ | 217.34 | 1.4 | `38c23122994c` |  |
 | 20260930-140157 | doom 1000M | decode cache second way, no swap, PGO retrained, vs 35dd091 (reference) | 35dd091+ | 300.36 | 3.3 | `3d73dac132f3` |  |
 | 20260930-140200 | doom 1000M | decode cache second way, no swap, PGO retrained, vs 35dd091 | 35dd091+ | 305.28 | 3.3 | `3d73dac132f3` |  |
+| 20260930-142548 | ubuntu 3000M | atomics in the fast loop, PGO retrained, vs 35dd091 (reference) | df544f0+ | 200.76 | 14.9 | `9be8284ab1d9` |  |
+| 20260930-142605 | ubuntu 3000M | atomics in the fast loop, PGO retrained, vs 35dd091 | df544f0+ | 200.83 | 14.9 | `9be8284ab1d9` |  |
+| 20260930-142622 | linux 300M | atomics in the fast loop, PGO retrained, vs 35dd091 (reference) | df544f0+ | 221.72 | 1.4 | `38c23122994c` |  |
+| 20260930-142624 | linux 300M | atomics in the fast loop, PGO retrained, vs 35dd091 | df544f0+ | 226.93 | 1.3 | `38c23122994c` |  |
+| 20260930-142625 | doom 1000M | atomics in the fast loop, PGO retrained, vs 35dd091 (reference) | df544f0+ | 300.31 | 3.3 | `3d73dac132f3` |  |
+| 20260930-142629 | doom 1000M | atomics in the fast loop, PGO retrained, vs 35dd091 | df544f0+ | 302.61 | 3.3 | `3d73dac132f3` |  |
