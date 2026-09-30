@@ -41,6 +41,9 @@ sys.path.insert(0, str(HERE))
 
 LINUX = ROOT / "build" / "linux"
 DOOM = ROOT / "tools" / "doom" / "doombuild"
+# The `desktop` workload's starting point, made by make_desktop_snapshot.py.
+DESKTOP_STEP = 100_000_000_000
+DESKTOP_SNAPSHOT = ROOT / "build" / "desktop" / "xfce-100G"
 
 WORKLOADS = {
     # The initramfs boot: OpenSBI, the kernel and BusyBox's shell, which it
@@ -75,6 +78,19 @@ WORKLOADS = {
         # No drives or shared folder: both default to a directory in the
         # working tree, and a benchmark must not depend on what is in them.
         "-drives=", "-shared="]),
+    # The XFCE desktop, running: the same machine as `ubuntu`, restored from a
+    # snapshot of it booted to the desktop at step 100G, then run on. This is
+    # where a desktop session spends its time, and no boot-from-reset
+    # benchmark could reach it. Idle, as it is here, it runs faster than the
+    # early boot (about 250 MIPS against 190); the boot between the two is the
+    # slow part, 70 MIPS averaged over all 100G steps. The snapshot is made once
+    # by make_desktop_snapshot.py (about 25 minutes) and is not in the
+    # repository.
+    #
+    # `base` is the step the snapshot was taken at: the run stops at base +
+    # steps, and the restore's own time (copying the disk image) is left out.
+    "desktop": dict(steps=3_000_000_000, base=DESKTOP_STEP, optional=True, prepare=lambda: prepare_desktop(),
+                    args=lambda: WORKLOADS["ubuntu"]["args"]() + [f"-restore={DESKTOP_SNAPSHOT}"]),
 }
 
 UBUNTU_IMAGE = ROOT / "ubuntu.img"
@@ -95,6 +111,20 @@ def prepare_ubuntu():
         raise RuntimeError(f"{UBUNTU_IMAGE} does not exist; see tools/linux/ubuntu/README.md")
     BENCH_IMAGE.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(UBUNTU_IMAGE, BENCH_IMAGE)
+
+
+def prepare_desktop():
+    """The snapshot must exist; the disk it names is only a placeholder.
+
+    A restore runs on a copy of the snapshot's own image, so the -disk the
+    command line gives only has to exist and be the same shape of machine:
+    no 4GB copy before each run.
+    """
+    if not (DESKTOP_SNAPSHOT / "state.bin").exists():
+        raise RuntimeError(f"no desktop snapshot at {DESKTOP_SNAPSHOT}; make it with "
+                           "python performance/make_desktop_snapshot.py (about 25 minutes)")
+    if not BENCH_IMAGE.exists():
+        prepare_ubuntu()
 
 
 def sha256(path: Path) -> str:
@@ -124,7 +154,8 @@ def run_once(workload: str, exe: Path, steps: int, label: str, profile: bool, in
 
     if spec.get("prepare"):
         spec["prepare"]()
-    cmd = [str(exe.resolve())] + spec["args"]() + [f"-stopat={steps}"]
+    base = spec.get("base", 0)
+    cmd = [str(exe.resolve())] + spec["args"]() + [f"-stopat={base + steps}"]
     started = time.perf_counter()
     with (work / "console.log").open("wb") as console:
         proc = subprocess.Popen(cmd, cwd=work, stdin=subprocess.DEVNULL, stdout=console, stderr=subprocess.STDOUT)
@@ -141,6 +172,13 @@ def run_once(workload: str, exe: Path, steps: int, label: str, profile: bool, in
     crash = work / "crash.log"
     if code != 0 or not crash.exists():
         raise RuntimeError(f"{workload} run failed (exit {code}); see {work / 'console.log'}")
+    restore = 0.0
+    if base:
+        m = re.search(r"restored step \d+ from .* in ([0-9.]+) s", (work / "console.log").read_text(errors="replace"))
+        if not m:
+            raise RuntimeError(f"{workload}: the restore did not report its time; see {work / 'console.log'}")
+        restore = float(m.group(1))
+        seconds -= restore
     out.mkdir(parents=True)
     record = {
         "time": stamp,
@@ -148,6 +186,7 @@ def run_once(workload: str, exe: Path, steps: int, label: str, profile: bool, in
         "workload": workload,
         "steps": steps,
         "seconds": round(seconds, 3),
+        "restore_seconds": round(restore, 3),
         "mips": round(steps / seconds / 1e6, 3),
         "crash_log_sha256": sha256(crash),
         "exe": str(exe),

@@ -280,13 +280,14 @@ behaviour anywhere.
 
 ### The workloads
 
-`bench.py` measures three, each a different mix:
+`bench.py` measures four, each a different mix:
 
 | workload | steps | MIPS | what it exercises |
 |---|---|---|---|
 | doom | 1000M | ~81 | the renderer, WAD reads, the framebuffer |
 | linux | 300M | ~59 | OpenSBI, the kernel, BusyBox userspace |
 | ubuntu | 3000M | ~54 | systemd, udev coldplug, a real userland off a virtio disk |
+| desktop | 3000M past 100G | ~250 (2026-09-30 build) | the XFCE desktop, booted and idle, restored from a snapshot |
 
 `ubuntu` is the newest and the heaviest, and it is heaviest for a reason worth
 knowing: it is the only one doing sustained MMU work against a real
@@ -296,11 +297,14 @@ tables or the TLB, this is where it shows.
 Two things about it are not obvious.
 
 **It does not reach the desktop.** It boots on the XFCE device tree, and X is
-twenty minutes of emulated time past where the measurement stops -- no
-benchmark can wait for that. What it measures is the boot. Measuring the
-running desktop would need a way to resume from an already-booted machine,
-which this emulator has no facility for; `Snapshot` is the dashboard's view of
-state, not a save file.
+far past where the measurement stops. What it measures is the early boot. The
+`desktop` workload is the running desktop instead: the same machine, restored
+from a snapshot taken at step 100G, when XFCE is up (see
+[Snapshots](../README.md#snapshots)). `make_desktop_snapshot.py` makes the
+snapshot once, in about 25 minutes; `bench.py` leaves the restore's time --
+mostly copying the 4GB disk image -- out of the measurement. Idle, the desktop
+runs faster than the early boot; the slow stretch is the boot between the two,
+which averages 70 MIPS over all 100G steps.
 
 **Every run starts from a fresh copy of the image.** The root disk is opened
 read-write and early boot writes to it -- the journal, the random seed -- so

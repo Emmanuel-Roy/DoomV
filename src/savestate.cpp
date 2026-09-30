@@ -29,6 +29,7 @@
 #include "extensions.hpp"
 #include "mmu.hpp"
 #include "pmp.hpp"
+#include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
@@ -387,6 +388,7 @@ bool SaveState::save(DoomSystem &s, const std::string &dir)
 
 bool SaveState::restore(DoomSystem &s, const std::string &dir)
 {
+	const auto started = std::chrono::steady_clock::now();
 	Memory &memory = s.memory;
 	Reader r(fs::path(dir) / "state.bin");
 	char magic[8];
@@ -447,6 +449,10 @@ bool SaveState::restore(DoomSystem &s, const std::string &dir)
 	// step is already in the machine.
 	const uint64_t now = memory.instruction_count();
 	while (s.replay_pos < s.replay_events.size() && s.replay_events[s.replay_pos].first <= now) s.replay_pos++;
-	std::cout << "restored step " << memory.instruction_count() << " from " << dir << std::endl;
+	// The time it took is printed for bench.py, which leaves it out of a
+	// measurement that starts from a snapshot.
+	const double took = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
+	std::printf("restored step %llu from %s in %.3f s\n", (unsigned long long)memory.instruction_count(), dir.c_str(), took);
+	std::fflush(stdout);
 	return true;
 }

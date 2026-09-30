@@ -313,3 +313,5 @@ and nothing else.
 | 20260930-172738 | linux 300M | snapshots added, PGO retrained, quiet host, run 2 | 21e9b1c+ | 228.81 | 1.3 | `38c23122994c` |  |
 | 20260930-172740 | doom 1000M | snapshots added, PGO retrained, quiet host, run 2 (reference) | 21e9b1c+ | 313.21 | 3.2 | `3d73dac132f3` |  |
 | 20260930-172743 | doom 1000M | snapshots added, PGO retrained, quiet host, run 2 | 21e9b1c+ | 313.44 | 3.2 | `3d73dac132f3` |  |
+| 20260930-182949 | desktop 3000M | desktop workload, run 1 | c8e18cc+ | 247.04 | 12.1 | `35c61483d5e3` |  |
+| 20260930-183017 | desktop 3000M | desktop workload, run 2 | c8e18cc+ | 254.35 | 11.8 | `35c61483d5e3` |  |
