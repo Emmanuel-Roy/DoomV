@@ -1,0 +1,15 @@
+{
+  "time": "20260929-224919",
+  "label": "fence-page (sfence.vma addr drops one page) vs 11ff5b3 (reference)",
+  "workload": "ubuntu",
+  "steps": 3000000000,
+  "seconds": 15.91,
+  "mips": 188.56,
+  "crash_log_sha256": "9be8284ab1d9fdb66943586427f4328761caa56ef478ec0065ec8585039c9ada",
+  "exe": "build\\perf-baseline-11ff5b3\\riscv_doom.exe",
+  "exe_sha256": "a5e3b21e9c4ab23acd30273affb18c0a131260b13a24dbac53594dcd36c0168f",
+  "commit": "11ff5b3",
+  "dirty": true,
+  "host": "AMD64 Family 25 Model 97 Stepping 2, AuthenticAMD / Windows 10",
+  "profiled": false
+}

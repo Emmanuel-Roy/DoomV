@@ -658,7 +658,7 @@ What still leaves the fast loop on Ubuntu, per 3G steps:
 | # | change | expected | evidence |
 |---|---|---|---|
 | 1 | ~~Land `cache-keys.patch` after `verify.py` and a PGO retrain~~ landed | 1.12-1.16x ubuntu, 1.08-1.10x linux | measured above and below |
-| 2 | `sfence.vma` with an address drops that page only | most of the remaining 7.9M walks | 119.5K of 121K flushes name an address; each refills ~60 pages |
+| 2 | ~~`sfence.vma` with an address drops that page only~~ landed | 1.04x ubuntu | full flushes 146.5K to 1.5K; see below |
 | 3 | A second way in the decode cache, probed only on a miss | up to 10.7M decodes | every miss is a conflict |
 | 4 | Atomics, Zba/Zbb/Zbs and `cbo.zero` in the fast loop on a data-cache hit | ~6M fewer exits | all are plain loads/stores/ALU once the page is cached |
 | 5 | Pre-decoded blocks (item 3 of the first round) | the largest left, on every workload | 87% of Ubuntu and ~100% of DOOM is now the per-step loop |
@@ -690,6 +690,36 @@ patched sources (doom 0.950x and 1.007x, ubuntu 1.038x and 1.011x in two
 paired repeats), and doom moves by about 5% between repeats on this host, so
 doom is best read as unchanged. Strict Sail lock-step and `verify.py` were run
 on the landed binary.
+
+**2, landed.** An `sfence.vma` or `sinval.vma` with rs1 != x0, outside a
+guest, now drops the four TLB slots of that page and its fetch, load and store
+cache entries, and leaves the global generation alone
+(`RiscvCore::fence_page`, `mmu_tlb_flush_page`). This is the same thing Sail's
+`flush_TLB_Entry` does. Superpages go through a 64-bit filter of hashed 1 GB
+regions: a walk that ends on a leaf above level 0 marks its region (every
+region, for one larger than 1 GB), a full flush clears it, and an address
+fence in a marked region falls back to a full flush. The ASID operand is
+ignored, which drops more than asked.
+
+Over `bench.py ubuntu` (3G steps), full flushes fell from 146.5K to 1,540.
+Of 119.5K address fences, 7 hit the superpage filter, and 10K named a
+kernel-half address. Against `11ff5b3`, same PGO profile:
+
+| workload | `11ff5b3` | fence-page | |
+|---|---:|---:|---|
+| ubuntu 3000M | 188.6 MIPS | 196.2 MIPS | **1.041x** |
+| linux 300M | 216.2 | 214.3 | 0.992x (noise) |
+| doom 1000M | 295.6 | 293.4 | 0.992x (noise) |
+| crash.log | | | identical, all three |
+
+The gain is smaller than the walk count promised. A refill after a full
+flush turns out to be cheap next to the rest of a boot, so most of Ubuntu's
+remaining time is items 3-5. `tests/lockstep/fence_page.S` covers it
+under strict Sail lock-step: it remaps a 4 KB data, code and store page and
+fences each one by address (once with an ASID operand, once via `sinval.vma`),
+then remaps a 2 MB superpage and fences a *different* page inside it. With
+the superpage fallback disabled, DoomV reads the stale value there and the
+test fails.
 
 **Not worth doing:** skipping idle time. An idle guest sits in the kernel's
 `wfi` loop, and a WFI already ends after Sail's `max_time_to_wait` of 10

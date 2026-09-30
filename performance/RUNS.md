@@ -215,3 +215,9 @@ and nothing else.
 | 20260929-150018 | doom 1000M | patch: old profile vs retrained profile, rep 2 | 82a34b1+ | 300.28 | 3.3 | `3d73dac132f3` |  |
 | 20260929-150022 | ubuntu 3000M | patch: old profile vs retrained profile, rep 2 (reference) | 82a34b1+ | 188.64 | 15.9 | `9be8284ab1d9` |  |
 | 20260929-150039 | ubuntu 3000M | patch: old profile vs retrained profile, rep 2 | 82a34b1+ | 190.69 | 15.7 | `9be8284ab1d9` |  |
+| 20260929-224919 | ubuntu 3000M | fence-page (sfence.vma addr drops one page) vs 11ff5b3 (reference) | 11ff5b3+ | 188.56 | 15.9 | `9be8284ab1d9` |  |
+| 20260929-224937 | ubuntu 3000M | fence-page (sfence.vma addr drops one page) vs 11ff5b3 | 11ff5b3+ | 196.22 | 15.3 | `9be8284ab1d9` |  |
+| 20260929-224954 | linux 300M | fence-page (sfence.vma addr drops one page) vs 11ff5b3 (reference) | 11ff5b3+ | 216.16 | 1.4 | `38c23122994c` |  |
+| 20260929-224955 | linux 300M | fence-page (sfence.vma addr drops one page) vs 11ff5b3 | 11ff5b3+ | 214.34 | 1.4 | `38c23122994c` |  |
+| 20260929-224957 | doom 1000M | fence-page (sfence.vma addr drops one page) vs 11ff5b3 (reference) | 11ff5b3+ | 295.63 | 3.4 | `3d73dac132f3` |  |
+| 20260929-225000 | doom 1000M | fence-page (sfence.vma addr drops one page) vs 11ff5b3 | 11ff5b3+ | 293.36 | 3.4 | `3d73dac132f3` |  |
