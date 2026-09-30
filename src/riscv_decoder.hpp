@@ -208,6 +208,28 @@ private:
 	static constexpr uint32_t CACHE_SIZE = 1u << CACHE_BITS;
 	static constexpr uint32_t CACHE_MASK = CACHE_SIZE - 1;
 	std::vector<CacheEntry> cache;
+	// The same decodes, as DoomSystem::run_fast reads them: 16 bytes instead of
+	// 32, at the same index, written whenever `cache` is. A 4-byte instruction
+	// took a whole 64-byte host cache line in `cache` (it is indexed by
+	// halfword), and Ubuntu's code does not fit in the host's caches, so the
+	// fast loop's decode lookup was a cache miss more often than it needed to be.
+	//
+	// There is no pc: a decode depends on the instruction's bytes and the
+	// extension set alone (pc-relative offsets are added when it runs), and a
+	// compressed tag cannot equal a 4-byte one, whose low two bits are 11. So
+	// an entry whose raw matches is the decode, whichever pc filled it. An
+	// all-zero entry is tag 0 -- c.unimp, which is FOP_SLOW anyway.
+	struct FastEntry {
+		uint32_t raw;
+		int32_t imm;       // every fast operation's immediate fits; see fill
+		uint8_t fast_op;
+		uint8_t rd, rs1, rs2;
+		uint8_t length;
+		uint8_t ext, opcode;   // for DOOMV_FASTSTATS only
+		uint8_t pad;
+	};
+	static_assert(sizeof(FastEntry) == 16, "four fast entries to a host cache line");
+	std::vector<FastEntry> fast;
 	uint32_t cache_epoch = ~0u;   // the ExtensionsEpoch the cache holds decodes for
 	// The extension set changed: empty the cache.
 	void sync_extensions();

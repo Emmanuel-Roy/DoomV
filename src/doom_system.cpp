@@ -315,6 +315,7 @@ void DoomSystem::run_fast(uint64_t n)
 {
 	Timer &timer = memory.get_timer();
 	auto &dcache = decoder.cache;
+	auto &ftab = decoder.fast;
 	while (n > 0 && !debugger.halted) {
 		// Conditions under which no step can be simple. step() for all of them.
 		if (debugger.may_halt() || memory.tohost_addr || core.access_log || memory.store_log
@@ -380,17 +381,18 @@ void DoomSystem::run_fast(uint64_t n)
 			}
 			const bool comp = (raw & 3) != 3;
 			const uint32_t tag = comp ? (raw & 0xFFFF) : raw;
-			// Found as decode_and_dispatch finds it, by byte offset.
-			const Decoder::CacheEntry &ce = *reinterpret_cast<const Decoder::CacheEntry *>(
-				reinterpret_cast<const char *>(dcache.data()) + ((pc << 4) & ((uint64_t)Decoder::CACHE_MASK << 5)));
-			if (!(ce.addr == pc && ce.decoded.raw == tag)) { fs_decode++; break; }
-			const DecodedOp &d = ce.decoded;
+			// The compact entry at the decode cache's index, found by byte
+			// offset as decode_and_dispatch finds its own.
+			const uint64_t doff = (pc << 3) & ((uint64_t)Decoder::CACHE_MASK << 4);
+			const Decoder::FastEntry &d = *reinterpret_cast<const Decoder::FastEntry *>(
+				reinterpret_cast<const char *>(ftab.data()) + doff);
+			if (d.raw != tag) { fs_decode++; break; }
 			const uint64_t len = d.length;
 			const uint64_t a = regs.read_x(d.rs1), b = regs.read_x(d.rs2);
-			const uint64_t imm = (uint64_t)d.imm;
+			const uint64_t imm = (uint64_t)(int64_t)d.imm;
 			uint64_t next = pc + len;
 			switch ((FastOp)d.fast_op) {
-			case FOP_SLOW: fs_ext[(int)d.ext & 63]++; fs_op[d.opcode]++; goto out;
+			case FOP_SLOW: fs_ext[d.ext & 63]++; fs_op[d.opcode]++; goto out;
 			case FOP_LUI:   regs.write_x(d.rd, imm); break;
 			case FOP_AUIPC: regs.write_x(d.rd, pc + imm); break;
 			case FOP_JAL:   regs.write_x(d.rd, next); next = pc + imm; break;
@@ -431,7 +433,7 @@ void DoomSystem::run_fast(uint64_t n)
 				break;
 			}
 			case FOP_ADDI:  regs.write_x(d.rd, a + imm); break;
-			case FOP_SLTI:  regs.write_x(d.rd, (int64_t)a < d.imm); break;
+			case FOP_SLTI:  regs.write_x(d.rd, (int64_t)a < (int64_t)d.imm); break;
 			case FOP_SLTIU: regs.write_x(d.rd, a < imm); break;
 			case FOP_XORI:  regs.write_x(d.rd, a ^ imm); break;
 			case FOP_ORI:   regs.write_x(d.rd, a | imm); break;
@@ -459,12 +461,18 @@ void DoomSystem::run_fast(uint64_t n)
 			case FOP_SRLW: regs.write_x(d.rd, sext32((uint32_t)a >> (b & 0x1F))); break;
 			case FOP_SRAW: regs.write_x(d.rd, sext32((uint32_t)((int32_t)(uint32_t)a >> (b & 0x1F)))); break;
 			case FOP_FENCE: break;
-			case FOP_MEXT:
+			case FOP_MEXT: {
+				// exec_32M takes the full decode: the entry at the same index in
+				// the full cache, written with this one.
+				const DecodedOp &full = reinterpret_cast<const Decoder::CacheEntry *>(
+					reinterpret_cast<const char *>(dcache.data()) + (doff << 1))->decoded;
+				if (full.raw != tag) goto out;
 				// exec_32M reads pc from regs and sets it itself.
 				regs.set_pc(pc);
-				core.exec_32M(d, regs, memory);
+				core.exec_32M(full, regs, memory);
 				next = regs.get_pc();
 				break;
+			}
 			}
 			hist[hp] = { pc, tag };
 			hp = (hp + 1) & (Registers::HISTORY_SIZE - 1);

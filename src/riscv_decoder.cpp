@@ -8,7 +8,7 @@
 #include <algorithm>
 
 Decoder::Decoder(RiscvCore &core, Registers &regs, Memory &mem)
-	: core(core), regs(regs), mem(mem), cache(CACHE_SIZE)
+	: core(core), regs(regs), mem(mem), cache(CACHE_SIZE), fast(CACHE_SIZE)
 {
 }
 
@@ -409,6 +409,7 @@ static bool extension_enabled(Extension e)
 void Decoder::sync_extensions()
 {
 	std::fill(cache.begin(), cache.end(), CacheEntry{});
+	std::fill(fast.begin(), fast.end(), FastEntry{});
 	cache_epoch = ExtensionsEpoch;
 }
 
@@ -466,6 +467,17 @@ DispatchResult Decoder::decode_and_dispatch(uint64_t pc, uint32_t raw_word)
 		// The name stays behind: only the operation is cached.
 		entry.addr = pc;
 		entry.decoded = instr;
+		FastEntry &f = *reinterpret_cast<FastEntry *>(reinterpret_cast<char *>(fast.data()) + (offset >> 1));
+		f.raw = tag;
+		f.imm = (int32_t)instr.imm;
+		// An immediate that does not survive the narrowing would run wrong, so
+		// such an entry is left to the ordinary step. None of the fast
+		// operations has one today; this keeps it true.
+		f.fast_op = (int64_t)f.imm == instr.imm ? instr.fast_op : (uint8_t)FOP_SLOW;
+		f.rd = instr.rd; f.rs1 = instr.rs1; f.rs2 = instr.rs2;
+		f.length = instr.length;
+		f.ext = (uint8_t)instr.ext; f.opcode = instr.opcode;
+		f.pad = 0;
 	}
 	// The instruction is used from the cache entry itself, not copied out of
 	// it. Nothing between here and the return decodes, so the entry cannot
