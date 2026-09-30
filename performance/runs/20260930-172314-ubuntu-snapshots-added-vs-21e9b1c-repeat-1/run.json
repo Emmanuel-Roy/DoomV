@@ -1,0 +1,15 @@
+{
+  "time": "20260930-172314",
+  "label": "snapshots added, vs 21e9b1c, repeat 1",
+  "workload": "ubuntu",
+  "steps": 3000000000,
+  "seconds": 15.49,
+  "mips": 193.673,
+  "crash_log_sha256": "9be8284ab1d9fdb66943586427f4328761caa56ef478ec0065ec8585039c9ada",
+  "exe": "Z:\\Code\\Dev\\DoomV\\riscv_doom.exe",
+  "exe_sha256": "374ded89e0a6d0ae5e56e6b1a9bc509effc138550afb712d546e3682040aefa7",
+  "commit": "21e9b1c",
+  "dirty": true,
+  "host": "AMD64 Family 25 Model 97 Stepping 2, AuthenticAMD / Windows 10",
+  "profiled": false
+}

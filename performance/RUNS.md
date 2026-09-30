@@ -281,3 +281,35 @@ and nothing else.
 | 20260930-145151 | linux 300M | 16-byte fast decode table, PGO, repeat 2 | c435e02+ | 228.27 | 1.3 | `38c23122994c` |  |
 | 20260930-145153 | doom 1000M | 16-byte fast decode table, PGO, repeat 2 (reference) | c435e02+ | 287.52 | 3.5 | `3d73dac132f3` |  |
 | 20260930-145156 | doom 1000M | 16-byte fast decode table, PGO, repeat 2 | c435e02+ | 312.32 | 3.2 | `3d73dac132f3` |  |
+| 20260930-172205 | doom 1000M | snapshots added, vs 21e9b1c (reference) | 21e9b1c+ | 307.95 | 3.2 | `3d73dac132f3` |  |
+| 20260930-172208 | doom 1000M | snapshots added, vs 21e9b1c | 21e9b1c+ | 308.12 | 3.2 | `3d73dac132f3` |  |
+| 20260930-172212 | linux 300M | snapshots added, vs 21e9b1c (reference) | 21e9b1c+ | 227.25 | 1.3 | `38c23122994c` |  |
+| 20260930-172213 | linux 300M | snapshots added, vs 21e9b1c | 21e9b1c+ | 209.17 | 1.4 | `38c23122994c` |  |
+| 20260930-172215 | ubuntu 3000M | snapshots added, vs 21e9b1c (reference) | 21e9b1c+ | 207.42 | 14.5 | `9be8284ab1d9` |  |
+| 20260930-172231 | ubuntu 3000M | snapshots added, vs 21e9b1c | 21e9b1c+ | 192.55 | 15.6 | `9be8284ab1d9` |  |
+| 20260930-172255 | linux 300M | snapshots added, vs 21e9b1c, repeat 1 (reference) | 21e9b1c+ | 228.06 | 1.3 | `38c23122994c` |  |
+| 20260930-172256 | linux 300M | snapshots added, vs 21e9b1c, repeat 1 | 21e9b1c+ | 223.07 | 1.3 | `38c23122994c` |  |
+| 20260930-172258 | ubuntu 3000M | snapshots added, vs 21e9b1c, repeat 1 (reference) | 21e9b1c+ | 208.61 | 14.4 | `9be8284ab1d9` |  |
+| 20260930-172314 | ubuntu 3000M | snapshots added, vs 21e9b1c, repeat 1 | 21e9b1c+ | 193.67 | 15.5 | `9be8284ab1d9` |  |
+| 20260930-172332 | linux 300M | snapshots added, vs 21e9b1c, repeat 2 (reference) | 21e9b1c+ | 230.42 | 1.3 | `38c23122994c` |  |
+| 20260930-172333 | linux 300M | snapshots added, vs 21e9b1c, repeat 2 | 21e9b1c+ | 219.22 | 1.4 | `38c23122994c` |  |
+| 20260930-172335 | ubuntu 3000M | snapshots added, vs 21e9b1c, repeat 2 (reference) | 21e9b1c+ | 208.53 | 14.4 | `9be8284ab1d9` |  |
+| 20260930-172351 | ubuntu 3000M | snapshots added, vs 21e9b1c, repeat 2 | 21e9b1c+ | 194.02 | 15.5 | `9be8284ab1d9` |  |
+| 20260930-172522 | doom 1000M | snapshots added, PGO retrained, vs 21e9b1c (reference) | 21e9b1c+ | 312.68 | 3.2 | `3d73dac132f3` |  |
+| 20260930-172525 | doom 1000M | snapshots added, PGO retrained, vs 21e9b1c | 21e9b1c+ | 303.42 | 3.3 | `3d73dac132f3` |  |
+| 20260930-172528 | linux 300M | snapshots added, PGO retrained, vs 21e9b1c (reference) | 21e9b1c+ | 230.05 | 1.3 | `38c23122994c` |  |
+| 20260930-172530 | linux 300M | snapshots added, PGO retrained, vs 21e9b1c | 21e9b1c+ | 228.51 | 1.3 | `38c23122994c` |  |
+| 20260930-172531 | ubuntu 3000M | snapshots added, PGO retrained, vs 21e9b1c (reference) | 21e9b1c+ | 209.72 | 14.3 | `9be8284ab1d9` |  |
+| 20260930-172547 | ubuntu 3000M | snapshots added, PGO retrained, vs 21e9b1c | 21e9b1c+ | 162.71 | 18.4 | `9be8284ab1d9` |  |
+| 20260930-172623 | ubuntu 3000M | snapshots added, PGO retrained, quiet host, run 1 (reference) | 21e9b1c+ | 207.88 | 14.4 | `9be8284ab1d9` |  |
+| 20260930-172639 | ubuntu 3000M | snapshots added, PGO retrained, quiet host, run 1 | 21e9b1c+ | 205.44 | 14.6 | `9be8284ab1d9` |  |
+| 20260930-172656 | linux 300M | snapshots added, PGO retrained, quiet host, run 1 (reference) | 21e9b1c+ | 230.24 | 1.3 | `38c23122994c` |  |
+| 20260930-172657 | linux 300M | snapshots added, PGO retrained, quiet host, run 1 | 21e9b1c+ | 226.00 | 1.3 | `38c23122994c` |  |
+| 20260930-172658 | doom 1000M | snapshots added, PGO retrained, quiet host, run 1 (reference) | 21e9b1c+ | 310.54 | 3.2 | `3d73dac132f3` |  |
+| 20260930-172702 | doom 1000M | snapshots added, PGO retrained, quiet host, run 1 | 21e9b1c+ | 312.48 | 3.2 | `3d73dac132f3` |  |
+| 20260930-172705 | ubuntu 3000M | snapshots added, PGO retrained, quiet host, run 2 (reference) | 21e9b1c+ | 207.26 | 14.5 | `9be8284ab1d9` |  |
+| 20260930-172721 | ubuntu 3000M | snapshots added, PGO retrained, quiet host, run 2 | 21e9b1c+ | 208.28 | 14.4 | `9be8284ab1d9` |  |
+| 20260930-172737 | linux 300M | snapshots added, PGO retrained, quiet host, run 2 (reference) | 21e9b1c+ | 232.35 | 1.3 | `38c23122994c` |  |
+| 20260930-172738 | linux 300M | snapshots added, PGO retrained, quiet host, run 2 | 21e9b1c+ | 228.81 | 1.3 | `38c23122994c` |  |
+| 20260930-172740 | doom 1000M | snapshots added, PGO retrained, quiet host, run 2 (reference) | 21e9b1c+ | 313.21 | 3.2 | `3d73dac132f3` |  |
+| 20260930-172743 | doom 1000M | snapshots added, PGO retrained, quiet host, run 2 | 21e9b1c+ | 313.44 | 3.2 | `3d73dac132f3` |  |

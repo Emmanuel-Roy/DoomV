@@ -794,6 +794,33 @@ decode at the same index, written with it. Against `35dd091`, PGO retrained,
 three runs each: ubuntu 1.038x / 1.036x / 1.047x, linux 0.989x / 1.037x /
 1.029x, doom 1.016x / 1.035x / 1.086x, crash.log identical in every run.
 
+**7, snapshots, landed (2026-09-30).** `-snapshotat=<n> -snapshot=<dir>`
+saves the machine as the run passes step n; `-restore=<dir>` starts from it.
+Everything a later step can observe is saved field by field in
+`src/savestate.cpp`; everything that only remembers an answer (TLB, fetch,
+data and decode caches, PMP decode, interrupt and counter keys) is invalidated
+on restore instead. Disks are copied whole, and a restore runs on a fresh
+working copy. `tools/verification/snapshot_check.py` runs A (save at N, run to
+N+M), B (restore, run to N+M) and C (straight to N+M) and requires crash.log,
+the RAM and framebuffer hashes and, where there is one, the disk image to be
+identical. It passes on linux (split at 1, 4096000, 123456789, 150M and
+299999999), doom (500M) and ubuntu (1.5G and 2G, disk included), and a snapshot
+taken by a restored run restores to the same machine again.
+
+| workload | snapshot | straight to N+M | restore, then to N+M |
+|---|---:|---:|---:|
+| linux, 150M + 150M | 45 MB | 1.6 s | 1.0 s |
+| doom, 500M + 500M | 11 MB | 3.4 s | 1.8 s |
+| ubuntu, 1.5G + 1.5G | 4.1 GB (the disk) | 15.9 s | 18.6 s |
+
+On Ubuntu the restore copies the 4 GB image, which costs more than the 1.5G
+steps it saves; the payoff is past the boot, where the desktop is twenty
+minutes of emulated time away. Ordinary runs are unchanged: crash.log
+identical, speed within noise once the host was quiet (0.988-1.005x ubuntu,
+0.982-0.985x linux, 1.001-1.006x doom). The first measurements, taken while the
+host was still busy with the check's 16 GB of snapshot files, read as low as
+0.78x; those runs are in RUNS.md with their labels.
+
 **Not worth doing:** skipping idle time. An idle guest sits in the kernel's
 `wfi` loop, and a WFI already ends after Sail's `max_time_to_wait` of 10
 ticks; waiting longer would change the trace.
