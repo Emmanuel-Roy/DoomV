@@ -661,7 +661,7 @@ What still leaves the fast loop on Ubuntu, per 3G steps:
 | 2 | ~~`sfence.vma` with an address drops that page only~~ landed | 1.04x ubuntu | full flushes 146.5K to 1.5K; see below |
 | 3 | ~~A second way in the decode cache, probed only on a miss~~ tried, slower | 0.96-0.97x ubuntu | see below |
 | 4 | ~~Atomics, Zba/Zbb/Zbs and `cbo.zero` in the fast loop on a data-cache hit~~ atomics tried, no gain | 1.000x ubuntu | see below |
-| 5 | Pre-decoded blocks (item 3 of the first round) | the largest left, on every workload | 87% of Ubuntu and ~100% of DOOM is now the per-step loop |
+| 5 | ~~Pre-decoded blocks (item 3 of the first round)~~ tried, slower; a 16-byte fast decode entry landed instead | 1.03-1.05x, all three | see below |
 | 6 | Guest RAM and the decode table in large pages | unmeasured | Windows `MEM_LARGE_PAGES`, needs `SeLockMemoryPrivilege`; guest-invisible |
 | 7 | Snapshots (item 6 of the first round) | a boot becomes a load | unchanged |
 
@@ -756,6 +756,43 @@ a slow step there is worth a few percent at most, and making the slow path
 rarer costs something on the fast one. The rest of the exit table (the CSR
 instructions, the run-entry refusals) has the same bound. What is left is
 the cost of the ordinary step, 87% of the Ubuntu profile, which is item 5.
+
+**5, pre-decoded blocks tried and dropped (2026-09-30).** A block was a
+straight line of fast-loop instructions in one page, ending at the first
+branch or jump or before the first instruction the loop does not run: copies
+of the decodes, plus the bytes they came from. run_fast compared the bytes
+once on entry (a decode depends only on them and the extension set, so a
+match is exact) and then ran the copies with no per-step fetch or tag check.
+A store into the block's own bytes, compared as host memory, ended the block
+after the store, so self-modifying code was still fetched as written.
+crash.log was identical on all three workloads throughout.
+
+| version, PGO retrained, vs `35dd091` | doom | linux | ubuntu |
+|---|---:|---:|---:|
+| up to 16 instructions, 2^14 slots, `memcmp` on entry | 0.954x | | 0.880x |
+| up to 8, 2^15 slots, word compare, built on the second ask | 0.957x | 0.922x | 0.912x |
+
+DOOM ran 99.9% of its steps in blocks, about six to a block, and rebuilt
+almost none, so this was not the table. The fast loop already runs DOOM at
+about 295 MIPS, and what a block saves -- the page check, a
+4-byte fetch, the tag and the decode lookup -- is a handful of instructions,
+about what entering a block costs. The large gains other interpreters report
+for blocks come with changing the dispatch too, and at this speed the
+remaining large step is a JIT (item 8 of the first round), not an
+interpreter change. Ubuntu also rebuilt 16M blocks at 2^14 slots; building on
+the second ask fixed that but not the rest.
+
+**Landed instead: a 16-byte decode entry for the fast loop.** The decode cache
+is indexed by halfword with 32-byte entries, so a 4-byte instruction took a
+whole 64-byte host cache line, and Ubuntu's code does not fit in host cache.
+`Decoder::fast` holds the same decodes as run_fast reads them -- operation,
+registers, a 32-bit immediate, the raw tag -- at the same index, 8 MB instead
+of 16, written whenever the full entry is. It has no pc: a decode depends on
+the bytes alone (pc-relative offsets are added when it runs), and a
+compressed tag cannot equal a 4-byte one. An M instruction reads its full
+decode at the same index, written with it. Against `35dd091`, PGO retrained,
+three runs each: ubuntu 1.038x / 1.036x / 1.047x, linux 0.989x / 1.037x /
+1.029x, doom 1.016x / 1.035x / 1.086x, crash.log identical in every run.
 
 **Not worth doing:** skipping idle time. An idle guest sits in the kernel's
 `wfi` loop, and a WFI already ends after Sail's `max_time_to_wait` of 10

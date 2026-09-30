@@ -247,3 +247,37 @@ and nothing else.
 | 20260930-142624 | linux 300M | atomics in the fast loop, PGO retrained, vs 35dd091 | df544f0+ | 226.93 | 1.3 | `38c23122994c` |  |
 | 20260930-142625 | doom 1000M | atomics in the fast loop, PGO retrained, vs 35dd091 (reference) | df544f0+ | 300.31 | 3.3 | `3d73dac132f3` |  |
 | 20260930-142629 | doom 1000M | atomics in the fast loop, PGO retrained, vs 35dd091 | df544f0+ | 302.61 | 3.3 | `3d73dac132f3` |  |
+| 20260930-144038 | doom 1000M | blocks v1, stale profile, vs 35dd091 (reference) | c435e02+ | 299.73 | 3.3 | `3d73dac132f3` |  |
+| 20260930-144041 | doom 1000M | blocks v1, stale profile, vs 35dd091 | c435e02+ | 220.17 | 4.5 | `3d73dac132f3` |  |
+| 20260930-144046 | linux 300M | blocks v1, stale profile, vs 35dd091 (reference) | c435e02+ | 221.76 | 1.4 | `38c23122994c` |  |
+| 20260930-144047 | linux 300M | blocks v1, stale profile, vs 35dd091 | c435e02+ | 171.95 | 1.7 | `38c23122994c` |  |
+| 20260930-144049 | ubuntu 3000M | blocks v1, stale profile, vs 35dd091 (reference) | c435e02+ | 197.40 | 15.2 | `9be8284ab1d9` |  |
+| 20260930-144107 | ubuntu 3000M | blocks v1, stale profile, vs 35dd091 | c435e02+ | 156.73 | 19.1 | `9be8284ab1d9` |  |
+| 20260930-144316 | doom 1000M | blocks v1, PGO retrained, vs 35dd091 (reference) | c435e02+ | 299.94 | 3.3 | `3d73dac132f3` |  |
+| 20260930-144319 | doom 1000M | blocks v1, PGO retrained, vs 35dd091 | c435e02+ | 286.01 | 3.5 | `3d73dac132f3` |  |
+| 20260930-144323 | ubuntu 3000M | blocks v1, PGO retrained, vs 35dd091 (reference) | c435e02+ | 201.33 | 14.9 | `9be8284ab1d9` |  |
+| 20260930-144339 | ubuntu 3000M | blocks v1, PGO retrained, vs 35dd091 | c435e02+ | 177.10 | 16.9 | `9be8284ab1d9` |  |
+| 20260930-144607 | doom 1000M | blocks v2 (inline compare, build on second ask, max 8), PGO, vs 35dd091 (reference) | c435e02+ | 300.56 | 3.3 | `3d73dac132f3` |  |
+| 20260930-144610 | doom 1000M | blocks v2 (inline compare, build on second ask, max 8), PGO, vs 35dd091 | c435e02+ | 287.51 | 3.5 | `3d73dac132f3` |  |
+| 20260930-144613 | linux 300M | blocks v2 (inline compare, build on second ask, max 8), PGO, vs 35dd091 (reference) | c435e02+ | 219.60 | 1.4 | `38c23122994c` |  |
+| 20260930-144615 | linux 300M | blocks v2 (inline compare, build on second ask, max 8), PGO, vs 35dd091 | c435e02+ | 202.40 | 1.5 | `38c23122994c` |  |
+| 20260930-144616 | ubuntu 3000M | blocks v2 (inline compare, build on second ask, max 8), PGO, vs 35dd091 (reference) | c435e02+ | 199.44 | 15.0 | `9be8284ab1d9` |  |
+| 20260930-144633 | ubuntu 3000M | blocks v2 (inline compare, build on second ask, max 8), PGO, vs 35dd091 | c435e02+ | 181.99 | 16.5 | `9be8284ab1d9` |  |
+| 20260930-144947 | doom 1000M | 16-byte fast decode table, PGO, vs 35dd091 (reference) | c435e02+ | 300.28 | 3.3 | `3d73dac132f3` |  |
+| 20260930-144951 | doom 1000M | 16-byte fast decode table, PGO, vs 35dd091 | c435e02+ | 305.00 | 3.3 | `3d73dac132f3` |  |
+| 20260930-144954 | linux 300M | 16-byte fast decode table, PGO, vs 35dd091 (reference) | c435e02+ | 219.58 | 1.4 | `38c23122994c` |  |
+| 20260930-144955 | linux 300M | 16-byte fast decode table, PGO, vs 35dd091 | c435e02+ | 217.24 | 1.4 | `38c23122994c` |  |
+| 20260930-144957 | ubuntu 3000M | 16-byte fast decode table, PGO, vs 35dd091 (reference) | c435e02+ | 200.28 | 15.0 | `9be8284ab1d9` |  |
+| 20260930-145013 | ubuntu 3000M | 16-byte fast decode table, PGO, vs 35dd091 | c435e02+ | 207.92 | 14.4 | `9be8284ab1d9` |  |
+| 20260930-145035 | ubuntu 3000M | 16-byte fast decode table, PGO, repeat 1 (reference) | c435e02+ | 199.44 | 15.0 | `9be8284ab1d9` |  |
+| 20260930-145051 | ubuntu 3000M | 16-byte fast decode table, PGO, repeat 1 | c435e02+ | 206.72 | 14.5 | `9be8284ab1d9` |  |
+| 20260930-145107 | linux 300M | 16-byte fast decode table, PGO, repeat 1 (reference) | c435e02+ | 219.43 | 1.4 | `38c23122994c` |  |
+| 20260930-145109 | linux 300M | 16-byte fast decode table, PGO, repeat 1 | c435e02+ | 227.55 | 1.3 | `38c23122994c` |  |
+| 20260930-145110 | doom 1000M | 16-byte fast decode table, PGO, repeat 1 (reference) | c435e02+ | 300.58 | 3.3 | `3d73dac132f3` |  |
+| 20260930-145114 | doom 1000M | 16-byte fast decode table, PGO, repeat 1 | c435e02+ | 311.17 | 3.2 | `3d73dac132f3` |  |
+| 20260930-145117 | ubuntu 3000M | 16-byte fast decode table, PGO, repeat 2 (reference) | c435e02+ | 198.59 | 15.1 | `9be8284ab1d9` |  |
+| 20260930-145134 | ubuntu 3000M | 16-byte fast decode table, PGO, repeat 2 | c435e02+ | 207.88 | 14.4 | `9be8284ab1d9` |  |
+| 20260930-145150 | linux 300M | 16-byte fast decode table, PGO, repeat 2 (reference) | c435e02+ | 221.90 | 1.4 | `38c23122994c` |  |
+| 20260930-145151 | linux 300M | 16-byte fast decode table, PGO, repeat 2 | c435e02+ | 228.27 | 1.3 | `38c23122994c` |  |
+| 20260930-145153 | doom 1000M | 16-byte fast decode table, PGO, repeat 2 (reference) | c435e02+ | 287.52 | 3.5 | `3d73dac132f3` |  |
+| 20260930-145156 | doom 1000M | 16-byte fast decode table, PGO, repeat 2 | c435e02+ | 312.32 | 3.2 | `3d73dac132f3` |  |

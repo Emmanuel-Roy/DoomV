@@ -1,0 +1,15 @@
+{
+  "time": "20260930-144633",
+  "label": "blocks v2 (inline compare, build on second ask, max 8), PGO, vs 35dd091",
+  "workload": "ubuntu",
+  "steps": 3000000000,
+  "seconds": 16.484,
+  "mips": 181.992,
+  "crash_log_sha256": "9be8284ab1d9fdb66943586427f4328761caa56ef478ec0065ec8585039c9ada",
+  "exe": "Z:\\Code\\Dev\\DoomV\\riscv_doom.exe",
+  "exe_sha256": "f9f6bf95c93da0cf43b42f362ac1298a73e49ec0fe0250b608f63d792158af59",
+  "commit": "c435e02",
+  "dirty": true,
+  "host": "AMD64 Family 25 Model 97 Stepping 2, AuthenticAMD / Windows 10",
+  "profiled": false
+}
