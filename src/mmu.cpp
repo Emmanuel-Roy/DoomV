@@ -398,11 +398,43 @@ bool gstage_translate(Registers &regs, Memory &mem, uint64_t gpa, AccessType typ
 
 uint64_t mmu_tlb_gen = 0;
 
+// Which 1 GB regions may hold a page translated through a superpage since the
+// last full flush, one bit per hashed region. A false positive costs a full
+// flush, which is what every address fence used to be.
+static uint64_t superpage_regions = 0;
+
+static inline uint64_t superpage_region_bit(uint64_t vaddr)
+{
+	return 1ull << (((vaddr >> 30) * 0x9E3779B97F4A7C15ull) >> 58);
+}
+
 // By generation rather than by clearing every entry: a flush used to be 64 KB
 // of stores, and a Ubuntu boot does ~120K of them.
 void mmu_tlb_flush()
 {
 	mmu_tlb_gen++;
+	superpage_regions = 0;
+}
+
+// Almost every fence a Linux guest issues names one address (119.5K of 121K
+// flushes in a Ubuntu boot), and a full flush for each one refilled ~60
+// pages. Sail drops only the entries whose page, widened by their superpage
+// mask, holds the address (flush_TLB_Entry), and so does this -- plus, for a
+// superpage, everything, since its 4 KB pieces are scattered over the index.
+// The ASID operand is ignored: the TLB does not tag entries with one, and
+// dropping the page for every ASID is a superset of what was asked.
+bool mmu_tlb_flush_page(uint64_t vaddr)
+{
+	if (superpage_regions & superpage_region_bit(vaddr)) {
+		mmu_tlb_flush();
+		return false;
+	}
+	const uint64_t vpn = vaddr >> 12;
+	for (unsigned type = 0; type < 4; type++) {
+		TlbEntry &e = tlb[((vpn << 2) | type) & TLB_MASK];
+		if ((e.key >> 8) == vpn) e.key = 0;
+	}
+	return true;
 }
 
 // Pointer masking (Smnpm / Ssnpm / Sspm).
@@ -1050,6 +1082,12 @@ bool mmu_translate(Registers &regs, Memory &mem, uint64_t vaddr, AccessType type
 	// silently failed to set a bit the architecture says it must. The
 	// access after this one finds A and D already set and is cached then,
 	// which is the access that actually repeats.
+	// A superpage leaf: the fetch and data caches may now hold pieces of it,
+	// and an address fence anywhere in its region has to drop them all. One
+	// larger than 1 GB spans many regions, so it marks every one.
+	if (level > 0)
+		superpage_regions |= level >= 3 ? ~0ull : superpage_region_bit(vaddr);
+
 	if (tlb_eligible && !ad_was_updated) {
 		tlb[tlb_i].key = tlb_k; tlb[tlb_i].gen = mmu_tlb_gen;
 		tlb[tlb_i].ppn = paddr & ~0xFFFull;

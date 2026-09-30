@@ -22,6 +22,11 @@
 
 DoomSystem::DoomSystem() : decoder(core, regs, memory)
 {
+	core.drop_fetch_page_ctx = this;
+	core.drop_fetch_page = [](void *ctx, uint64_t vpage) {
+		FetchPage &e = static_cast<DoomSystem *>(ctx)->fetch_cache[vpage & (FETCH_CACHE_SIZE - 1)];
+		if (e.vpage == vpage) e.vpage = ~0ull;
+	};
 }
 
 bool DoomSystem::attach_disk(const std::string &path)

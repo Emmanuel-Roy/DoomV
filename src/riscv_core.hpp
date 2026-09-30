@@ -65,6 +65,13 @@ public:
 	static constexpr unsigned DATA_CACHE_SIZE = 4096;
 	DataPage load_cache[DATA_CACHE_SIZE];
 	DataPage store_cache[DATA_CACHE_SIZE];
+	// An address fence (SFENCE.VMA or SINVAL.VMA with rs1 != x0, V=0): drops
+	// the page holding vaddr from the TLB, both data caches and, through
+	// drop_fetch_page, DoomSystem's fetch cache -- or everything, where
+	// mmu_tlb_flush_page decides it must.
+	void fence_page(uint64_t vaddr);
+	void (*drop_fetch_page)(void *ctx, uint64_t vpage) = nullptr;
+	void *drop_fetch_page_ctx = nullptr;
 	void raise_virtual_instruction(Registers &regs, uint64_t tval) { enter_trap(regs, 22, tval); }
 	// Enter interrupt `bit`'s trap now, as check_and_take_interrupt would.
 	void take_interrupt(Registers &regs, int bit)

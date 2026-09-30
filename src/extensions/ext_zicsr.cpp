@@ -1195,6 +1195,19 @@ uint64_t RiscvCore::read_csr_effective(Registers &regs, Memory &mem, uint16_t cs
 // which kept lock-step correct but meant the Sail sweep only ever exercised
 // the slow paths: the one part of the machine the instruction-by-instruction
 // check did not reach. Reporting instead of bypassing puts them under it.
+// The per-page half of an address fence; see mmu_tlb_flush_page. The global
+// generation is left alone, so every other page's entries survive.
+void RiscvCore::fence_page(uint64_t vaddr)
+{
+	if (!mmu_tlb_flush_page(vaddr)) return; // flushed everything instead
+	const uint64_t vpage = vaddr >> 12;
+	DataPage &l = load_cache[vpage & (DATA_CACHE_SIZE - 1)];
+	if (l.vpage == vpage) l.vpage = ~0ull;
+	DataPage &s = store_cache[vpage & (DATA_CACHE_SIZE - 1)];
+	if (s.vpage == vpage) s.vpage = ~0ull;
+	if (drop_fetch_page) drop_fetch_page(drop_fetch_page_ctx, vpage);
+}
+
 static uint64_t data_cache_key(const Registers &regs)
 {
 	return regs.data_key(regs.state_gen + mmu_tlb_generation() + ExtensionsEpoch);
@@ -1791,12 +1804,14 @@ void RiscvCore::exec_32ZICSR(const DecodedOp &instr, Registers &regs, Memory &me
 				raise_illegal_instruction(regs, instr.raw);
 				return;
 			}
-			// The fence now has something to do. This drops every cached
-			// translation rather than the one address or ASID the operands
-			// name -- invalidating more than asked is always permitted, and
-			// it keeps the argument for the cache being correct down to one
-			// sentence instead of a table.
-			mmu_tlb_flush();
+			// The fence now has something to do. With an address, and outside
+			// a guest, it drops that one page (fence_page); otherwise every
+			// cached translation, rather than the one ASID rs2 names --
+			// invalidating more than asked is always permitted.
+			if (instr.rs1 != 0 && !regs.get_virt())
+				fence_page(regs.read_x(instr.rs1));
+			else
+				mmu_tlb_flush();
 			regs.set_pc(pc + instr.length);
 			return;
 		}

@@ -88,6 +88,12 @@ void RiscvCore::exec_SVINVAL(const DecodedOp &instr, Registers &regs, Memory &me
 	// (SFENCE.W.INVAL, SFENCE.INVAL.IR) name no address and invalidate
 	// nothing, so they are left alone -- flushing on them would be
 	// harmless but would say something untrue about what they mean.
-	if (instr.funct7 == 0b0001011) mmu_tlb_flush();
+	// With an address it drops one page, exactly as SFENCE.VMA does.
+	if (instr.funct7 == 0b0001011) {
+		if (instr.rs1 != 0 && !regs.get_virt())
+			fence_page(regs.read_x(instr.rs1));
+		else
+			mmu_tlb_flush();
+	}
 	regs.set_pc(regs.get_pc() + instr.length);
 }

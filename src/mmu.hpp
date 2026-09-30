@@ -46,6 +46,16 @@ void mmu_tlb_flush();
 extern uint64_t mmu_tlb_gen;
 inline uint64_t mmu_tlb_generation() { return mmu_tlb_gen; }
 
+// Drops the TLB's translations of the one 4 KB page holding vaddr, for an
+// SFENCE.VMA or SINVAL.VMA that names an address. A superpage translation
+// covers more than that page, and the TLB (like the fetch and data caches)
+// holds it as one entry per 4 KB page it was used for; so if one may have
+// been used anywhere in vaddr's 1 GB region since the last full flush, this
+// flushes everything instead. Returns false when it did. On true the caller
+// still owes the same page to the fetch and data caches -- see
+// RiscvCore::fence_page.
+bool mmu_tlb_flush_page(uint64_t vaddr);
+
 // Sv39/48/57 address translation.
 //
 // This used to be stateless on purpose, and the comment here said a TLB was
