@@ -792,6 +792,52 @@ exactly that, on any `bench.py` workload.
   shared folder. `-input` scripts start from their beginning after a restore;
   a `-replay` log carries on from the snapshot's instruction.
 
+#### Loading the booted XFCE desktop
+
+The quickest way to a desktop is a snapshot of one. Make it once -- about 25
+minutes, and 4.4 GB in `build/desktop/xfce-100G`, most of it the disk image:
+
+```
+python performance/make_desktop_snapshot.py
+```
+
+It boots `ubuntu.img` on the XFCE device tree to instruction 100,000,000,000,
+where the desktop is up, and saves the machine there. It needs an `ubuntu.img`
+with the desktops installed (`python scripts/boot.py ubuntu --install-desktops`,
+above). Then, from the repository root, open it in a window:
+
+```
+riscv_doom.exe -opensbi=build/linux/fw_jump.elf -kernel=build/linux/Image -dtb=build/linux/ubuntu-xfce.dtb -disk=ubuntu.img -drives= -shared= -restore=build/desktop/xfce-100G
+```
+
+After about 15 seconds -- copying the disk image -- the window shows the XFCE
+desktop, logged in as root, and it is yours: mouse and keyboard as usual,
+Ctrl+Alt+G to grab the mouse. Add `-ng` for no window.
+
+- **Every argument matters.** The snapshot was taken on exactly that machine:
+  default RAM and `-march`, the XFCE device tree, one disk, no storage drives
+  (`-drives=`) and no shared folder (`-shared=`). Leave out `-shared=` and the
+  shared folder is attached by default, and the restore refuses with
+  `Different: shared folder`. `scripts/boot.py ubuntu --desktop xfce` attaches
+  both, so it cannot load this snapshot.
+- **`ubuntu.img` is not used.** `-disk=` has to name an image so that the
+  machine has a disk, but the restore moves the disk to
+  `build/desktop/xfce-100G/disk.work.img` straight away and never writes to
+  the one named.
+- **Each restore starts clean.** What you do in the session is written to
+  `disk.work.img`, and the next restore replaces that with a fresh copy of the
+  snapshot's image. To keep a session, snapshot it: add
+  `-snapshotat=<n> -snapshot=<dir>` with a step past the snapshot's
+  100,000,000,000 (the restore prints the step it starts at), and restore that
+  folder next time with the same command line. 1,000,000,000 steps is a
+  second of a busy guest's time (an idle one's clock runs ahead while it
+  waits), and a few seconds of yours on the desktop.
+- **Same build.** A snapshot is read only by a build with the same snapshot
+  layout; after an update that changes it, the restore says so, and
+  `make_desktop_snapshot.py` makes a new one.
+
+The same snapshot is the starting point of `bench.py`'s `desktop` workload.
+
 ### Running your own programs in the guest
 
 The Ubuntu guest is a normal riscv64 Linux, so anything built for riscv64

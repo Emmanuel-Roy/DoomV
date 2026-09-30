@@ -5,7 +5,8 @@ Boots the `ubuntu` workload's machine -- ubuntu.img with the XFCE device tree,
 no drives, no shared folder -- from reset to step 100G, where the XFCE desktop
 is up and idle, and saves it to build/desktop/xfce-100G. About 25 minutes, at
 the ~70 MIPS the boot averages. The screen at that step is written to
-build/desktop/screen.ppm, to see that it is the desktop.
+build/desktop/screen.ppm, to see that it is the desktop. How to open it in a
+window is in the README, under "Loading the booted XFCE desktop".
 
   python performance/make_desktop_snapshot.py
 """
