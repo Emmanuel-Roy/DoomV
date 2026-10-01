@@ -72,7 +72,12 @@ void Registers::write_csr(uint16_t addr, uint64_t value)
 		const uint64_t diff = csr[addr] ^ value;
 		csr[addr] = value;
 		if (diff & KEYED) state_gen++;
-		bump_event_gen();
+		// Only a change can change an interrupt decision. Every FP instruction
+		// that writes FP state marks FS dirty with an mstatus write, almost
+		// always of the value already there; bumping for it sent the step
+		// after every such instruction back through the interrupt check --
+		// 475M times in 3G steps of the XFCE session starting.
+		if (diff) bump_event_gen();
 		if (csr_log) csr_log->push_back(addr);
 		return;
 	}
@@ -82,19 +87,28 @@ void Registers::write_csr(uint16_t addr, uint64_t value)
 	// Linux writes the first row on every trap, and DoomV writes `time` on
 	// every rdtime. Leaving a CSR off this list costs speed; putting one on it
 	// that translation, PMP or the counter enables read breaks the caches.
+	//
+	// EventGen, which says the interrupt check must be made again, follows the
+	// same rule for the same reason: it moves only when a CSR's value changes,
+	// and not for the CSRs on the list -- except stimecmp, a compare value the
+	// interrupt deadline reads (DoomSystem::interrupt_may_be_due).
 	const bool same = csr[addr] == value;
 	csr[addr] = value;
+	bool interrupts = !same;
 	switch (addr) {
 	case 0x140: case 0x141: case 0x142: case 0x143:   // sscratch sepc scause stval
 	case 0x340: case 0x341: case 0x342: case 0x343:   // mscratch mepc mcause mtval
 	case 0x001: case 0x002: case 0x003:               // fflags frm fcsr
 	case 0x008: case 0x009: case 0x00A:               // vstart vxsat vxrm
-	case 0xC00: case 0xC01: case 0xC02: case 0x14D:   // cycle time instret stimecmp
+	case 0xC00: case 0xC01: case 0xC02:               // cycle time instret
+		interrupts = false;
+		break;
+	case 0x14D:                                       // stimecmp
 		break;
 	default:
 		if (!same) state_gen++;
 	}
-	bump_event_gen();
+	if (interrupts) bump_event_gen();
 	if (csr_log) csr_log->push_back(addr);
 }
 

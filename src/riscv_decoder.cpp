@@ -624,6 +624,14 @@ FastOp classify_fast(const DecodedOp &d)
 	if (!Extensions.XLEN64) return FOP_SLOW;
 	if (d.ext == Extension::M) return FOP_MEXT;
 	if (d.ext == Extension::ZIHINTPAUSE) return FOP_FENCE;   // exec_ZIHINTPAUSE only advances pc
+	if (d.ext == Extension::F || d.ext == Extension::D) {
+		const bool dbl = d.ext == Extension::D;
+		switch (d.opcode) {
+		case 0b0000111: return dbl ? FOP_FLD : FOP_FLW;
+		case 0b0100111: return dbl ? FOP_FSD : FOP_FSW;
+		default:        return FOP_FEXT;   // OP-FP and the fused multiply-adds
+		}
+	}
 	if (d.ext != Extension::I && d.ext != Extension::C) return FOP_SLOW;
 	const unsigned f3 = d.funct3;
 	switch (d.opcode) {

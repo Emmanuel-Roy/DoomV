@@ -99,6 +99,10 @@ enum FastOp : uint8_t {
 	FOP_ADDW, FOP_SUBW, FOP_SLLW, FOP_SRLW, FOP_SRAW,
 	FOP_FENCE,  // also PAUSE: both only advance pc
 	FOP_MEXT,   // any M instruction: exec_32M, which neither traps nor touches memory
+	// F and D, while mstatus.FS is already Dirty (see run_fast): the loads and
+	// stores on a cached page, and everything else through exec_F/exec_D,
+	// which once the unit is on cannot trap.
+	FOP_FLW, FOP_FLD, FOP_FSW, FOP_FSD, FOP_FEXT,
 };
 FastOp classify_fast(const DecodedOp &d);
 

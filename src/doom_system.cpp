@@ -3,6 +3,7 @@
 #include "event_gen.hpp"
 #include "pmp.hpp"
 #include "mmu.hpp"
+#include "extensions/ext_fp_common.hpp"   // the bit-level FP helpers, for run_fast
 #include "extensions.hpp"
 #include <iostream>
 #include <SDL2/SDL.h>
@@ -311,6 +312,8 @@ static bool fast_enabled()
 // Prototype statistics: why runs end. Printed at -stopat with DOOMV_FASTSTATS.
 static uint64_t fs_fast, fs_slow_entry, fs_deadline, fs_fetch, fs_decode, fs_op[256], fs_ld, fs_st, fs_budget;
 static uint64_t fs_ext[64];
+// Which run-entry check refused: debug/logs/config, epoch, wait, counters, events, deadline.
+static uint64_t fs_entry[6];
 void DoomSystem::run_fast(uint64_t n)
 {
 	Timer &timer = memory.get_timer();
@@ -325,6 +328,13 @@ void DoomSystem::run_fast(uint64_t n)
 		    || regs.keyed(regs.state_gen + ExtensionsEpoch) != counter_key
 		    || EventGen != irq_key || timer.get_mtime() >= irq_deadline) {
 			fs_slow_entry++;
+			// Counted only here, on the way to the slow step.
+			fs_entry[(debugger.may_halt() || memory.tohost_addr || core.access_log || memory.store_log
+			          || !Extensions.C || !Extensions.XLEN64 || Extensions.ZICFILP) ? 0
+			         : decoder.cache_epoch != ExtensionsEpoch ? 1
+			         : core.wait_request != RiscvCore::Wait::None ? 2
+			         : regs.keyed(regs.state_gen + ExtensionsEpoch) != counter_key ? 3
+			         : EventGen != irq_key ? 4 : 5]++;
 			step();
 			n--;
 			continue;
@@ -338,6 +348,12 @@ void DoomSystem::run_fast(uint64_t n)
 			if (steps < limit) limit = steps;
 		}
 		const uint64_t key = regs.fetch_key(regs.state_gen + mmu_tlb_generation() + ExtensionsEpoch), dkey = regs.data_key(regs.state_gen + mmu_tlb_generation() + ExtensionsEpoch);
+		// F and D run here only while mstatus.FS is already Dirty, outside a
+		// guest. Then the unit is on, so nothing but a load or store can trap,
+		// and the write that marks FS Dirty stores the value already there,
+		// which changes nothing a run depends on (Registers::write_csr). Only
+		// a CSR instruction, never run here, can change FS, so it holds for the run.
+		const bool fp_ok = (regs.read_csr(0x300) & (3ull << 13)) == (3ull << 13) && !regs.get_virt();
 		regs.minstret_increment = counts_instret;
 
 		uint64_t pc = regs.get_pc();
@@ -461,6 +477,43 @@ void DoomSystem::run_fast(uint64_t n)
 			case FOP_SRLW: regs.write_x(d.rd, sext32((uint32_t)a >> (b & 0x1F))); break;
 			case FOP_SRAW: regs.write_x(d.rd, sext32((uint32_t)((int32_t)(uint32_t)a >> (b & 0x1F)))); break;
 			case FOP_FENCE: break;
+			case FOP_FLW: case FOP_FLD: {
+				// As exec_F/exec_D do it: FLW NaN-boxes the word.
+				if (!fp_ok) goto out;
+				const unsigned size = d.fast_op == FOP_FLD ? 8 : 4;
+				const uint64_t addr = a + imm;
+				if (((addr + size - 1) >> 12) != (addr >> 12)) goto out;
+				const RiscvCore::DataPage &e = core.load_cache[(addr >> 12) & (RiscvCore::DATA_CACHE_SIZE - 1)];
+				if (!(e.vpage == (addr >> 12) && e.key == dkey)) { fs_ld++; goto out; }
+				uint64_t v = 0;
+				std::memcpy(&v, e.host + (addr & 0xFFF), size);
+				regs.write_f(d.rd, f64_from_bits(size == 4 ? box_f32((uint32_t)v) : v));
+				break;
+			}
+			case FOP_FSW: case FOP_FSD: {
+				if (!fp_ok) goto out;
+				const unsigned size = d.fast_op == FOP_FSD ? 8 : 4;
+				const uint64_t addr = a + imm;
+				if (((addr + size - 1) >> 12) != (addr >> 12)) goto out;
+				const RiscvCore::DataPage &e = core.store_cache[(addr >> 12) & (RiscvCore::DATA_CACHE_SIZE - 1)];
+				if (!(e.vpage == (addr >> 12) && e.key == dkey)) { fs_st++; goto out; }
+				const uint64_t bits = bits_from_f64(regs.read_f(d.rs2));
+				std::memcpy(e.host + (addr & 0xFFF), &bits, size);
+				if (e.backing != Memory::Backing::Ram) memory.framebuffer_stored(e.backing, size);
+				break;
+			}
+			case FOP_FEXT: {
+				if (!fp_ok) goto out;
+				// The full decode, at the same index -- as for FOP_MEXT.
+				const DecodedOp &full = reinterpret_cast<const Decoder::CacheEntry *>(
+					reinterpret_cast<const char *>(dcache.data()) + (doff << 1))->decoded;
+				if (full.raw != tag) goto out;
+				regs.set_pc(pc);
+				if (full.ext == Extension::D) core.exec_D(full, regs, memory);
+				else core.exec_F(full, regs, memory);
+				next = regs.get_pc();
+				break;
+			}
 			case FOP_MEXT: {
 				// exec_32M takes the full decode: the entry at the same index in
 				// the full cache, written with this one.
@@ -1033,6 +1086,8 @@ void DoomSystem::stop_at_limit()
 		            "fetch miss %llu\ndecode miss %llu\nload miss %llu\nstore miss %llu\n",
 			(unsigned long long)fs_fast, 100.0 * fs_fast / n, (unsigned long long)fs_slow_entry, (unsigned long long)fs_deadline,
 			(unsigned long long)fs_fetch, (unsigned long long)fs_decode, (unsigned long long)fs_ld, (unsigned long long)fs_st);
+		static const char *const entry_why[6] = {"debug, logs or config", "extension epoch", "a wait", "counter key", "event key", "interrupt deadline"};
+		for (int i = 0; i < 6; i++) if (fs_entry[i]) std::printf("run entry refused, %s: %llu\n", entry_why[i], (unsigned long long)fs_entry[i]);
 		for (int i = 0; i < 64; i++) if (fs_ext[i]) std::printf("slow op ext %d: %llu\n", i, (unsigned long long)fs_ext[i]);
 		for (int i = 0; i < 128; i++) if (fs_op[i]) std::printf("slow op opcode 0x%02x: %llu\n", i, (unsigned long long)fs_op[i]);
 	}
@@ -1075,7 +1130,20 @@ void DoomSystem::resume_from_halt()
 
 void DoomSystem::cpu_loop()
 {
+	// DOOMV_PROGRESS=<steps>: the step count and the time so far, each time the
+	// run passes a multiple of it -- where a long boot spends its time. Host
+	// output only, printed between bursts, so the guest cannot see it.
+	const char *progress_env = std::getenv("DOOMV_PROGRESS");
+	const uint64_t progress_every = progress_env ? std::strtoull(progress_env, nullptr, 0) : 0;
+	uint64_t progress_next = progress_every ? (memory.instruction_count() / progress_every + 1) * progress_every : 0;
+	const auto progress_start = std::chrono::steady_clock::now();
 	while (true) {
+		if (progress_every && memory.instruction_count() >= progress_next) {
+			const double s = std::chrono::duration<double>(std::chrono::steady_clock::now() - progress_start).count();
+			std::printf("progress: step %llu at %.1f s\n", (unsigned long long)memory.instruction_count(), s);
+			std::fflush(stdout);
+			progress_next = (memory.instruction_count() / progress_every + 1) * progress_every;
+		}
 		if (debugger.halted) {
 			if (resume_requested.exchange(false)) {
 				resume_from_halt();
