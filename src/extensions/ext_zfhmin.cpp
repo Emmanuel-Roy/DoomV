@@ -80,10 +80,11 @@ void RiscvCore::exec_ZFHMIN(const DecodedOp &instr, Registers &regs, Memory &mem
 
 	switch (instr.opcode) {
 	case 0b0000111: { // flh
+		// As FLW does it -- see exec_F.
 		uint64_t addr = regs.read_x(instr.rs1) + (uint64_t)instr.imm;
-		uint64_t paddr;
-		if (!translate_or_trap(regs, mem, addr, AccessType::Load, paddr)) return;
-		uint16_t h = (uint16_t)(mem.read8(paddr) | ((uint16_t)mem.read8(paddr + 1) << 8));
+		uint64_t v;
+		if (!load_virtual(regs, mem, addr, 2, v)) return;
+		const uint16_t h = (uint16_t)v;
 		// Boxed on the way in, so a later fmv.x.h or fcvt sees a valid half
 		// rather than the canonical NaN the unbox rule would otherwise give.
 		regs.write_f(instr.rd, f64_from_bits(fp16::box_f16(h)));
@@ -91,18 +92,15 @@ void RiscvCore::exec_ZFHMIN(const DecodedOp &instr, Registers &regs, Memory &mem
 	}
 
 	case 0b0100111: { // fsh
-		uint64_t addr = regs.read_x(instr.rs1) + (uint64_t)instr.imm;
-		uint64_t paddr;
-		if (!translate_or_trap(regs, mem, addr, AccessType::Store, paddr)) return;
+		uint64_t addr = regs.read_x(instr.rs1) + (uint64_t)instr.imm;   // as FLH
 		// Raw bits, with no NaN-box check. A store transfers the low 16
 		// bits exactly as they sit in the register -- the spec is explicit
 		// that FSH does not modify what it transfers and does not
 		// canonicalise NaNs. The unbox rule belongs to instructions that
 		// *interpret* the value as a number; applying it here turned every
 		// improperly-boxed pattern into 0x7E00 on the way to memory.
-		uint16_t h = (uint16_t)bits_from_f64(regs.read_f(instr.rs2));
-		mem.write8(paddr, (uint8_t)h);
-		mem.write8(paddr + 1, (uint8_t)(h >> 8));
+		const uint16_t h = (uint16_t)bits_from_f64(regs.read_f(instr.rs2));
+		if (!store_virtual(regs, mem, addr, 2, h)) return;
 		// A store writes no register, so it must not mark the FP state
 		// dirty or advance through the shared tail below.
 		regs.set_pc(regs.get_pc() + instr.length);

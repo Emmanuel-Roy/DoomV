@@ -127,19 +127,23 @@ void RiscvCore::exec_F(const DecodedOp &instr, Registers &regs, Memory &mem)
 	vcommon::mark_fp_dirty(regs);
 
 	if (instr.opcode == 0b0000111) { // FLW -- rs1 is an integer base register
+		// Through load_virtual/store_virtual with the access's real width, as an
+		// integer access goes. Translating only the base address checked one
+		// byte: an access straddling into an unmapped or read-only page went
+		// ahead, reading or writing whatever followed the first page
+		// physically, and PMP saw one byte of it. It also left the data caches
+		// unfilled, so the fast loop never found a page only FP code used.
 		uint64_t addr = regs.read_x(instr.rs1) + (uint64_t)instr.imm;
-		uint64_t paddr;
-		if (!translate_or_trap(regs, mem, addr, AccessType::Load, paddr)) return;
-		regs.write_f(instr.rd, f64_from_bits(box_f32(mem.read32(paddr))));
+		uint64_t v;
+		if (!load_virtual(regs, mem, addr, 4, v)) return;
+		regs.write_f(instr.rd, f64_from_bits(box_f32((uint32_t)v)));
 		regs.set_pc(pc + instr.length);
 		return;
 	}
 
 	if (instr.opcode == 0b0100111) { // FSW -- raw low bits, no unboxing needed
-		uint64_t addr = regs.read_x(instr.rs1) + (uint64_t)instr.imm;
-		uint64_t paddr;
-		if (!translate_or_trap(regs, mem, addr, AccessType::Store, paddr)) return;
-		mem.write32(paddr, (uint32_t)bits_from_f64(regs.read_f(instr.rs2)));
+		uint64_t addr = regs.read_x(instr.rs1) + (uint64_t)instr.imm;   // as FLW
+		if (!store_virtual(regs, mem, addr, 4, (uint32_t)bits_from_f64(regs.read_f(instr.rs2)))) return;
 		regs.set_pc(pc + instr.length);
 		return;
 	}

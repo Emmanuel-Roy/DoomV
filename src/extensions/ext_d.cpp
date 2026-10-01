@@ -148,19 +148,18 @@ void RiscvCore::exec_D(const DecodedOp &instr, Registers &regs, Memory &mem)
 	vcommon::mark_fp_dirty(regs);
 
 	if (instr.opcode == 0b0000111) { // FLD -- rs1 is an integer base register
+		// As FLW does it -- see exec_F.
 		uint64_t addr = regs.read_x(instr.rs1) + (uint64_t)instr.imm;
-		uint64_t paddr;
-		if (!translate_or_trap(regs, mem, addr, AccessType::Load, paddr)) return;
-		regs.write_f(instr.rd, f64_from_bits(mem.read64(paddr)));
+		uint64_t v;
+		if (!load_virtual(regs, mem, addr, 8, v)) return;
+		regs.write_f(instr.rd, f64_from_bits(v));
 		regs.set_pc(pc + instr.length);
 		return;
 	}
 
 	if (instr.opcode == 0b0100111) { // FSD -- raw bits, no canonicalization needed
-		uint64_t addr = regs.read_x(instr.rs1) + (uint64_t)instr.imm;
-		uint64_t paddr;
-		if (!translate_or_trap(regs, mem, addr, AccessType::Store, paddr)) return;
-		mem.write64(paddr, bits_from_f64(regs.read_f(instr.rs2)));
+		uint64_t addr = regs.read_x(instr.rs1) + (uint64_t)instr.imm;   // as FLD
+		if (!store_virtual(regs, mem, addr, 8, bits_from_f64(regs.read_f(instr.rs2)))) return;
 		regs.set_pc(pc + instr.length);
 		return;
 	}

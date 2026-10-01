@@ -1322,13 +1322,18 @@ bool RiscvCore::store_virtual(Registers &regs, Memory &mem, uint64_t vaddr,
 	// straddles into a page it may not write must not leave the first page
 	// modified -- software that catches the fault and retries would
 	// otherwise write those bytes twice.
-	uint64_t pa[8];
-	for (unsigned i = 0; i < size; i++) {
-		if (!translate_or_trap(regs, mem, vaddr + i, AccessType::Store, pa[i], 1))
-			return false;
-	}
+	//
+	// One piece per page, as Sail does it: the bytes in the first page, then
+	// the rest. The access log -- what lock-step compares stores by -- then
+	// holds the two stores Sail reports rather than one per byte. A fault in
+	// the first page names vaddr and one in the second names the boundary,
+	// as they did byte by byte.
+	const unsigned first = 0x1000 - (unsigned)(vaddr & 0xFFF);
+	uint64_t pa0, pa1;
+	if (!translate_or_trap(regs, mem, vaddr, AccessType::Store, pa0, first)) return false;
+	if (!translate_or_trap(regs, mem, vaddr + first, AccessType::Store, pa1, size - first)) return false;
 	for (unsigned i = 0; i < size; i++)
-		mem.write8(pa[i], (uint8_t)(value >> (8 * i)));
+		mem.write8(i < first ? pa0 + i : pa1 + (i - first), (uint8_t)(value >> (8 * i)));
 	return true;
 }
 
