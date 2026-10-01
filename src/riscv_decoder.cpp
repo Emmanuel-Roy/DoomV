@@ -527,6 +527,11 @@ DispatchResult Decoder::decode_and_dispatch(uint64_t pc, uint32_t raw_word)
 	     || instr.ext == Extension::ZFHMIN) && !vcommon::fp_unit_enabled(regs)) {
 		return {true, &instr};
 	}
+	// A reserved rounding mode, in the instruction or in frm. A run-time
+	// check, since frm is state: the decode is cached, the answer is not.
+	if (fp_rm_illegal(instr, regs.get_frm())) {
+		return {true, &instr};
+	}
 
 	switch (instr.ext) {
 	case Extension::I:
@@ -615,6 +620,44 @@ DispatchResult Decoder::decode_and_dispatch(uint64_t pc, uint32_t raw_word)
 	}
 
 	return {false, &instr};
+}
+
+// The scalar FP instructions with an rm field: the fused multiply-adds,
+// FADD/FSUB/FMUL/FDIV/FSQRT, and every FCVT -- between formats (Zfa's FROUND
+// among them), to an integer and from one. The rest use funct3 to pick an
+// operation (FSGNJ, FMIN/FMAX, the compares, FMV, FCLASS) and have no rm.
+static bool scalar_fp_has_rm(const DecodedOp &d)
+{
+	switch (d.opcode) {
+	case 0b1000011: case 0b1000111: case 0b1001011: case 0b1001111:
+		return true;
+	case 0b1010011:
+		switch (d.funct7 >> 2) {
+		case 0b00000: case 0b00001: case 0b00010: case 0b00011: case 0b01011:   // add sub mul div sqrt
+		case 0b01000: case 0b11000: case 0b11010:                                 // the FCVTs
+			return true;
+		default:
+			return false;
+		}
+	default:
+		return false;
+	}
+}
+
+// DoomV rounded to nearest for every one of these. Sail's configuration
+// (rva23s64.json, base.reserved_behavior.fcsr_rm = Fcsr_RM_Illegal) makes the
+// dynamic case illegal, and rm 5 and 6 never decode at all.
+bool fp_rm_illegal(const DecodedOp &d, uint8_t frm)
+{
+	switch (d.ext) {
+	case Extension::F: case Extension::D: case Extension::ZFH: case Extension::ZFHMIN: case Extension::ZFA:
+		if (!scalar_fp_has_rm(d)) return false;
+		return d.funct3 == 5 || d.funct3 == 6 || (d.funct3 == 7 && frm > 4);
+	case Extension::V:
+		return d.opcode == 0b1010111 && (d.funct3 == 0b001 || d.funct3 == 0b101) && frm > 4;
+	default:
+		return false;
+	}
 }
 
 // Prototype. The same predicates exec_32I uses to choose an operation, made

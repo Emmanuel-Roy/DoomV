@@ -56,6 +56,13 @@ inline uint64_t mmu_tlb_generation() { return mmu_tlb_gen; }
 // RiscvCore::fence_page.
 bool mmu_tlb_flush_page(uint64_t vaddr);
 
+// Whether a load or store made now goes through page tables at all: its
+// effective privilege (MPRV included) is not M and that mode's satp is not
+// Bare, or it is a guest access and vsatp or hgatp is not Bare. Sail's
+// vmem_active, which decides whether a misaligned access that crosses a page
+// is performed as two accesses, one per page (RiscvCore::load_virtual).
+bool mmu_paging_active(Registers &regs, AccessType type);
+
 // Sv39/48/57 address translation.
 //
 // This used to be stateless on purpose, and the comment here said a TLB was

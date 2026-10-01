@@ -570,6 +570,23 @@ uint64_t apply_pointer_mask(Registers &regs, uint64_t vaddr, AccessType type,
 	return (uint64_t)((int64_t)(vaddr << pmlen) >> pmlen);
 }
 
+// The privilege and world resolved as mmu_translate resolves them below.
+bool mmu_paging_active(Registers &regs, AccessType type)
+{
+	PrivMode eff_priv = regs.get_priv();
+	bool mprv_virt = false;
+	if (type != AccessType::Fetch && regs.get_priv() == PrivMode::M) {
+		const uint64_t st = regs.read_csr(CSR_MSTATUS);
+		if (st & MSTATUS_MPRV) {
+			eff_priv = (PrivMode)((st >> 11) & 3);
+			mprv_virt = Extensions.H && (st & MSTATUS_MPV) != 0 && eff_priv != PrivMode::M;
+		}
+	}
+	if (Extensions.H && (regs.get_virt() || mprv_virt))
+		return (regs.read_csr(CSR_VSATP) >> 60) != 0 || (regs.read_csr(CSR_HGATP) >> 60) != 0;
+	return eff_priv != PrivMode::M && (regs.read_csr(CSR_SATP) >> 60) != 0;
+}
+
 bool mmu_translate(Registers &regs, Memory &mem, uint64_t vaddr, AccessType type,
                     uint64_t &paddr, uint64_t &cause, uint64_t &tval, bool as_guest)
 {

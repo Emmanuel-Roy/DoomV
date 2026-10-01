@@ -58,8 +58,8 @@ namespace sf {
 // RISC-V's rm field, resolved through frm for the dynamic encoding.
 //
 // An invalid or reserved mode is the caller's problem, not this layer's:
-// the decoder raises an illegal instruction for rm=5/6 and for a reserved
-// frm, so anything arriving here is one of the five real modes.
+// dispatch raises an illegal instruction for rm=5/6 and for a reserved
+// frm (fp_rm_illegal), so anything arriving here is one of the five real modes.
 inline uint_fast8_t round_mode(uint8_t rm, uint8_t frm)
 {
 	return (uint_fast8_t)((rm == 0b111) ? frm : rm);

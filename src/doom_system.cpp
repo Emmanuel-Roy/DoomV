@@ -508,6 +508,8 @@ void DoomSystem::run_fast(uint64_t n)
 				const DecodedOp &full = reinterpret_cast<const Decoder::CacheEntry *>(
 					reinterpret_cast<const char *>(dcache.data()) + (doff << 1))->decoded;
 				if (full.raw != tag) goto out;
+				// A reserved rounding mode is an illegal instruction: step()'s.
+				if (fp_rm_illegal(full, regs.get_frm())) goto out;
 				regs.set_pc(pc);
 				if (full.ext == Extension::D) core.exec_D(full, regs, memory);
 				else core.exec_F(full, regs, memory);

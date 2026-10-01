@@ -9,9 +9,11 @@
 #     adjacent -- the second page's bytes must come from its own frame
 #   FSD straddling them, read back as integers from both frames
 #   FSD straddling into a read-only page -- a store page fault naming the
-#     boundary
+#     boundary, after the part in the first page is written (Sail's split)
 #   FLD straddling into that read-only page -- allowed, both frames read
 #   FLD straddling into an unmapped page -- a load page fault at the boundary
+#   the same straddles from integer loads and stores, which share the path
+#   SD straddling with paging off, in M-mode -- one access, not split
 #
 # Sv39, S-mode, mstatus.FS on. 0x80000000 is identity-mapped by a 1 GB leaf;
 # 0x40000000 holds four 4 KB pages:
@@ -72,6 +74,12 @@ _start:
 	pte  t2, t0, PTE_RO
 	sd   t2, 16(t1)
 
+	# Paging off (M-mode, satp Bare): a straddle is one access, not split.
+	li   t0, 0x0102030405060708
+	la   t1, frame_a + 0xFFD
+	sd   t0, 0(t1)
+	ld   a0, 0(t1)
+
 	la   t0, root
 	srli t0, t0, 12
 	li   t1, SATP_SV39
@@ -115,15 +123,26 @@ s_entry:
 	li    t0, 0x99AABBCCDDEEFF00
 	fmv.d.x f6, t0
 	fsd   f6, 0x7FC(s1)            # store page fault at VA + 0x2000
-	# Nothing reads page 1's last bytes after this: whether they were written
-	# before the fault is the implementation's choice (a misaligned access may
-	# be split), and Sail and DoomV choose differently. The fault and its
-	# address are not a choice.
+	# The part in page 1 is written before the fault, as Sail splits it. The
+	# architecture allows either (a misaligned access may be split, and trap
+	# part-way); this is the choice Sail makes, so it is the one DoomV makes.
+	la    t1, frame_b + 0xFF8
+	ld    a5, 0(t1)
+	fld   f9, 0x7FC(s1)
+	fmv.x.d s5, f9
 
 	# ---- from page 2 into page 3, unmapped -------------------------------------
 	fld   f7, 0x7FC(s2)            # load page fault at VA + 0x3000
 	flw   f8, -0x800(s2)                # inside page 2: fine
 	fmv.x.w a7, f8
+
+	# ---- the same, from integer code: one path serves both --------------------
+	li    t0, 0x0A0B0C0D0E0F1011
+	sd    t0, 0x7FD(s1)            # store page fault; page 1's 3 bytes written
+	la    t1, frame_b + 0xFF8
+	ld    s6, 0(t1)
+	lw    s7, 0x7FE(s0)            # straddling load across pages 0 and 1
+	lhu   s8, 0x7FF(s1)            # into the read-only page: allowed
 
 	ecall
 

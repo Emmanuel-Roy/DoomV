@@ -1264,19 +1264,26 @@ bool RiscvCore::load_virtual(Registers &regs, Memory &mem, uint64_t vaddr,
 		return true;
 	}
 
-	// Straddling: check the whole access first, so the fault is reported
-	// before any bytes are gathered, then assemble little-endian.
-	uint64_t probe;
-	if (!translate_or_trap(regs, mem, vaddr, AccessType::Load, probe, size))
-		return false;
-
+	// Straddling a page, done as Sail does it (vmem_read_addr). With paging
+	// on, it is two accesses: the bytes in the first page are translated,
+	// checked and read, and only then the rest -- so a fault in the second
+	// page names the boundary, and comes after the first page's checks, not
+	// before them. With paging off there are no pages to split at: one
+	// access, checked as a whole.
 	uint64_t value = 0;
-	for (unsigned i = 0; i < size; i++) {
+	if (!mmu_paging_active(regs, AccessType::Load)) {
 		uint64_t pa;
-		if (!translate_or_trap(regs, mem, vaddr + i, AccessType::Load, pa, 1))
-			return false;
-		value |= (uint64_t)mem.read8(pa) << (8 * i);
+		if (!translate_or_trap(regs, mem, vaddr, AccessType::Load, pa, size)) return false;
+		for (unsigned i = 0; i < size; i++) value |= (uint64_t)mem.read8(pa + i) << (8 * i);
+		out = value;
+		return true;
 	}
+	const unsigned first = 0x1000 - (unsigned)(vaddr & 0xFFF);
+	uint64_t pa;
+	if (!translate_or_trap(regs, mem, vaddr, AccessType::Load, pa, first)) return false;
+	for (unsigned i = 0; i < first; i++) value |= (uint64_t)mem.read8(pa + i) << (8 * i);
+	if (!translate_or_trap(regs, mem, vaddr + first, AccessType::Load, pa, size - first)) return false;
+	for (unsigned i = first; i < size; i++) value |= (uint64_t)mem.read8(pa + (i - first)) << (8 * i);
 	out = value;
 	return true;
 }
@@ -1318,22 +1325,26 @@ bool RiscvCore::store_virtual(Registers &regs, Memory &mem, uint64_t vaddr,
 		return true;
 	}
 
-	// Every byte is translated before any is written. A store that
-	// straddles into a page it may not write must not leave the first page
-	// modified -- software that catches the fault and retries would
-	// otherwise write those bytes twice.
-	//
-	// One piece per page, as Sail does it: the bytes in the first page, then
-	// the rest. The access log -- what lock-step compares stores by -- then
-	// holds the two stores Sail reports rather than one per byte. A fault in
-	// the first page names vaddr and one in the second names the boundary,
-	// as they did byte by byte.
+	// Straddling a page, done as Sail does it (vmem_write_addr), and as load
+	// does above. With paging on it is two stores, one per page, the first
+	// *written* before the second is translated: a store straddling into a
+	// page it may not write faults with the first page's bytes already
+	// written. The architecture allows that -- a misaligned access may be
+	// split, and trap part-way -- and DoomV used to choose the other way,
+	// translating every byte before writing any; Sail is the reference, and
+	// this is its choice. With paging off: one store, checked as a whole.
+	if (!mmu_paging_active(regs, AccessType::Store)) {
+		uint64_t pa;
+		if (!translate_or_trap(regs, mem, vaddr, AccessType::Store, pa, size)) return false;
+		for (unsigned i = 0; i < size; i++) mem.write8(pa + i, (uint8_t)(value >> (8 * i)));
+		return true;
+	}
 	const unsigned first = 0x1000 - (unsigned)(vaddr & 0xFFF);
-	uint64_t pa0, pa1;
-	if (!translate_or_trap(regs, mem, vaddr, AccessType::Store, pa0, first)) return false;
-	if (!translate_or_trap(regs, mem, vaddr + first, AccessType::Store, pa1, size - first)) return false;
-	for (unsigned i = 0; i < size; i++)
-		mem.write8(i < first ? pa0 + i : pa1 + (i - first), (uint8_t)(value >> (8 * i)));
+	uint64_t pa;
+	if (!translate_or_trap(regs, mem, vaddr, AccessType::Store, pa, first)) return false;
+	for (unsigned i = 0; i < first; i++) mem.write8(pa + i, (uint8_t)(value >> (8 * i)));
+	if (!translate_or_trap(regs, mem, vaddr + first, AccessType::Store, pa, size - first)) return false;
+	for (unsigned i = first; i < size; i++) mem.write8(pa + (i - first), (uint8_t)(value >> (8 * i)));
 	return true;
 }
 

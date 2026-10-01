@@ -105,6 +105,11 @@ enum FastOp : uint8_t {
 	FOP_FLW, FOP_FLD, FOP_FSW, FOP_FSD, FOP_FEXT,
 };
 FastOp classify_fast(const DecodedOp &d);
+// Whether an FP instruction is illegal for its rounding mode, as Sail decides
+// it: a scalar instruction with an rm field whose rm is 5 or 6 (they do not
+// decode), or dynamic (7) while frm holds 5, 6 or 7; and any vector FP
+// instruction while frm holds 5, 6 or 7 (valid_fp_op).
+bool fp_rm_illegal(const DecodedOp &d, uint8_t frm);
 
 class Decoder {
 	friend class DoomSystem;
