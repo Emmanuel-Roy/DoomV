@@ -874,17 +874,26 @@ all five:
 |---:|---:|---:|---:|---:|
 | **1.220x** | 1.040x | 1.043x | 1.008x | 1.009x |
 
-Two things this turned up that are not speed, and are left as they are:
+Two things this turned up that are not speed, both since made to match Sail:
 
-* **A split store that faults.** A misaligned store straddling into a page it
-  may not write: Sail writes the part in the first page, then faults; DoomV
-  writes neither part. The spec allows both (a misaligned access may be
-  decomposed and trap part-way), so `fp_straddle.S` does not read those bytes
-  back. Matching Sail here would be a change of policy, not a fix.
-* **Reserved rounding modes.** `ext_softfloat.hpp` says the decoder raises an
-  illegal instruction for rm=5/6 and for a reserved frm. Nothing in the
-  decoder does; a reserved mode rounds to nearest. Not yet checked against
-  Sail.
+* **A misaligned access across a page** is now done as Sail does it
+  (`vmem_read_addr`/`vmem_write_addr`): with paging on, the part in the first
+  page is translated, checked and performed before the second page is
+  translated, so a store straddling into a page it may not write faults with
+  the first page's bytes written; with paging off it is one access, checked
+  as a whole. DoomV used to translate every byte before writing any. The
+  architecture allows both; Sail is the reference. Integer and FP accesses
+  share the path, and `fp_straddle.S` covers both and the bare-mode case.
+* **Reserved rounding modes** are now illegal instructions, as in Sail: rm 5
+  or 6 in a scalar FP instruction with an rm field, rm 7 while frm holds 5, 6
+  or 7 (`fcsr_rm = Fcsr_RM_Illegal` in its configuration), and any vector FP
+  instruction while frm holds 5, 6 or 7. DoomV rounded to nearest.
+  `tests/lockstep/fp_rm.S` covers each case and the ones that must stay
+  legal; the previous binary fails it at the first.
+
+Neither changed a crash.log on the five workloads. Against the same
+baseline after both, PGO retrained: session 1.203x, desktop 1.013x, ubuntu
+1.018x, linux 0.999x, doom 0.990x.
 
 **Not worth doing:** skipping idle time. An idle guest sits in the kernel's
 `wfi` loop, and a WFI already ends after Sail's `max_time_to_wait` of 10

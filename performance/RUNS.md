@@ -375,3 +375,13 @@ and nothing else.
 | 20260930-194653 | linux 300M | EventGen on change + F/D fast loop + FP loads via load_virtual, PGO, vs 1938684+progress | 1938684+ | 224.09 | 1.3 | `38c23122994c` |  |
 | 20260930-194654 | doom 1000M | EventGen on change + F/D fast loop + FP loads via load_virtual, PGO, vs 1938684+progress (reference) | 1938684+ | 307.95 | 3.2 | `3d73dac132f3` |  |
 | 20260930-194658 | doom 1000M | EventGen on change + F/D fast loop + FP loads via load_virtual, PGO, vs 1938684+progress | 1938684+ | 310.67 | 3.2 | `3d73dac132f3` |  |
+| 20260930-201057 | session 3000M | Sail's misaligned split + reserved rm illegal, PGO, vs 1938684+progress (reference) | 4bf624e+ | 62.23 | 48.2 | `d749ffd00dac` |  |
+| 20260930-201159 | session 3000M | Sail's misaligned split + reserved rm illegal, PGO, vs 1938684+progress | 4bf624e+ | 74.86 | 40.1 | `d749ffd00dac` |  |
+| 20260930-201250 | desktop 3000M | Sail's misaligned split + reserved rm illegal, PGO, vs 1938684+progress (reference) | 4bf624e+ | 254.23 | 11.8 | `35c61483d5e3` |  |
+| 20260930-201315 | desktop 3000M | Sail's misaligned split + reserved rm illegal, PGO, vs 1938684+progress | 4bf624e+ | 257.64 | 11.6 | `35c61483d5e3` |  |
+| 20260930-201338 | ubuntu 3000M | Sail's misaligned split + reserved rm illegal, PGO, vs 1938684+progress (reference) | 4bf624e+ | 195.27 | 15.4 | `9be8284ab1d9` |  |
+| 20260930-201359 | ubuntu 3000M | Sail's misaligned split + reserved rm illegal, PGO, vs 1938684+progress | 4bf624e+ | 198.79 | 15.1 | `9be8284ab1d9` |  |
+| 20260930-201419 | linux 300M | Sail's misaligned split + reserved rm illegal, PGO, vs 1938684+progress (reference) | 4bf624e+ | 225.84 | 1.3 | `38c23122994c` |  |
+| 20260930-201420 | linux 300M | Sail's misaligned split + reserved rm illegal, PGO, vs 1938684+progress | 4bf624e+ | 225.72 | 1.3 | `38c23122994c` |  |
+| 20260930-201421 | doom 1000M | Sail's misaligned split + reserved rm illegal, PGO, vs 1938684+progress (reference) | 4bf624e+ | 309.37 | 3.2 | `3d73dac132f3` |  |
+| 20260930-201425 | doom 1000M | Sail's misaligned split + reserved rm illegal, PGO, vs 1938684+progress | 4bf624e+ | 306.19 | 3.3 | `3d73dac132f3` |  |
