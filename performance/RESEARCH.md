@@ -821,6 +821,71 @@ identical, speed within noise once the host was quiet (0.988-1.005x ubuntu,
 host was still busy with the check's 16 GB of snapshot files, read as low as
 0.78x; those runs are in RUNS.md with their labels.
 
+<a id="round-3"></a>
+## Round 3: where a desktop boot spends its time (2026-09-30)
+
+`DOOMV_PROGRESS=<steps>` prints the step count and the time each time the run
+passes a multiple of it. Over the XFCE boot to step 100G (900 s), per 1G steps:
+
+| steps | MIPS | what |
+|---|---:|---|
+| 0-9G | 170-230 | kernel, systemd, X starting -- what `bench.py ubuntu` measures |
+| 10-20G | 87-141 | the session's daemons; the login prompt at 12G |
+| **21-51G** | **55-76** | **the XFCE session's programs starting, the screen still black: 470 s, half the boot** |
+| 52G on | 244-256 | the desktop, up and idle |
+
+So `session` (restore at 21G, run 3G) joined `bench.py`, next to `desktop`.
+It is also the quietest workload: 62.49 and 62.33 MIPS on two runs.
+
+**Why it was slow.** DOOMV_FASTSTATS (which now also says which run-entry
+check refused) over its 3G steps: 475M run entries refused on the event key,
+and 95M F/D instructions leaving the fast loop.
+
+1. **Every FP instruction moved EventGen.** exec_F/exec_D mark mstatus.FS
+   Dirty with an mstatus write on every instruction that touches FP state,
+   almost always storing the value already there, and `Registers::write_csr`
+   bumped EventGen for every write. The step after each FP instruction then
+   went back through the interrupt check. EventGen now moves only when a
+   CSR's value changes, and not at all for the CSRs nothing interrupt-related
+   reads (the trap scratch/epc/cause/tval, fflags/frm/fcsr, the vector status
+   CSRs, the counter shadows; stimecmp still counts). Refusals: 475M to 0.29M.
+2. **F and D now run in the fast loop** while mstatus.FS is already Dirty and
+   V=0. Then the unit is on, nothing but a load or store can trap, and the
+   Dirty write stores the value already there. FLW/FLD/FSW/FSD use the data
+   caches like integer accesses; everything else calls exec_F/exec_D with the
+   full decode, as M instructions do -- no second copy of any FP semantics.
+3. **FP loads and stores now go through load_virtual/store_virtual.** They
+   translated only their first byte: an access straddling into an unmapped or
+   read-only page went ahead, reading or writing whatever followed the first
+   page *physically*, and PMP saw one byte of it. A conformance bug, found
+   because the same shortcut left the data caches unfilled -- 61M store and
+   30M load misses on pages only FP code used. FLH/FSH had it too.
+   `tests/lockstep/fp_straddle.S` covers it under strict Sail lock-step; the
+   old binary fails it at the first straddling load, reading the frame that
+   happens to follow physically instead of the one mapped. A straddling store
+   is now also translated as one piece per page, the two stores Sail reports,
+   rather than byte by byte.
+
+Fast steps in `session`: 81% to 96%. Against the binary before the round
+(`1938684` plus the progress report), PGO retrained, crash.log identical on
+all five:
+
+| session | desktop | ubuntu | linux | doom |
+|---:|---:|---:|---:|---:|
+| **1.220x** | 1.040x | 1.043x | 1.008x | 1.009x |
+
+Two things this turned up that are not speed, and are left as they are:
+
+* **A split store that faults.** A misaligned store straddling into a page it
+  may not write: Sail writes the part in the first page, then faults; DoomV
+  writes neither part. The spec allows both (a misaligned access may be
+  decomposed and trap part-way), so `fp_straddle.S` does not read those bytes
+  back. Matching Sail here would be a change of policy, not a fix.
+* **Reserved rounding modes.** `ext_softfloat.hpp` says the decoder raises an
+  illegal instruction for rm=5/6 and for a reserved frm. Nothing in the
+  decoder does; a reserved mode rounds to nearest. Not yet checked against
+  Sail.
+
 **Not worth doing:** skipping idle time. An idle guest sits in the kernel's
 `wfi` loop, and a WFI already ends after Sail's `max_time_to_wait` of 10
 ticks; waiting longer would change the trace.

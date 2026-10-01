@@ -41,7 +41,10 @@ sys.path.insert(0, str(HERE))
 
 LINUX = ROOT / "build" / "linux"
 DOOM = ROOT / "tools" / "doom" / "doombuild"
-# The `desktop` workload's starting point, made by make_desktop_snapshot.py.
+# The `session` and `desktop` workloads' starting points, made by
+# make_desktop_snapshot.py.
+SESSION_STEP = 21_000_000_000
+SESSION_SNAPSHOT = ROOT / "build" / "desktop" / "session-21G"
 DESKTOP_STEP = 100_000_000_000
 DESKTOP_SNAPSHOT = ROOT / "build" / "desktop" / "xfce-100G"
 
@@ -89,8 +92,18 @@ WORKLOADS = {
     #
     # `base` is the step the snapshot was taken at: the run stops at base +
     # steps, and the restore's own time (copying the disk image) is left out.
-    "desktop": dict(steps=3_000_000_000, base=DESKTOP_STEP, optional=True, prepare=lambda: prepare_desktop(),
+    "desktop": dict(steps=3_000_000_000, base=DESKTOP_STEP, optional=True,
+                    prepare=lambda: prepare_snapshot(DESKTOP_SNAPSHOT),
                     args=lambda: WORKLOADS["ubuntu"]["args"]() + [f"-restore={DESKTOP_SNAPSHOT}"]),
+    # The XFCE session starting: the same machine again, restored at step 21G.
+    # From there to about 51G the session's programs start and draw the
+    # desktop for the first time, all of it userland -- shared libraries,
+    # GTK, fonts, icons -- at about 60 MIPS: half of the whole boot's time, in
+    # the part a desktop user waits through. Made by make_desktop_snapshot.py
+    # in about three minutes.
+    "session": dict(steps=3_000_000_000, base=SESSION_STEP, optional=True,
+                    prepare=lambda: prepare_snapshot(SESSION_SNAPSHOT),
+                    args=lambda: WORKLOADS["ubuntu"]["args"]() + [f"-restore={SESSION_SNAPSHOT}"]),
 }
 
 UBUNTU_IMAGE = ROOT / "ubuntu.img"
@@ -113,16 +126,16 @@ def prepare_ubuntu():
     shutil.copyfile(UBUNTU_IMAGE, BENCH_IMAGE)
 
 
-def prepare_desktop():
+def prepare_snapshot(snapshot: Path):
     """The snapshot must exist; the disk it names is only a placeholder.
 
     A restore runs on a copy of the snapshot's own image, so the -disk the
     command line gives only has to exist and be the same shape of machine:
     no 4GB copy before each run.
     """
-    if not (DESKTOP_SNAPSHOT / "state.bin").exists():
-        raise RuntimeError(f"no desktop snapshot at {DESKTOP_SNAPSHOT}; make it with "
-                           "python performance/make_desktop_snapshot.py (about 25 minutes)")
+    if not (snapshot / "state.bin").exists():
+        raise RuntimeError(f"no snapshot at {snapshot}; make it with "
+                           "python performance/make_desktop_snapshot.py")
     if not BENCH_IMAGE.exists():
         prepare_ubuntu()
 

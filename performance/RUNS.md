@@ -315,3 +315,63 @@ and nothing else.
 | 20260930-172743 | doom 1000M | snapshots added, PGO retrained, quiet host, run 2 | 21e9b1c+ | 313.44 | 3.2 | `3d73dac132f3` |  |
 | 20260930-182949 | desktop 3000M | desktop workload, run 1 | c8e18cc+ | 247.04 | 12.1 | `35c61483d5e3` |  |
 | 20260930-183017 | desktop 3000M | desktop workload, run 2 | c8e18cc+ | 254.35 | 11.8 | `35c61483d5e3` |  |
+| 20260930-190916 | session 3000M | session workload, run 1 | 1938684+ | 62.49 | 48.0 | `d749ffd00dac` |  |
+| 20260930-191015 | session 3000M | session workload, run 2 | 1938684+ | 62.33 | 48.1 | `d749ffd00dac` |  |
+| 20260930-191548 | session 3000M | EventGen only on a change, vs 1938684+progress (reference) | 1938684+ | 62.53 | 48.0 | `d749ffd00dac` |  |
+| 20260930-191646 | session 3000M | EventGen only on a change, vs 1938684+progress | 1938684+ | 58.64 | 51.2 | `d749ffd00dac` |  |
+| 20260930-191748 | doom 1000M | EventGen only on a change, vs 1938684+progress (reference) | 1938684+ | 312.15 | 3.2 | `3d73dac132f3` |  |
+| 20260930-191751 | doom 1000M | EventGen only on a change, vs 1938684+progress | 1938684+ | 231.09 | 4.3 | `3d73dac132f3` |  |
+| 20260930-191756 | linux 300M | EventGen only on a change, vs 1938684+progress (reference) | 1938684+ | 225.81 | 1.3 | `38c23122994c` |  |
+| 20260930-191757 | linux 300M | EventGen only on a change, vs 1938684+progress | 1938684+ | 183.24 | 1.6 | `38c23122994c` |  |
+| 20260930-191759 | ubuntu 3000M | EventGen only on a change, vs 1938684+progress (reference) | 1938684+ | 198.62 | 15.1 | `9be8284ab1d9` |  |
+| 20260930-191816 | ubuntu 3000M | EventGen only on a change, vs 1938684+progress | 1938684+ | 168.29 | 17.8 | `9be8284ab1d9` |  |
+| 20260930-191835 | desktop 3000M | EventGen only on a change, vs 1938684+progress (reference) | 1938684+ | 254.97 | 11.8 | `35c61483d5e3` |  |
+| 20260930-191858 | desktop 3000M | EventGen only on a change, vs 1938684+progress | 1938684+ | 206.61 | 14.5 | `35c61483d5e3` |  |
+| 20260930-191934 | doom 1000M | EventGen only on a change, repeat 1 (reference) | 1938684+ | 314.82 | 3.2 | `3d73dac132f3` |  |
+| 20260930-191938 | doom 1000M | EventGen only on a change, repeat 1 | 1938684+ | 234.28 | 4.3 | `3d73dac132f3` |  |
+| 20260930-191942 | linux 300M | EventGen only on a change, repeat 1 (reference) | 1938684+ | 227.66 | 1.3 | `38c23122994c` |  |
+| 20260930-191943 | linux 300M | EventGen only on a change, repeat 1 | 1938684+ | 186.35 | 1.6 | `38c23122994c` |  |
+| 20260930-191945 | doom 1000M | EventGen only on a change, repeat 2 (reference) | 1938684+ | 315.04 | 3.2 | `3d73dac132f3` |  |
+| 20260930-191948 | doom 1000M | EventGen only on a change, repeat 2 | 1938684+ | 234.49 | 4.3 | `3d73dac132f3` |  |
+| 20260930-191952 | linux 300M | EventGen only on a change, repeat 2 (reference) | 1938684+ | 227.96 | 1.3 | `38c23122994c` |  |
+| 20260930-191954 | linux 300M | EventGen only on a change, repeat 2 | 1938684+ | 187.00 | 1.6 | `38c23122994c` |  |
+| 20260930-192111 | session 3000M | EventGen only on a change, PGO retrained, vs 1938684+progress (reference) | 1938684+ | 62.06 | 48.3 | `d749ffd00dac` |  |
+| 20260930-192238 | session 3000M | EventGen only on a change, PGO retrained, vs 1938684+progress | 1938684+ | 64.14 | 46.8 | `d749ffd00dac` |  |
+| 20260930-192336 | doom 1000M | EventGen only on a change, PGO retrained, vs 1938684+progress (reference) | 1938684+ | 313.36 | 3.2 | `3d73dac132f3` |  |
+| 20260930-192339 | doom 1000M | EventGen only on a change, PGO retrained, vs 1938684+progress | 1938684+ | 303.06 | 3.3 | `3d73dac132f3` |  |
+| 20260930-192342 | linux 300M | EventGen only on a change, PGO retrained, vs 1938684+progress (reference) | 1938684+ | 224.42 | 1.3 | `38c23122994c` |  |
+| 20260930-192344 | linux 300M | EventGen only on a change, PGO retrained, vs 1938684+progress | 1938684+ | 230.78 | 1.3 | `38c23122994c` |  |
+| 20260930-192345 | ubuntu 3000M | EventGen only on a change, PGO retrained, vs 1938684+progress (reference) | 1938684+ | 195.24 | 15.4 | `9be8284ab1d9` |  |
+| 20260930-192404 | ubuntu 3000M | EventGen only on a change, PGO retrained, vs 1938684+progress | 1938684+ | 207.32 | 14.5 | `9be8284ab1d9` |  |
+| 20260930-192423 | desktop 3000M | EventGen only on a change, PGO retrained, vs 1938684+progress (reference) | 1938684+ | 256.43 | 11.7 | `35c61483d5e3` |  |
+| 20260930-192449 | desktop 3000M | EventGen only on a change, PGO retrained, vs 1938684+progress | 1938684+ | 258.88 | 11.6 | `35c61483d5e3` |  |
+| 20260930-192835 | session 3000M | F/D in the fast loop, stale profile, vs 1938684+progress (reference) | 1938684+ | 61.79 | 48.5 | `d749ffd00dac` |  |
+| 20260930-192935 | session 3000M | F/D in the fast loop, stale profile, vs 1938684+progress | 1938684+ | 69.08 | 43.4 | `d749ffd00dac` |  |
+| 20260930-193029 | desktop 3000M | F/D in the fast loop, stale profile, vs 1938684+progress (reference) | 1938684+ | 246.75 | 12.2 | `35c61483d5e3` |  |
+| 20260930-193052 | desktop 3000M | F/D in the fast loop, stale profile, vs 1938684+progress | 1938684+ | 233.92 | 12.8 | `35c61483d5e3` |  |
+| 20260930-193116 | ubuntu 3000M | F/D in the fast loop, stale profile, vs 1938684+progress (reference) | 1938684+ | 195.21 | 15.4 | `9be8284ab1d9` |  |
+| 20260930-193136 | ubuntu 3000M | F/D in the fast loop, stale profile, vs 1938684+progress | 1938684+ | 185.70 | 16.2 | `9be8284ab1d9` |  |
+| 20260930-193201 | linux 300M | F/D in the fast loop, stale profile, vs 1938684+progress (reference) | 1938684+ | 228.85 | 1.3 | `38c23122994c` |  |
+| 20260930-193202 | linux 300M | F/D in the fast loop, stale profile, vs 1938684+progress | 1938684+ | 206.78 | 1.5 | `38c23122994c` |  |
+| 20260930-193204 | doom 1000M | F/D in the fast loop, stale profile, vs 1938684+progress (reference) | 1938684+ | 314.66 | 3.2 | `3d73dac132f3` |  |
+| 20260930-193207 | doom 1000M | F/D in the fast loop, stale profile, vs 1938684+progress | 1938684+ | 270.98 | 3.7 | `3d73dac132f3` |  |
+| 20260930-193321 | session 3000M | EventGen on change + F/D in fast loop, PGO, vs 1938684+progress (reference) | 1938684+ | 60.22 | 49.8 | `d749ffd00dac` |  |
+| 20260930-193422 | session 3000M | EventGen on change + F/D in fast loop, PGO, vs 1938684+progress | 1938684+ | 70.80 | 42.4 | `d749ffd00dac` |  |
+| 20260930-193515 | desktop 3000M | EventGen on change + F/D in fast loop, PGO, vs 1938684+progress (reference) | 1938684+ | 248.98 | 12.0 | `35c61483d5e3` |  |
+| 20260930-193541 | desktop 3000M | EventGen on change + F/D in fast loop, PGO, vs 1938684+progress | 1938684+ | 258.26 | 11.6 | `35c61483d5e3` |  |
+| 20260930-193603 | ubuntu 3000M | EventGen on change + F/D in fast loop, PGO, vs 1938684+progress (reference) | 1938684+ | 195.06 | 15.4 | `9be8284ab1d9` |  |
+| 20260930-193630 | ubuntu 3000M | EventGen on change + F/D in fast loop, PGO, vs 1938684+progress | 1938684+ | 207.08 | 14.5 | `9be8284ab1d9` |  |
+| 20260930-193646 | linux 300M | EventGen on change + F/D in fast loop, PGO, vs 1938684+progress (reference) | 1938684+ | 227.28 | 1.3 | `38c23122994c` |  |
+| 20260930-193647 | linux 300M | EventGen on change + F/D in fast loop, PGO, vs 1938684+progress | 1938684+ | 230.36 | 1.3 | `38c23122994c` |  |
+| 20260930-193648 | doom 1000M | EventGen on change + F/D in fast loop, PGO, vs 1938684+progress (reference) | 1938684+ | 314.79 | 3.2 | `3d73dac132f3` |  |
+| 20260930-193652 | doom 1000M | EventGen on change + F/D in fast loop, PGO, vs 1938684+progress | 1938684+ | 310.89 | 3.2 | `3d73dac132f3` |  |
+| 20260930-194337 | session 3000M | EventGen on change + F/D fast loop + FP loads via load_virtual, PGO, vs 1938684+progress (reference) | 1938684+ | 62.26 | 48.2 | `d749ffd00dac` |  |
+| 20260930-194436 | session 3000M | EventGen on change + F/D fast loop + FP loads via load_virtual, PGO, vs 1938684+progress | 1938684+ | 75.94 | 39.5 | `d749ffd00dac` |  |
+| 20260930-194526 | desktop 3000M | EventGen on change + F/D fast loop + FP loads via load_virtual, PGO, vs 1938684+progress (reference) | 1938684+ | 254.56 | 11.8 | `35c61483d5e3` |  |
+| 20260930-194549 | desktop 3000M | EventGen on change + F/D fast loop + FP loads via load_virtual, PGO, vs 1938684+progress | 1938684+ | 264.69 | 11.3 | `35c61483d5e3` |  |
+| 20260930-194611 | ubuntu 3000M | EventGen on change + F/D fast loop + FP loads via load_virtual, PGO, vs 1938684+progress (reference) | 1938684+ | 195.99 | 15.3 | `9be8284ab1d9` |  |
+| 20260930-194632 | ubuntu 3000M | EventGen on change + F/D fast loop + FP loads via load_virtual, PGO, vs 1938684+progress | 1938684+ | 204.42 | 14.7 | `9be8284ab1d9` |  |
+| 20260930-194651 | linux 300M | EventGen on change + F/D fast loop + FP loads via load_virtual, PGO, vs 1938684+progress (reference) | 1938684+ | 222.31 | 1.3 | `38c23122994c` |  |
+| 20260930-194653 | linux 300M | EventGen on change + F/D fast loop + FP loads via load_virtual, PGO, vs 1938684+progress | 1938684+ | 224.09 | 1.3 | `38c23122994c` |  |
+| 20260930-194654 | doom 1000M | EventGen on change + F/D fast loop + FP loads via load_virtual, PGO, vs 1938684+progress (reference) | 1938684+ | 307.95 | 3.2 | `3d73dac132f3` |  |
+| 20260930-194658 | doom 1000M | EventGen on change + F/D fast loop + FP loads via load_virtual, PGO, vs 1938684+progress | 1938684+ | 310.67 | 3.2 | `3d73dac132f3` |  |

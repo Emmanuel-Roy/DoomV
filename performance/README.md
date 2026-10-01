@@ -280,7 +280,7 @@ behaviour anywhere.
 
 ### The workloads
 
-`bench.py` measures four, each a different mix:
+`bench.py` measures five, each a different mix:
 
 | workload | steps | MIPS | what it exercises |
 |---|---|---|---|
@@ -288,6 +288,7 @@ behaviour anywhere.
 | linux | 300M | ~59 | OpenSBI, the kernel, BusyBox userspace |
 | ubuntu | 3000M | ~54 | systemd, udev coldplug, a real userland off a virtio disk |
 | desktop | 3000M past 100G | ~250 (2026-09-30 build) | the XFCE desktop, booted and idle, restored from a snapshot |
+| session | 3000M past 21G | ~76 (2026-09-30 build) | the XFCE session's programs starting -- GTK, fonts, icons, FP -- restored from a snapshot; half of a desktop boot's time |
 
 `ubuntu` is the newest and the heaviest, and it is heaviest for a reason worth
 knowing: it is the only one doing sustained MMU work against a real

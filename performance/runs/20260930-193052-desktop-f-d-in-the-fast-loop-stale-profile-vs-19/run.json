@@ -1,0 +1,16 @@
+{
+  "time": "20260930-193052",
+  "label": "F/D in the fast loop, stale profile, vs 1938684+progress",
+  "workload": "desktop",
+  "steps": 3000000000,
+  "seconds": 12.825,
+  "restore_seconds": 10.371,
+  "mips": 233.924,
+  "crash_log_sha256": "35c61483d5e347339025c4b3e2817c873db128f67b25b730530f79f52c958898",
+  "exe": "build\\fp\\riscv_doom.exe",
+  "exe_sha256": "2611f166f46a8ecf583575f3eaf5dc7cc048bbf364408551bb522b83ebcad8ea",
+  "commit": "1938684",
+  "dirty": true,
+  "host": "AMD64 Family 25 Model 97 Stepping 2, AuthenticAMD / Windows 10",
+  "profiled": false
+}
