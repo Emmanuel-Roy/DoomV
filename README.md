@@ -1205,11 +1205,20 @@ is as deterministic as any other -- two runs to the same step leave the same
 How far it goes: the multi-hart lock-step tests pass strictly against Sail
 on 2 to 256 harts (a 256-hart AMO test is six million matching records).
 Linux comes up with every CPU on 8, 16, 32 and 64 harts, in 95 s, 230 s,
-816 s and 37 minutes. Past 64 the boot is long rather than broken: hart 0
-parses OpenSBI's device tree in time that grows with the square of the hart
-count while getting one step in N. At 256 the pinned OpenSBI itself faults,
-in `imsic_map_hartid_to_data`: its generic platform is built for at most 128
-harts (`SBI_HARTMASK_MAX_BITS`).
+816 s and 37 minutes. Linux itself stops at 64 CPUs: that is the most
+RISC-V's Kconfig allows with `RISCV_SBI_V01`, which the `hvc0` console needs.
+OpenSBI is built for 4096 harts, as many as `-harts` can make (v1.3's
+default of 128 faulted at 256, in `imsic_map_hartid_to_data`), with the
+kernel at 128 MiB to leave room for its ~18 KiB per hart. Past 64 the boot is
+long rather than broken: until it is done, hart 0 parses OpenSBI's device
+tree in time that grows with the cube of the hart count, and the others spin
+waiting for it, so it gets one step in N.
+
+A hart waiting in WFI that cannot have been woken -- no event since it last
+looked, no timer of its own come due -- spends its turn without being
+switched to, which is most of a large machine's turns once OpenSBI is done;
+`DOOMV_WAITSKIP=0` turns that off, for checking that a run is the same either
+way (a 64-hart boot is, at 1.7 times the speed).
 
 Not there yet: the harts are interpreted one step at a time, with no fast
 loop, so a machine of several harts runs several times slower per

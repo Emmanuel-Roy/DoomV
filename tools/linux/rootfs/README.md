@@ -77,9 +77,9 @@ the filesystem.
 
 `tools/linux/dts/doomv.dts`'s `/chosen` node hardcodes
 `linux,initrd-start`/`linux,initrd-end` as absolute physical
-addresses (`RAM_BASE + 0x2300000` through that plus this file's exact
+addresses (`RAM_BASE + 0xA100000` through that plus this file's exact
 byte length -- see `src/doom_system.cpp`'s `init_linux_boot` for where
-`0x2300000` comes from). The DTB cannot compute that length itself, so
+`0xA100000` comes from). The DTB cannot compute that length itself, so
 `scripts/prepare_dtb.py` rewrites `linux,initrd-end` from the archive's
 real size every time the scripts build; only a hand-built archive needs
 the DTS edited and recompiled.

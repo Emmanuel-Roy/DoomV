@@ -133,8 +133,9 @@ public:
 	// matching OpenSBI's own already-built default is strictly simpler
 	// (real hardware/QEMU-virt convention too). RAM_SIZE grew from 16MB
 	// since even just the DTB load offset OpenSBI expects
-	// (FW_TEXT_START + 0x2200000) is ~34MB in, before the ~23MB kernel
-	// Image or any of Linux's own runtime allocation.
+	// (FW_TEXT_START + 0xA000000, see DoomSystem::init_linux_boot) is 160MB
+	// in, past the ~23MB kernel Image at 128MB, before any of Linux's own
+	// runtime allocation.
 	static constexpr uint64_t RAM_BASE  = 0x80000000;
 	// 1GB. 256MB was ample for a busybox initramfs and is not enough for a
 	// distribution: an Ubuntu rootfs wants room for the kernel, the page

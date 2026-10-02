@@ -83,13 +83,13 @@
 		stdout-path = "/soc/serial@10000100";
 
 		// tools/linux/rootfs/initramfs.cpio, loaded by Memory::load_blob at
-		// RAM_BASE + 0x2300000 (see src/doom_system.cpp's
+		// RAM_BASE + 0xA100000 (see src/doom_system.cpp's
 		// init_linux_boot). End address must match that file's exact
 		// built size -- see tools/linux/rootfs/README.md's last section for
 		// why this can't be computed automatically and must be kept in
 		// sync by hand when the initramfs is rebuilt.
-		linux,initrd-start = <0x82300000>;
-		linux,initrd-end = <0x824ee600>;
+		linux,initrd-start = <0x8a100000>;
+		linux,initrd-end = <0x8a2ee600>;
 	};
 
 	cpus {

@@ -98,11 +98,35 @@ void DoomSystem::select_hart(unsigned h)
 	mmu_select_hart(h);
 }
 
+// DOOMV_WAITSKIP=0 turns run_round's shortcut for waiting harts off, to
+// check that a run is the same without it.
+static bool waitskip_enabled()
+{
+	static const bool on = [] { const char *e = std::getenv("DOOMV_WAITSKIP"); return !(e && e[0] == '0'); }();
+	return on;
+}
+
 void DoomSystem::run_round()
 {
+	const bool skip = waitskip_enabled() && !tracing;
 	bool retired = false, all_waiting = true;
+	const uint64_t now = memory.get_timer().get_mtime();
 	for (unsigned h = 0; h < harts.size(); h++) {
 		if (debugger.halted) return;
+		// A hart in WFI that cannot have been woken since it last looked --
+		// no event anywhere (a CSR, CLINT or IMSIC write bumps EventGen) and
+		// no timer of its own come due -- spends this round as wait_slot
+		// would spend it, without being selected. Most of a many-hart
+		// machine's rounds are such harts. Not while tracing: a traced
+		// slot also checks the reference.
+		Hart &w = *harts[h];
+		if (skip && w.waiting && w.wait_kind == RiscvCore::Wait::Wfi && w.wait_remaining > 0
+		    && w.wait_event == EventGen && now < w.wait_until) {
+			w.wait_remaining--;
+			w.retired = false;
+			all_waiting = all_waiting && w.wait_remaining > 0;
+			continue;
+		}
 		select_hart(h);
 		cur->retired = false;
 		hart_slot();
@@ -189,6 +213,7 @@ void DoomSystem::begin_wait(uint32_t insn, uint8_t len)
 	cur->wait_remaining = MAX_WAIT_TICKS;
 	cur->wait_insn = insn;
 	cur->wait_insn_len = len;
+	cur->wait_event = ~0ull;   // nothing known yet; the first round looks
 	step_committed = false;
 	step_decoded = false;
 }
@@ -226,6 +251,17 @@ void DoomSystem::wait_slot()
 	}
 	if (!done) {
 		cur->wait_remaining--;
+		// What run_round's shortcut checks: nothing has happened since, and
+		// mtime is short of every compare value above it.
+		cur->wait_event = EventGen;
+		const uint64_t now = memory.get_timer().get_mtime();
+		uint64_t until = ~0ull;
+		const auto consider = [&](uint64_t at) { if (at > now && at < until) until = at; };
+		consider(memory.get_timer().get_mtimecmp());
+		consider(regs.read_csr(0x14D));                       // stimecmp
+		if (regs.read_csr(0x605) == 0) consider(regs.read_csr(0x24D));   // vstimecmp
+		else until = now + 1;                                 // with an htimedelta, look every tick
+		cur->wait_until = until;
 		return;
 	}
 	cur->waiting = false;
@@ -360,20 +396,27 @@ bool DoomSystem::init_linux_boot(const char *sbi_path, const char *kernel_path, 
 	if (!memory.load_elf(sbi_path)) return false;
 
 	// Offsets match what fw_jump.elf was built expecting: FW_JUMP_ADDR =
-	// FW_TEXT_START + 0x200000, FW_JUMP_FDT_ADDR = FW_TEXT_START + 0x2200000.
-	// The initrd offset (+0x2300000) is DoomV's own choice, not something
-	// fw_jump.elf cares about -- it just needs to sit past the DTB with
-	// headroom and match the DTB's own linux,initrd-start (see
-	// tools/linux/rootfs/README.md).
-	if (!memory.load_blob(kernel_path, Memory::RAM_BASE + 0x200000)) return false;
-	if (!memory.load_blob(dtb_path, Memory::RAM_BASE + 0x2200000)) return false;
+	// FW_TEXT_START + KERNEL_OFFSET, FW_JUMP_FDT_ADDR = FW_TEXT_START +
+	// DTB_OFFSET (scripts/build_linux.sh). The initrd offset is DoomV's own
+	// choice, not something fw_jump.elf cares about -- it just needs to sit
+	// past the DTB with headroom and match the DTB's own linux,initrd-start
+	// (scripts/prepare_dtb.py).
+	//
+	// The kernel sits 128MB in rather than OpenSBI's default 2MB because
+	// OpenSBI is built for 4096 harts, and keeps a stack, a scratch area and
+	// a share of its heap -- about 18KB -- for each hart the device tree
+	// names, straight after its own image: 72MB for 4096. 2MB ran out at
+	// about 140 harts.
+	constexpr uint64_t KERNEL_OFFSET = 0x8000000, DTB_OFFSET = 0xA000000, INITRD_OFFSET = 0xA100000;
+	if (!memory.load_blob(kernel_path, Memory::RAM_BASE + KERNEL_OFFSET)) return false;
+	if (!memory.load_blob(dtb_path, Memory::RAM_BASE + DTB_OFFSET)) return false;
 	// The device tree ships with a memory size baked in; -ram= makes that a
 	// choice, so the blob is corrected to match what was actually allocated.
 	// A guest told the wrong size does not fail in a way that names memory --
 	// too large and it writes past the end, too small and it OOM-kills init.
 	{
-		uint8_t *dtb = memory.ram_data_mut() + 0x2200000;
-		const size_t room = (size_t)(Memory::RAM_SPAN - 0x2200000);
+		uint8_t *dtb = memory.ram_data_mut() + DTB_OFFSET;
+		const size_t room = (size_t)(Memory::RAM_SPAN - DTB_OFFSET);
 		if (!fdt_set_memory_size(dtb, room, Memory::RAM_BASE, Memory::RAM_SIZE)) {
 			std::cerr << "warning: could not set the memory size in " << dtb_path
 			          << "; the guest will use the size the file was built with\n";
@@ -382,7 +425,7 @@ bool DoomSystem::init_linux_boot(const char *sbi_path, const char *kernel_path, 
 	// Optional now: with a virtio disk attached the kernel mounts a real
 	// root filesystem instead, and there is no initramfs to place.
 	if (initrd_path && initrd_path[0]
-	    && !memory.load_blob(initrd_path, Memory::RAM_BASE + 0x2300000))
+	    && !memory.load_blob(initrd_path, Memory::RAM_BASE + INITRD_OFFSET))
 		return false;
 
 	// Every hart enters the firmware together, as the SBI boot protocol has
@@ -390,7 +433,7 @@ bool DoomSystem::init_linux_boot(const char *sbi_path, const char *kernel_path, 
 	for (const auto &h : harts) {
 		h->regs.set_pc(Memory::RAM_BASE);
 		h->regs.write_x(10, h->id);                            // a0: hart id
-		h->regs.write_x(11, Memory::RAM_BASE + 0x2200000);      // a1: DTB pointer, SBI/Linux boot convention
+		h->regs.write_x(11, Memory::RAM_BASE + DTB_OFFSET);     // a1: DTB pointer, SBI/Linux boot convention
 	}
 
 	return true;

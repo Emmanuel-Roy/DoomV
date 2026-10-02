@@ -320,6 +320,9 @@ private:
 		uint32_t wait_remaining = 0;
 		uint32_t wait_insn = 0;
 		uint8_t wait_insn_len = 4;
+		// When the wait last found nothing to wake it: EventGen then, and the
+		// mtime it must not reach. See run_round.
+		uint64_t wait_event = ~0ull, wait_until = 0;
 		// Steps this hart has taken, for its trace records.
 		uint64_t steps = 0;
 		// Lock-step: CSR values the reference logged after this hart's last

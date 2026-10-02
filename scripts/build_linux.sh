@@ -11,9 +11,36 @@ mkdir -p "$OUT"
 
 echo '=== OpenSBI (pinned gitlink) ==='
 SBI="$(pinned_source opensbi tools/linux/opensbi/src https://github.com/riscv-software-src/opensbi.git)"
+# As many harts as the machine can have. v1.3 sizes every per-hart table by
+# SBI_HARTMASK_MAX_BITS, 128, and a hart past it corrupts memory (256 harts
+# faulted in imsic_map_hartid_to_data). DoomV's CLINT serves harts 0..4094,
+# as Sail's does, so 4096 covers any machine -harts can make. The edit is to
+# the build's copy of the pinned source, never the submodule.
+sed -i 's/^#define SBI_HARTMASK_MAX_BITS\t\t[0-9]*$/#define SBI_HARTMASK_MAX_BITS\t\t4096/' \
+    "$SBI/include/sbi/sbi_hartmask.h"
+grep -qP 'SBI_HARTMASK_MAX_BITS		4096' "$SBI/include/sbi/sbi_hartmask.h" \
+    || { echo "could not raise SBI_HARTMASK_MAX_BITS" >&2; exit 1; }
+# A hart mask is then 512 bytes, and each hart's scratch area holds a TLB
+# shootdown queue of 8 entries that carry one ("tlb init failed (error
+# -1006)" with the default 4KB). Scratch sits at the top of the hart's stack
+# area, so both grow: 8KB of scratch in 16KB, leaving the 8KB of stack.
+sed -i 's/^#define SBI_SCRATCH_SIZE\t\t\t(0x[0-9a-f]*)$/#define SBI_SCRATCH_SIZE\t\t\t(0x2000)/' \
+    "$SBI/include/sbi/sbi_scratch.h"
+sed -i 's/^#define SBI_PLATFORM_DEFAULT_HART_STACK_SIZE\t[0-9]*$/#define SBI_PLATFORM_DEFAULT_HART_STACK_SIZE\t16384/' \
+    "$SBI/include/sbi/sbi_platform.h"
+grep -qP 'SBI_SCRATCH_SIZE\t\t\t\(0x2000\)' "$SBI/include/sbi/sbi_scratch.h" \
+    && grep -qP 'HART_STACK_SIZE\t16384' "$SBI/include/sbi/sbi_platform.h" \
+    || { echo "could not resize OpenSBI's per-hart areas" >&2; exit 1; }
+# Each hart the device tree names then costs OpenSBI ~18KB after its image
+# (stack and scratch, and its share of the heap): 72MB for 4096 harts, so the
+# kernel cannot sit at the default 2MB. 128MB leaves room; the FDT follows the
+# kernel. These must match KERNEL_OFFSET and DTB_OFFSET in src/doom_system.cpp. A clean build: the
+# addresses are compiler flags, which OpenSBI's dependencies do not track.
+rm -rf "$SBI/build"
 make -C "$SBI" PLATFORM=generic CROSS_COMPILE=riscv64-linux-gnu- \
     CC='riscv64-linux-gnu-gcc -std=gnu11' PLATFORM_RISCV_XLEN=64 \
-    PLATFORM_RISCV_ISA=rv64imafdc_zicsr_zifencei PLATFORM_RISCV_ABI=lp64d -j"$JOBS"
+    PLATFORM_RISCV_ISA=rv64imafdc_zicsr_zifencei PLATFORM_RISCV_ABI=lp64d \
+    FW_JUMP_ADDR=0x88000000 FW_JUMP_FDT_ADDR=0x8A000000 -j"$JOBS"
 cp "$SBI/build/platform/generic/firmware/fw_jump.elf" "$OUT/fw_jump.elf"
 
 echo '=== Linux (pinned gitlink; source stays on the WSL filesystem) ==='
@@ -44,6 +71,10 @@ make -C "$KERNEL" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- defconfig
     --enable NONPORTABLE --enable HVC_RISCV_SBI --enable BLK_DEV_INITRD --enable BINFMT_SCRIPT \
     --enable FB --enable FB_SIMPLE --enable FRAMEBUFFER_CONSOLE \
     --enable MAGIC_SYSRQ --enable VIRTIO_INPUT --enable INPUT_EVDEV
+# NR_CPUS stays at 64: arch/riscv/Kconfig allows up to 512, but only 64 with
+# RISCV_SBI_V01, which HVC_RISCV_SBI (the hvc0 console every boot uses)
+# needs. On a machine of more harts (-harts=N) Linux runs on 64 and leaves
+# the rest stopped in OpenSBI.
 make -C "$KERNEL" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- olddefconfig
 make -C "$KERNEL" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- Image -j"$JOBS"
 cp "$KERNEL/arch/riscv/boot/Image" "$OUT/Image"
