@@ -134,6 +134,15 @@ Memory::Memory()
 	for (int i = 0; i < 16; i++) key_queue[i] = 0;
 }
 
+void Memory::set_harts(unsigned n)
+{
+	timer.set_harts(n);
+	imsic_m.assign(n, Imsic());
+	imsic_s.assign(n, Imsic());
+	imsic_span = IMSIC_SIZE * n;
+	select_hart(0);
+}
+
 uint8_t Memory::read8(uint64_t addr)
 {
 	if (addr >= RAM_BASE && addr < RAM_BASE + RAM_SPAN)
@@ -218,8 +227,8 @@ uint32_t Memory::read32(uint64_t addr)
 		return share.read32(addr - VIRTIO_SHARE_BASE);
 	if (addr >= VIRTIO_KBD_BASE && addr < VIRTIO_KBD_BASE + VIRTIO_SIZE) return kbd_dev.read32(addr - VIRTIO_KBD_BASE);
 	if (addr >= VIRTIO_MOUSE_BASE && addr < VIRTIO_MOUSE_BASE + VIRTIO_SIZE) return mouse_dev.read32(addr - VIRTIO_MOUSE_BASE);
-	if (addr >= IMSIC_M_BASE && addr < IMSIC_M_BASE + IMSIC_SIZE) return 0; // seteipnum_le reads as zero, per spec
-	if (addr >= IMSIC_S_BASE && addr < IMSIC_S_BASE + IMSIC_SIZE) return 0;
+	if (addr >= IMSIC_M_BASE && addr < IMSIC_M_BASE + imsic_span) return 0; // seteipnum_le reads as zero, per spec
+	if (addr >= IMSIC_S_BASE && addr < IMSIC_S_BASE + imsic_span) return 0;
 
 	// Fast path: every instruction fetch and almost every load/store lands
 	// here. One range check plus a direct 4-byte copy replaces the 10-branch
@@ -414,12 +423,15 @@ void Memory::write32(uint64_t addr, uint32_t val)
 		disk.write32(addr - VIRTIO_BASE, val, *this, aplic);
 		return;
 	}
-	if (addr >= IMSIC_M_BASE && addr < IMSIC_M_BASE + IMSIC_SIZE) {
-		if (addr - IMSIC_M_BASE == 0) imsic_m.set_pending(val); // seteipnum_le
+	// Each hart's file is one IMSIC_SIZE page, seteipnum_le at its start.
+	if (addr >= IMSIC_M_BASE && addr < IMSIC_M_BASE + imsic_span) {
+		const uint64_t off = addr - IMSIC_M_BASE;
+		if (off % IMSIC_SIZE == 0) imsic_m[off / IMSIC_SIZE].set_pending(val); // seteipnum_le
 		return;
 	}
-	if (addr >= IMSIC_S_BASE && addr < IMSIC_S_BASE + IMSIC_SIZE) {
-		if (addr - IMSIC_S_BASE == 0) imsic_s.set_pending(val);
+	if (addr >= IMSIC_S_BASE && addr < IMSIC_S_BASE + imsic_span) {
+		const uint64_t off = addr - IMSIC_S_BASE;
+		if (off % IMSIC_SIZE == 0) imsic_s[off / IMSIC_SIZE].set_pending(val);
 		return;
 	}
 
@@ -552,8 +564,8 @@ bool Memory::is_backed(uint64_t addr, unsigned size) const
 	if (in(UART_BASE, UART_SIZE)) return true;
 	if (in(CLINT_BASE, CLINT_SIZE)) return true;
 	if (in(APLIC_BASE, APLIC_SIZE)) return true;
-	if (in(IMSIC_M_BASE, IMSIC_SIZE)) return true;
-	if (in(IMSIC_S_BASE, IMSIC_SIZE)) return true;
+	if (in(IMSIC_M_BASE, imsic_span)) return true;
+	if (in(IMSIC_S_BASE, imsic_span)) return true;
 
 	// The three word-sized Doom control registers. Each is exactly four
 	// bytes; an eight-byte access spanning two of them is not a thing the

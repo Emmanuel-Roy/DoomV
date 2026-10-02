@@ -21,13 +21,205 @@
 #include <vector>
 #include <sys/stat.h>
 
-DoomSystem::DoomSystem() : decoder(core, regs, memory)
+DoomSystem::Hart::Hart(Memory &mem, unsigned id) : id(id), decoder(core, regs, mem), ext(Extensions)
 {
+	regs.write_csr(0xF14, id);   // mhartid
 	core.drop_fetch_page_ctx = this;
 	core.drop_fetch_page = [](void *ctx, uint64_t vpage) {
-		FetchPage &e = static_cast<DoomSystem *>(ctx)->fetch_cache[vpage & (FETCH_CACHE_SIZE - 1)];
+		FetchPage &e = static_cast<Hart *>(ctx)->fetch_cache[vpage & (FETCH_CACHE_SIZE - 1)];
 		if (e.vpage == vpage) e.vpage = ~0ull;
 	};
+}
+
+DoomSystem::DoomSystem()
+{
+	harts.push_back(std::make_unique<Hart>(memory, 0));
+	cur = harts[0].get();
+}
+
+// ---- Harts ---------------------------------------------------------------
+//
+// A machine of N harts is N of everything a hart has -- registers, the core
+// with its reservation and data caches, a decoder, a fetch cache, a TLB, a
+// CLINT msip and mtimecmp, a pair of IMSIC files -- over one memory and one
+// clock. They run round-robin, one step each per round, hart 0 first: the
+// same order the multi-hart Sail driver (tools/verification/simulators/sail/
+// multihart) runs its models in, which is what lets the two be lock-stepped.
+// The order never depends on the host, so a run of several harts gives the
+// same trace every time, as a run of one does.
+//
+// The clock moves per round as it moves per step with one hart: once every
+// INSNS_PER_TICK rounds in which some hart completed a step, and once in
+// every round in which every hart is waiting. A WFI or WRS is not finished
+// inside its own step as it is with one hart (run_wait): the hart waits a
+// round at a time while the others go on (wait_slot).
+//
+// With one hart none of this runs, and the machine is exactly what it was.
+
+void DoomSystem::set_harts(unsigned n)
+{
+	cur = nullptr;
+	harts.clear();
+	for (unsigned h = 0; h < n; h++) harts.push_back(std::make_unique<Hart>(memory, h));
+	memory.set_harts(n);
+	mmu_set_harts(n);
+	cur = harts[0].get();
+	multi = n > 1;
+}
+
+// Makes hart h the one the stepping code means. Everything DoomSystem keeps
+// for "the hart" -- the interrupt and counter caches, the extensions misa
+// leaves it -- goes back into the hart it belonged to and comes out of the
+// next one.
+void DoomSystem::select_hart(unsigned h)
+{
+	Hart *const next = harts[h].get();
+	if (next == cur) return;
+	cur->ext = Extensions;
+	cur->irq_key = irq_key;
+	cur->irq_deadline = irq_deadline;
+	cur->counter_key = counter_key;
+	cur->counts_instret = counts_instret;
+	cur->counts_cycle = counts_cycle;
+	cur = next;
+	irq_key = cur->irq_key;
+	irq_deadline = cur->irq_deadline;
+	counter_key = cur->counter_key;
+	counts_instret = cur->counts_instret;
+	counts_cycle = cur->counts_cycle;
+	if (std::memcmp(&Extensions, &cur->ext, sizeof(ExtensionConfig)) != 0) {
+		Extensions = cur->ext;
+		ExtensionsEpoch++;
+		bump_event_gen();
+	}
+	memory.select_hart(h);
+	mmu_select_hart(h);
+}
+
+void DoomSystem::run_round()
+{
+	bool retired = false, all_waiting = true;
+	for (unsigned h = 0; h < harts.size(); h++) {
+		if (debugger.halted) return;
+		select_hart(h);
+		cur->retired = false;
+		hart_slot();
+		retired = retired || cur->retired;
+		all_waiting = all_waiting && cur->waiting && cur->wait_remaining > 0;
+	}
+	if (retired) tick_phase++;
+	if (tick_phase == INSNS_PER_TICK) {
+		tick_phase = 0;
+		tick_all_harts();
+	} else if (all_waiting) {
+		tick_all_harts();
+	}
+}
+
+// One hart's step in a round. While any other hart holds a reservation, the
+// stores this one makes are watched, so that they can end it.
+void DoomSystem::hart_slot()
+{
+	if (tracing) { traced_step(); return; }   // traced_step watches its own stores
+	if (!others_reserved()) { step(); return; }
+	std::vector<std::pair<uint64_t, uint8_t>> stored;
+	memory.store_log = &stored;
+	step();
+	memory.store_log = nullptr;
+	stores_seen(stored);
+}
+
+bool DoomSystem::others_reserved() const
+{
+	for (const auto &h : harts)
+		if (h.get() != cur && h->core.reservation_held()) return true;
+	return false;
+}
+
+void DoomSystem::stores_seen(const std::vector<std::pair<uint64_t, uint8_t>> &stored)
+{
+	for (const auto &h : harts) {
+		if (h.get() == cur || !h->core.reservation_held()) continue;
+		for (const auto &b : stored) h->core.store_by_other_hart(b.first, 1);
+	}
+}
+
+static bool filtered_here(const Registers &regs, uint16_t cfg);
+
+// A tick of the clock for the whole machine: each hart's mcycle, where its
+// own mcountinhibit and Smcntrpmf filter let it count, and mtime once.
+void DoomSystem::tick_all_harts()
+{
+	for (const auto &h : harts) {
+		Registers &r = h->regs;
+		if (!(r.read_csr(0x320) & 1) && !filtered_here(r, 0x321)) r.bump_csr(0xB00);
+	}
+	memory.tick_clock();
+}
+
+// A WFI or WRS, with more than one hart: the step that met it ends here, and
+// the hart waits from its next slot on. Nothing is recorded for the step
+// yet; the instruction completes, or traps, in the slot that ends the wait.
+void DoomSystem::begin_wait(uint32_t insn, uint8_t len)
+{
+	RiscvCore &core = cur->core;
+	cur->wait_kind = core.wait_request;
+	core.wait_request = RiscvCore::Wait::None;
+	cur->waiting = true;
+	cur->wait_remaining = MAX_WAIT_TICKS;
+	cur->wait_insn = insn;
+	cur->wait_insn_len = len;
+	step_committed = false;
+	step_decoded = false;
+}
+
+// One round of a wait: one pass of run_wait's loop, and one try_step of a
+// waiting Sail model. It ends on an interrupt pending and enabled, on a WRS
+// with no reservation, or after MAX_WAIT_TICKS further rounds; then the
+// instruction completes -- or traps, for a WFI below M or a wrs.nto that
+// timed out -- as the step it is.
+void DoomSystem::wait_slot()
+{
+	Registers &regs = cur->regs;
+	RiscvCore &core = cur->core;
+	constexpr uint64_t TW = 1ull << 21, VTW = 1ull << 21;
+	const RiscvCore::Wait kind = cur->wait_kind;
+	const bool timed_out = cur->wait_remaining == 0;
+	int trap = 0;   // 2 illegal, 22 virtual instruction
+	bool done = false;
+	if (core.wake_for_interrupt(regs, memory)) {
+		done = true;
+	} else if (kind != RiscvCore::Wait::Wfi && !core.reservation_held()) {
+		done = true;
+	} else if (timed_out) {
+		const PrivMode p = regs.get_priv();
+		const bool v = Extensions.H && regs.get_virt();
+		const bool tw = (regs.read_csr(0x300) & TW) != 0;
+		const bool vtw = v && (regs.read_csr(0x600) & VTW) != 0;
+		if (kind == RiscvCore::Wait::Wfi) {
+			if (p == PrivMode::S && v) trap = vtw ? 22 : 0;
+			else if (p != PrivMode::M) trap = tw ? 2 : 0;
+		} else if (kind == RiscvCore::Wait::WrsNto && p != PrivMode::M) {
+			trap = tw ? 2 : (vtw ? 22 : 0);
+		}
+		done = true;
+	}
+	if (!done) {
+		cur->wait_remaining--;
+		return;
+	}
+	cur->waiting = false;
+	cur->wait_remaining = 0;
+	step_insn = cur->wait_insn;
+	step_insn_len = cur->wait_insn_len;
+	step_decoded = true;
+	const uint64_t pc = regs.get_pc();
+	if (trap == 2) core.raise_illegal_instruction(regs, step_insn);
+	else if (trap == 22) core.raise_virtual_instruction(regs, step_insn);
+	else regs.set_pc(pc + step_insn_len);
+	step_committed = trap == 0;
+	regs.record_history(pc, step_insn);
+	memory.step_instructions(1);
 }
 
 bool DoomSystem::attach_disk(const std::string &path)
@@ -127,7 +319,12 @@ bool DoomSystem::init(const char *wad_path, const char *elf_path)
 
 	if (!memory.load_elf(elf_path)) return false;
 
-	regs.set_pc(Memory::RAM_BASE); // matches _start's placement, see riscv.lds
+	// Every hart starts at _start (see riscv.lds) with a0 = its hart id, the
+	// boot convention Sail's init_boot_requirements also sets up.
+	for (const auto &h : harts) {
+		h->regs.set_pc(Memory::RAM_BASE);
+		if (h->id) h->regs.write_x(10, h->id);
+	}
 
 	return true;
 }
@@ -168,9 +365,13 @@ bool DoomSystem::init_linux_boot(const char *sbi_path, const char *kernel_path, 
 	    && !memory.load_blob(initrd_path, Memory::RAM_BASE + 0x2300000))
 		return false;
 
-	regs.set_pc(Memory::RAM_BASE);
-	regs.write_x(10, 0);                                // a0: hart id
-	regs.write_x(11, Memory::RAM_BASE + 0x2200000);      // a1: DTB pointer, SBI/Linux boot convention
+	// Every hart enters the firmware together, as the SBI boot protocol has
+	// it; OpenSBI picks one to boot on and parks the rest.
+	for (const auto &h : harts) {
+		h->regs.set_pc(Memory::RAM_BASE);
+		h->regs.write_x(10, h->id);                            // a0: hart id
+		h->regs.write_x(11, Memory::RAM_BASE + 0x2200000);      // a1: DTB pointer, SBI/Linux boot convention
+	}
 
 	return true;
 }
@@ -247,6 +448,7 @@ static bool filtered_here(const Registers &regs, uint16_t cfg)
 // the call sites, since it runs on every step.
 void DoomSystem::refresh_counter_enables()
 {
+	Registers &regs = cur->regs;
 	counter_key = regs.keyed(regs.state_gen + ExtensionsEpoch);
 	counts_instret = !(regs.read_csr(0x320) & 4) && !filtered_here(regs, 0x322);
 	counts_cycle = !(regs.read_csr(0x320) & 1) && !filtered_here(regs, 0x321);
@@ -265,6 +467,7 @@ void DoomSystem::refresh_counter_enables()
 // before is exactly what lock-step needs.
 bool DoomSystem::interrupt_may_be_due()
 {
+	Registers &regs = cur->regs;
 	Timer &timer = memory.get_timer();
 	const uint64_t key = EventGen;
 	const uint64_t now = timer.get_mtime();
@@ -316,6 +519,10 @@ static uint64_t fs_ext[64];
 static uint64_t fs_entry[6];
 void DoomSystem::run_fast(uint64_t n)
 {
+	Registers &regs = cur->regs;
+	RiscvCore &core = cur->core;
+	Decoder &decoder = cur->decoder;
+	FetchPage *const fetch_cache = cur->fetch_cache;
 	Timer &timer = memory.get_timer();
 	auto &dcache = decoder.cache;
 	auto &ftab = decoder.fast;
@@ -577,6 +784,7 @@ void DoomSystem::step()
 // filtered out in the current mode.
 void DoomSystem::clock_tick()
 {
+	Registers &regs = cur->regs;
 	if (regs.keyed(regs.state_gen + ExtensionsEpoch) != counter_key) refresh_counter_enables();
 	if (counts_cycle) regs.bump_csr(0xB00);
 	memory.tick_clock();
@@ -586,7 +794,14 @@ void DoomSystem::clock_tick()
 // clock every INSNS_PER_TICK steps.
 void DoomSystem::end_step()
 {
+	Registers &regs = cur->regs;
 	if (step_committed && regs.minstret_increment) regs.bump_csr(0xB02);
+	if (multi) {
+		// The round moves the clock (run_round).
+		cur->steps++;
+		cur->retired = true;
+		return;
+	}
 	if (++tick_phase == INSNS_PER_TICK) {
 		tick_phase = 0;
 		clock_tick();
@@ -603,6 +818,8 @@ void DoomSystem::end_step()
 // other instruction.
 void DoomSystem::run_wait()
 {
+	Registers &regs = cur->regs;
+	RiscvCore &core = cur->core;
 	const RiscvCore::Wait kind = core.wait_request;
 	core.wait_request = RiscvCore::Wait::None;
 
@@ -653,6 +870,9 @@ void DoomSystem::run_wait()
 // flushes the TLB for its own reasons), or a change to the extensions.
 bool DoomSystem::fetch16(uint64_t vaddr, uint16_t &out)
 {
+	Registers &regs = cur->regs;
+	RiscvCore &core = cur->core;
+	FetchPage *const fetch_cache = cur->fetch_cache;
 	const uint64_t key = regs.fetch_key(regs.state_gen + mmu_tlb_generation() + ExtensionsEpoch);
 	const uint64_t vpage = vaddr >> 12;
 	const unsigned offset = (unsigned)(vaddr & 0xFFF);
@@ -701,6 +921,8 @@ bool DoomSystem::fetch16(uint64_t vaddr, uint16_t &out)
 // step_execute masks them off before anything records the encoding.
 bool DoomSystem::fetch_instr(uint64_t vaddr, uint32_t &out)
 {
+	Registers &regs = cur->regs;
+	FetchPage *const fetch_cache = cur->fetch_cache;
 	const uint64_t key = regs.fetch_key(regs.state_gen + mmu_tlb_generation() + ExtensionsEpoch);
 	const uint64_t vpage = vaddr >> 12;
 	const unsigned offset = (unsigned)(vaddr & 0xFFF);
@@ -724,12 +946,23 @@ bool DoomSystem::fetch_instr(uint64_t vaddr, uint32_t &out)
 
 void DoomSystem::step_execute()
 {
+	Registers &regs = cur->regs;
+	RiscvCore &core = cur->core;
+	Decoder &decoder = cur->decoder;
 	if (debugger.halted) return;
 	const uint64_t traps_before = core.trap_count;
 	step_committed = false;
 	step_decoded = false;
 	if (regs.keyed(regs.state_gen + ExtensionsEpoch) != counter_key) refresh_counter_enables();
 	regs.minstret_increment = counts_instret;
+
+	// A hart in a WFI or WRS, with others running: a round of the wait,
+	// which takes no interrupt -- one that wakes it is taken in the step
+	// after the instruction completes, as Sail's try_step does.
+	if (multi && cur->waiting) {
+		wait_slot();
+		return;
+	}
 
 	// In lenient lock-step the reference decides when an interrupt is taken
 	// (see traced_step), so the machine's own devices never interrupt by
@@ -792,7 +1025,13 @@ void DoomSystem::step_execute()
 	// Committed: it ran to completion -- not illegal, and no trap taken while
 	// it executed, such as a page fault or an ecall.
 	step_committed = !result.illegal && core.trap_count == traps_before;
-	if (core.wait_request != RiscvCore::Wait::None) run_wait();
+	if (core.wait_request != RiscvCore::Wait::None) {
+		if (multi) {
+			begin_wait(recorded_instr, (uint8_t)step_insn_len);
+			return;
+		}
+		run_wait();
+	}
 	regs.record_history(pc, recorded_instr);
 
 	// A test that signals completion through HTIF stops here, with its
@@ -908,6 +1147,20 @@ void DoomSystem::write_framebuffer_dump(const uint32_t *px)
 
 void DoomSystem::publish_snapshot()
 {
+	// Hart 0's, whichever hart stepped last: the dashboard shows one hart,
+	// and a steady one. Its CSRs are read through Memory, which answers for
+	// the hart selected there, so that is hart 0 for the duration.
+	Hart &shown = *harts[0];
+	Registers &regs = shown.regs;
+	RiscvCore &core = shown.core;
+	Decoder &decoder = shown.decoder;
+	const unsigned was = memory.current_hart();
+	memory.select_hart(0);
+	struct Reselect {
+		Memory &m;
+		unsigned h;
+		~Reselect() { m.select_hart(h); }
+	} reselect{memory, was};
 	Snapshot snap;
 	snap.seq = ++snapshot_seq;
 
@@ -1074,6 +1327,7 @@ void DoomSystem::commit_pointer(uint64_t now, int x, int y)
 
 void DoomSystem::stop_at_limit()
 {
+	Registers &regs = cur->regs;
 	// Exact, not approximate: every step, trap or instruction, advances the
 	// step count by one, so the first check to see stop_at is the one
 	// straight after that instruction.
@@ -1116,6 +1370,8 @@ void DoomSystem::stop_at_limit()
 
 void DoomSystem::resume_from_halt()
 {
+	Registers &regs = cur->regs;
+	RiscvCore &core = cur->core;
 	uint64_t pc = regs.get_pc();
 	if (pending_illegal) {
 		pending_illegal = false;
@@ -1178,7 +1434,10 @@ void DoomSystem::cpu_loop()
 		int budget = 200000;
 		while (budget > 0 && !debugger.halted) {
 			const uint64_t before = memory.instruction_count();
-			if (tracing) {
+			if (harts.size() > 1) {
+				run_round();
+				budget -= (int)harts.size();
+			} else if (tracing) {
 				traced_step();
 				budget--;
 			} else {
@@ -1195,10 +1454,15 @@ void DoomSystem::cpu_loop()
 				if (tracing) continue;
 				break;
 			}
-			if ((now & (INPUT_PERIOD - 1)) == 0) service_input(now);
+			// A round of several harts can step over a multiple rather than
+			// land on it; the checks are made at the round's end then.
+			const bool rounds = harts.size() > 1;
+			if ((now & (INPUT_PERIOD - 1)) == 0
+			    || (rounds && now / INPUT_PERIOD != before / INPUT_PERIOD))
+				service_input(now);
 			// After the step's input, as a restored run resumes with the step
 			// after it.
-			if (snapshot_at && now == snapshot_at) {
+			if (snapshot_at && (now == snapshot_at || (rounds && before < snapshot_at && now > snapshot_at))) {
 				snapshot_at = 0;
 				save_snapshot(snapshot_dir);
 			}

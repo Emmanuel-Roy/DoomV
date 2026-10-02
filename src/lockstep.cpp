@@ -264,9 +264,24 @@ struct DoomSystem::LockstepState {
 	bool have_peek = false;
 	std::string peek;
 	uint64_t peek_line = 0;
-	std::deque<RefRecord> ready;
-	RefRecord cur;
-	bool have_cur = false;
+	// A machine of several harts writes "hart <i>" before the records of a
+	// hart other than the one it last wrote about, and a record's lines can
+	// be split by another hart's: a WFI's instruction line comes when the
+	// wait starts, its trap (if any) when it ends. So each hart has its own
+	// record in progress and its own queue of finished ones. One hart has
+	// only stream 0, and no markers.
+	struct Stream {
+		std::deque<RefRecord> ready;
+		RefRecord cur;
+		bool have_cur = false;
+	};
+	std::vector<Stream> streams = std::vector<Stream>(1);
+	unsigned marked = 0;   // the hart the lines now being read are about
+	Stream &stream(unsigned h)
+	{
+		if (h >= streams.size()) streams.resize(h + 1);
+		return streams[h];
+	}
 	bool synced = false;
 	bool done = false;
 	uint64_t matched = 0, overrides = 0, skipped = 0;
@@ -280,20 +295,28 @@ struct DoomSystem::LockstepState {
 		return true;
 	}
 
-	bool next(RefRecord &r)
+	// The next record of hart `hart`.
+	bool next(RefRecord &r, unsigned hart)
 	{
-		if (!ready.empty()) { r = ready.front(); ready.pop_front(); return true; }
-		return format == Spike ? next_spike(r) : next_sail(r);
+		for (;;) {
+			Stream &s = stream(hart);
+			if (!s.ready.empty()) { r = s.ready.front(); s.ready.pop_front(); return true; }
+			if (format == Spike) return hart == 0 && next_spike(r);
+			if (!next_sail()) return false;
+		}
 	}
 
-	void push_back(const RefRecord &r) { ready.push_front(r); }
+	void push_back(const RefRecord &r, unsigned hart) { stream(hart).ready.push_front(r); }
 
 	// ---- Sail ---------------------------------------------------------------
 
 	// A record ends where the next begins, so a finished one is handed back
 	// when its successor's first line arrives.
-	void finish(RefRecord &rec)
+	void finish(Stream &st)
 	{
+		RefRecord &rec = st.cur;
+		std::deque<RefRecord> &ready = st.ready;
+		st.have_cur = false;
 		// A fetch fault has no instruction of its own: it is the step after
 		// the last instruction line. Tell the two apart by where it trapped.
 		if (rec.kind == RefRecord::Exception && rec.has_insn && is_fetch_fault(rec.cause)
@@ -312,12 +335,21 @@ struct DoomSystem::LockstepState {
 		ready.push_back(rec);
 	}
 
-	bool next_sail(RefRecord &out)
+	// Reads on until a record is finished, for whichever hart. False at the
+	// end of the trace with nothing more finished.
+	bool next_sail()
 	{
 		std::string line;
 		uint64_t n = 0;
 		while (read_line(line, n)) {
 			if (line.empty()) continue;
+			if (starts(line, "hart ")) {
+				marked = (unsigned)std::strtoul(line.c_str() + 5, nullptr, 10);
+				continue;
+			}
+			Stream &st = stream(marked);
+			RefRecord &cur = st.cur;
+			bool finished = false;
 
 			// [N] [P]: 0xPC (0xINSN) disassembly  symbol
 			if (line[0] == '[') {
@@ -334,7 +366,7 @@ struct DoomSystem::LockstepState {
 				const std::string insn_text = line.substr(open + 2, close - open - 2);
 				if (!parse_hex(insn_text, insn)) continue;
 				format = Sail;
-				if (have_cur) finish(cur);
+				if (st.have_cur) { finish(st); finished = true; }
 				cur = RefRecord{};
 				cur.physical = true;
 				cur.has_insn = true;
@@ -344,8 +376,8 @@ struct DoomSystem::LockstepState {
 				cur.insn = insn;
 				cur.insn_digits = insn_text.size() - 2;
 				cur.lines.push_back({n, line});
-				have_cur = true;
-				if (!ready.empty()) { out = ready.front(); ready.pop_front(); return true; }
+				st.have_cur = true;
+				if (finished) return true;
 				continue;
 			}
 
@@ -356,11 +388,11 @@ struct DoomSystem::LockstepState {
 					have_peek = true;
 					peek = line;
 					peek_line = n;
-					return next_spike(out);
+					return true;
 				}
 				continue;
 			}
-			if (!have_cur && !starts(line, "handling ")) continue;   // before the first instruction
+			if (!st.have_cur && !starts(line, "handling ")) continue;   // before the first instruction
 
 			if (starts(line, "handling int#") || starts(line, "handling exc#")) {
 				const bool interrupt = starts(line, "handling int#");
@@ -381,13 +413,13 @@ struct DoomSystem::LockstepState {
 					has_tval = parse_hex(line.substr(tval_at + 7, end == std::string::npos ? std::string::npos : end - tval_at - 7), tval);
 				}
 				format = Sail;
-				if (interrupt || !have_cur || cur.trap_started) {
+				if (interrupt || !st.have_cur || cur.trap_started) {
 					// An interrupt, or a trap with no instruction line of its
 					// own: a new step.
-					if (have_cur) finish(cur);
+					if (st.have_cur) { finish(st); finished = true; }
 					cur = RefRecord{};
 					cur.physical = true;
-					have_cur = true;
+					st.have_cur = true;
 				}
 				cur.kind = interrupt ? RefRecord::Interrupt : RefRecord::Exception;
 				cur.trap_started = true;
@@ -395,7 +427,7 @@ struct DoomSystem::LockstepState {
 				cur.tval = tval;
 				cur.has_tval = has_tval;
 				cur.lines.push_back({n, line});
-				if (!ready.empty()) { out = ready.front(); ready.pop_front(); return true; }
+				if (finished) return true;
 				continue;
 			}
 
@@ -441,9 +473,10 @@ struct DoomSystem::LockstepState {
 			// Everything else -- fetches, loads, CSR reads, "trapping from",
 			// "ret-ing from", CLINT and HTIF lines -- needs no comparing.
 		}
-		if (have_cur) { finish(cur); have_cur = false; }
-		if (!ready.empty()) { out = ready.front(); ready.pop_front(); return true; }
-		return false;
+		bool finished = false;
+		for (Stream &st : streams)
+			if (st.have_cur) { finish(st); finished = true; }
+		return finished;
 	}
 
 	// ---- Spike --------------------------------------------------------------
@@ -558,6 +591,7 @@ bool DoomSystem::set_lockstep(const char *path)
 
 void DoomSystem::lockstep_end()
 {
+	Registers &regs = cur->regs;
 	if (lock->done) return;
 	lock->done = true;
 	console_drain();
@@ -586,13 +620,15 @@ void DoomSystem::lockstep_report()
 
 void DoomSystem::traced_step()
 {
+	Registers &regs = cur->regs;
+	RiscvCore &core = cur->core;
 	if (debugger.halted) return;
 
 	RefRecord ref;
 	bool have_ref = false;
 	if (lockstep_active) {
 		for (;;) {
-			if (!lock->next(ref)) { lockstep_end(); return; }
+			if (!lock->next(ref, cur->id)) { lockstep_end(); return; }
 			if (lock->synced) break;
 			if (ref.kind == RefRecord::Commit && ref.has_insn && ref.pc == regs.get_pc()) {
 				lock->synced = true;
@@ -651,11 +687,25 @@ void DoomSystem::traced_step()
 	const auto from_ref_csr = [&](uint16_t c) { return !lockstep_strict && reference_decides_csr(c); };
 
 	// CSR values after a trap entry, against the reference's.
+	// With several harts, a value this step did not write -- a mip change
+	// Sail's update_mip logged as the hart's next step began -- may be the
+	// work of a hart that steps after this one and before that. It is
+	// checked when this hart's next step begins (below), against the last
+	// value the reference gave it.
+	const auto defer = [&](uint16_t c, uint64_t want) -> bool {
+		if (harts.size() <= 1) return false;
+		if (written_csr.count(c) && csr_seen[c] == 0) return false;
+		csr_seen[c]++;
+		cur->deferred_csr[c] = want;
+		return true;
+	};
+
 	const auto check_trap_csrs = [&](const std::vector<RefField> &fields) -> bool {
 		for (const RefField &f : fields) {
 			if (from_ref_csr((uint16_t)f.idx)) continue;
 			uint64_t want = 0;
 			if (!parse_hex(f.value, want)) continue;
+			if (defer((uint16_t)f.idx, want)) continue;
 			const uint64_t mine = step_csr((uint16_t)f.idx);
 			if (mine != want) {
 				fail("after trap entry, CSR " + std::string(csr_label((uint16_t)f.idx)) + " (" + hex(f.idx, 3)
@@ -680,8 +730,26 @@ void DoomSystem::traced_step()
 
 	const auto emit = [&]() {
 		if (!trace_file) return;
+		// With several harts, whose records follow, as the Sail driver marks them.
+		if (harts.size() > 1 && trace_hart != cur->id && !actual.empty()) {
+			std::fprintf(trace_file, "hart %u\n", cur->id);
+			trace_hart = cur->id;
+		}
 		for (const std::string &l : actual) { std::fputs(l.c_str(), trace_file); std::fputc('\n', trace_file); }
 	};
+
+	// ---- what the hart's last record left to check now --------------------------
+	if (have_ref && !cur->deferred_csr.empty()) {
+		for (const auto &d : cur->deferred_csr) {
+			const uint64_t mine = logged_csr(d.first);
+			if (mine != d.second) {
+				fail("as hart " + std::to_string(cur->id) + "'s step began, CSR " + std::string(csr_label(d.first)) + " ("
+				     + hex(d.first, 3) + "): reference " + hex(d.second, 16) + ", DoomV " + hex(mine, 16));
+				return;
+			}
+		}
+		cur->deferred_csr.clear();
+	}
 
 	// ---- an interrupt the reference took -------------------------------------
 	// Lenient: the reference times it, so take it here. Strict: DoomV's own
@@ -732,6 +800,9 @@ void DoomSystem::traced_step()
 	const uint64_t pc0 = regs.get_pc();
 	const uint64_t traps0 = core.trap_count;
 	const uint64_t step_no = memory.instruction_count();
+	// The number a record carries: the step count, which with several harts
+	// is each hart's own, as each Sail model counts its own.
+	const uint64_t record_no = harts.size() > 1 ? cur->steps : step_no;
 
 	std::vector<AccessRecord> access;
 	std::vector<std::pair<uint64_t, uint8_t>> stored;
@@ -743,13 +814,14 @@ void DoomSystem::traced_step()
 	core.access_log = nullptr;
 	memory.store_log = nullptr;
 	regs.csr_log = nullptr;
+	if (harts.size() > 1) stores_seen(stored);
 	for (uint16_t c : csr_writes) written_csr[c] = logged_csr(c);
 	if (memory.instruction_count() != step_no) end_step();
 
 	const bool trapped = core.trap_count != traps0;
 	if (!step_committed && !trapped) {
 		// Nothing ran: a breakpoint, or the run stopping. The record waits.
-		if (have_ref) lock->push_back(ref);
+		if (have_ref) lock->push_back(ref, cur->id);
 		return;
 	}
 
@@ -776,7 +848,7 @@ void DoomSystem::traced_step()
 	const bool interrupt_taken = trapped && core.last_trap_interrupt;
 	if (step_decoded && !interrupt_taken) {
 		std::snprintf(buf, sizeof(buf), "[%" PRIu64 "] [%s]: 0x%016" PRIX64 " (0x%0*" PRIX32 ")",
-		              step_no, priv_name(priv0, virt0).c_str(), pc0, step_insn_len == 2 ? 4 : 8, step_insn);
+		              record_no, priv_name(priv0, virt0).c_str(), pc0, step_insn_len == 2 ? 4 : 8, step_insn);
 		actual.push_back(buf);
 	}
 	if (step_committed) {
@@ -951,6 +1023,7 @@ void DoomSystem::traced_step()
 			}
 		} else if (f.cls == 'c') {
 			if (from_ref_csr((uint16_t)f.idx)) continue;
+			if (defer((uint16_t)f.idx, want)) continue;
 			const uint64_t mine = step_csr((uint16_t)f.idx);
 			if (mine != want) {
 				fail("CSR " + std::string(csr_label((uint16_t)f.idx)) + " (" + hex(f.idx, 3) + "): reference "

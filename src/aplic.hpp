@@ -1,5 +1,6 @@
 #pragma once
 #include <cstdint>
+#include <vector>
 
 class Imsic;
 
@@ -10,9 +11,9 @@ class Imsic;
 //
 // Real AIA ties an entire domain to one privilege level (M or S), with
 // per-hart routing handled by the hart-index field in each source's
-// target register, not by the domain itself. This project only has one
-// hart, so the only real design choice is which single domain to model
-// -- this one forwards to the S-level IMSIC file, matching how a real
+// target register, not by the domain itself. So the design choice is which
+// single domain to model -- this one forwards to the S-level IMSIC files,
+// each source to the hart its target names, matching how a real
 // OpenSBI+Linux platform hands peripheral interrupts to the kernel
 // rather than firmware.
 class Aplic {
@@ -21,7 +22,7 @@ class Aplic {
 public:
 	static constexpr int NUM_SOURCES = 32; // indices 1..31 used
 
-	explicit Aplic(Imsic &s_file);
+	explicit Aplic(std::vector<Imsic> &s_files);
 
 	uint32_t read32(uint64_t offset) const;
 	void write32(uint64_t offset, uint32_t val);
@@ -37,7 +38,7 @@ public:
 	void assert_source(uint32_t source);
 
 private:
-	Imsic &s_file;
+	std::vector<Imsic> &s_files;   // each hart's S-level file
 
 	uint32_t domaincfg;
 	uint32_t sourcecfg[NUM_SOURCES]; // [0] unused

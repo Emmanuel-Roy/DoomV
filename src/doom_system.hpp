@@ -9,6 +9,9 @@
 #include "gui.hpp"
 #include "controls.hpp"
 #include "snapshot.hpp"
+#include "extensions.hpp"
+#include <memory>
+#include <map>
 #include <cstdio>
 #include <deque>
 #include <mutex>
@@ -22,6 +25,11 @@ class DoomSystem {
 	friend struct SaveState;
 public:
 	DoomSystem();
+
+	// The machine's harts, all identical, numbered from 0 by mhartid. Set
+	// before init; one unless asked. See "Harts" in doom_system.cpp.
+	void set_harts(unsigned n);
+	unsigned hart_count() const { return (unsigned)harts.size(); }
 
 	bool init(const char *wad_path, const char *elf_path);
 
@@ -153,9 +161,6 @@ private:
 	unsigned fb_dump_tick = 0;
 
 	Memory memory;
-	Registers regs;
-	RiscvCore core;
-	Decoder decoder;
 	Debugger debugger;
 	Gui gui;
 	ControlMap controls;
@@ -286,11 +291,56 @@ private:
 		const uint8_t *host = nullptr;
 	};
 	static constexpr unsigned FETCH_CACHE_SIZE = 4096;
-	FetchPage fetch_cache[FETCH_CACHE_SIZE];
 	bool fetch16(uint64_t vaddr, uint16_t &out);
 	// A whole instruction, in one cache lookup where that is exactly
 	// equivalent to the two fetch16s it replaces. See fetch_instr.
 	bool fetch_instr(uint64_t vaddr, uint32_t &out);
+
+	// One hart: everything a hart has of its own. The methods that step
+	// work on `cur`, the hart being stepped, through local references named
+	// as the members once were (regs, core, decoder, fetch_cache).
+	struct Hart {
+		explicit Hart(Memory &mem, unsigned id);
+		unsigned id;
+		Registers regs;
+		RiscvCore core;
+		Decoder decoder;
+		FetchPage fetch_cache[FETCH_CACHE_SIZE];
+		// The extensions misa leaves this hart, while another hart steps.
+		ExtensionConfig ext;
+		// DoomSystem's per-hart caches (irq_key and the rest), while
+		// another hart steps.
+		uint64_t irq_key = ~0ull, irq_deadline = 0, counter_key = ~0ull;
+		bool counts_instret = false, counts_cycle = false;
+		// A WFI or WRS this hart is waiting in, with more than one hart: the
+		// wait goes on one round at a time while the others run. See
+		// wait_slot.
+		bool waiting = false;
+		RiscvCore::Wait wait_kind = RiscvCore::Wait::None;
+		uint32_t wait_remaining = 0;
+		uint32_t wait_insn = 0;
+		uint8_t wait_insn_len = 4;
+		// Steps this hart has taken, for its trace records.
+		uint64_t steps = 0;
+		// Lock-step: CSR values the reference logged after this hart's last
+		// record, checked as its next step begins. See traced_step.
+		std::map<uint16_t, uint64_t> deferred_csr;
+		// Whether its last slot in a round was a step: not still waiting.
+		bool retired = false;
+	};
+	std::vector<std::unique_ptr<Hart>> harts;
+	Hart *cur = nullptr;
+	bool multi = false;   // harts.size() > 1, for the per-step paths to test
+	void select_hart(unsigned h);
+	// More than one hart: a round, each hart one step in turn, and the clock.
+	void run_round();
+	void hart_slot();
+	void begin_wait(uint32_t insn, uint8_t len);
+	void wait_slot();
+	void tick_all_harts();
+	// A store this step made ends any other hart's reservation on it.
+	void stores_seen(const std::vector<std::pair<uint64_t, uint8_t>> &stored);
+	bool others_reserved() const;
 
 	// lockstep.cpp
 	void traced_step();
@@ -301,6 +351,7 @@ private:
 	bool lockstep_failed = false;
 	bool lockstep_strict = false;
 	std::FILE *trace_file = nullptr;
+	unsigned trace_hart = ~0u;     // whose records -trace last wrote, with several harts
 	struct LockstepState;
 	LockstepState *lock = nullptr;
 	// Set by step(): whether the instruction it ran committed, and what it was.

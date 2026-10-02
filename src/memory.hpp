@@ -415,9 +415,21 @@ public:
 	// Exposed for ext_zicsr.cpp's mip/mie/miselect-mireg CSR handling and
 	// RiscvCore::check_and_take_interrupt -- CSR logic needs to read the
 	// timer/IMSIC state that backs the computed MTIP/STIP/MEIP/SEIP bits.
+	// The IMSIC files are the current hart's: the one select_hart() named,
+	// which DoomSystem keeps set to the hart it is stepping.
 	Timer &get_timer() { return timer; }
-	Imsic &get_imsic_m() { return imsic_m; }
-	Imsic &get_imsic_s() { return imsic_s; }
+	Imsic &get_imsic_m() { return imsic_m[cur_hart]; }
+	Imsic &get_imsic_s() { return imsic_s[cur_hart]; }
+	Imsic &get_imsic_m(unsigned hart) { return imsic_m[hart]; }
+	Imsic &get_imsic_s(unsigned hart) { return imsic_s[hart]; }
+
+	// Harts: each has its own CLINT msip and mtimecmp and its own pair of
+	// IMSIC files, hart h's at IMSIC_M_BASE/IMSIC_S_BASE + h * IMSIC_SIZE.
+	// set_harts is for before anything runs.
+	void set_harts(unsigned n);
+	unsigned harts() const { return (unsigned)imsic_m.size(); }
+	void select_hart(unsigned h) { cur_hart = h; timer.select(h); }
+	unsigned current_hart() const { return cur_hart; }
 
 	// Exposed for DoomSystem's console-key input routing (Stage 4) to push
 	// typed bytes into the UART's RX ring.
@@ -476,8 +488,10 @@ private:
 	// C++ initializes members in declaration order regardless of the
 	// initializer-list order in memory.cpp.
 	Timer timer;
-	Imsic imsic_m;
-	Imsic imsic_s;
+	std::vector<Imsic> imsic_m = std::vector<Imsic>(1);   // per hart
+	std::vector<Imsic> imsic_s = std::vector<Imsic>(1);
+	unsigned cur_hart = 0;
+	uint64_t imsic_span = IMSIC_SIZE;   // IMSIC_SIZE * harts(): the decode checks it on every access
 	Aplic aplic;
 	Uart uart;
 };

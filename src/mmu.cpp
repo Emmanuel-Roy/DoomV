@@ -4,6 +4,8 @@
 #include "memory.hpp"
 #include "extensions.hpp"
 #include "extensions/ext_zicfiss.hpp"
+#include <memory>
+#include <vector>
 
 namespace {
 constexpr uint16_t CSR_SATP    = 0x180;
@@ -225,7 +227,10 @@ struct TlbEntry {
 	uint64_t gen;   // mmu_tlb_gen when cached; an older one is a flushed entry
 };
 
-TlbEntry tlb[TLB_SIZE];
+// The current hart's TLB. Each hart has its own, as each Sail model does;
+// mmu_select_hart points this at the one for the hart about to step.
+TlbEntry tlb0[TLB_SIZE];
+TlbEntry *tlb = tlb0;
 
 // vpn in the high bits, the rest of the context in the low ones, and bit 0
 // always set so that a zero entry can never match a real key.
@@ -406,6 +411,50 @@ static uint64_t superpage_regions = 0;
 static inline uint64_t superpage_region_bit(uint64_t vaddr)
 {
 	return 1ull << (((vaddr >> 30) * 0x9E3779B97F4A7C15ull) >> 58);
+}
+
+// Every hart's TLB state; mmu_tlb_gen and superpage_regions above are the
+// current hart's, swapped in and out by mmu_select_hart. Hart 0's entries are
+// tlb0, so a single-hart machine never allocates anything.
+namespace {
+struct HartTlb {
+	std::unique_ptr<TlbEntry[]> own;   // empty for hart 0
+	TlbEntry *entries = nullptr;
+	uint64_t gen = 0, superpages = 0;
+};
+std::vector<HartTlb> hart_tlbs = [] {
+	std::vector<HartTlb> v;
+	v.push_back(HartTlb{nullptr, tlb0, 0, 0});
+	return v;
+}();
+unsigned cur_tlb = 0;
+}
+
+void mmu_set_harts(unsigned n)
+{
+	hart_tlbs.clear();
+	hart_tlbs.push_back(HartTlb{nullptr, tlb0, 0, 0});
+	for (unsigned h = 1; h < n; h++) {
+		HartTlb t;
+		t.own.reset(new TlbEntry[TLB_SIZE]());
+		t.entries = t.own.get();
+		hart_tlbs.push_back(std::move(t));
+	}
+	cur_tlb = 0;
+	tlb = tlb0;
+	mmu_tlb_gen++;
+	superpage_regions = 0;
+}
+
+void mmu_select_hart(unsigned h)
+{
+	if (h == cur_tlb) return;
+	hart_tlbs[cur_tlb].gen = mmu_tlb_gen;
+	hart_tlbs[cur_tlb].superpages = superpage_regions;
+	cur_tlb = h;
+	tlb = hart_tlbs[h].entries;
+	mmu_tlb_gen = hart_tlbs[h].gen;
+	superpage_regions = hart_tlbs[h].superpages;
 }
 
 // By generation rather than by clearing every entry: a flush used to be 64 KB

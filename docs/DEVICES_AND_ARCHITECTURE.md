@@ -42,7 +42,7 @@ The address map is a lookup table. The worked examples explain how to use it.
 
 [DoomSystem](../src/doom_system.hpp) owns the virtual machine's core state: `Registers`, `Memory`, `RiscvCore`, `Decoder`, `Debugger`, controls and GUI. The core executes architectural operations, the decoder interprets instruction bits, and Memory routes physical accesses. There is one simulated hart; the host CPU/render threads do not represent separate guest harts.
 
-[Memory](../src/memory.hpp) owns a timer, M and S IMSIC files, an APLIC, the UART, the virtio devices (root disk, eight drive slots, keyboard, mouse and the shared folder), both framebuffers and the power-off register. The APLIC holds a reference to the S IMSIC. Member declaration order matters: the S file must exist before constructing the APLIC reference. The connection is a direct C++ call, not a simulated packet bus with latency.
+[Memory](../src/memory.hpp) owns a timer (the CLINT), an M and an S IMSIC file per hart, an APLIC, the UART, the virtio devices (root disk, eight drive slots, keyboard, mouse and the shared folder), both framebuffers and the power-off register. The APLIC holds a reference to the S IMSIC files. Member declaration order matters: the S files must exist before constructing the APLIC reference. The connection is a direct C++ call, not a simulated packet bus with latency.
 
 ```mermaid
 flowchart TD
@@ -65,7 +65,7 @@ All ranges below are half-open: base is included, end is excluded. Values come f
 | Region | Base | Size | End | Owner/purpose |
 |---|---|---|---|---|
 | Test / power-off | `0x00100000` | `0x1000` | `0x00101000` | `sifive,test0`: `0x5555` powers off, `0x7777` reboots, `0x3333` fails |
-| CLINT-compatible window | `0x02000000` | `0x10000` | `0x02010000` | Timer register subset |
+| CLINT | `0x02000000` | `0x10000` | `0x02010000` | msip and mtimecmp per hart, mtime |
 | APLIC | `0x0C000000` | `0x4000` | `0x0C004000` | Source configuration and MSI forwarding |
 | DOOM input | `0x10000000` | 4 | `0x10000004` | Pop a packed key event |
 | DOOM tick | `0x10000004` | 4 | `0x10000008` | Scaled guest tick counter |
@@ -80,8 +80,8 @@ All ranges below are half-open: base is included, end is excluded. Values come f
 | Drive slots (8 × virtio-blk) | `0x10102000` | `0x8000` | `0x1010A000` | `drives/*.img`; APLIC sources 4–11 |
 | Shared folder (virtio-9p) | `0x1010A000` | `0x1000` | `0x1010B000` | `shared/`; APLIC source 12 |
 | DOOM framebuffer | `0x10200000` | `0x3E800` | `0x1023E800` | 320×200×4 bytes, past every virtio slot |
-| M IMSIC file | `0x24000000` | `0x1000` | `0x24001000` | M-target MSI doorbell |
-| S IMSIC file | `0x28000000` | `0x1000` | `0x28001000` | S-target MSI doorbell |
+| M IMSIC files | `0x24000000` | `0x1000` per hart | `0x24000000` + harts × `0x1000` | M-target MSI doorbell, hart h's at `+ h × 0x1000` |
+| S IMSIC files | `0x28000000` | `0x1000` per hart | `0x28000000` + harts × `0x1000` | S-target MSI doorbell, hart h's at `+ h × 0x1000` |
 | Linux framebuffer | `0x50000000` | `0x4B4800` | `0x504B4800` | 1168×1056×4 bytes, `simple-framebuffer` |
 | RAM | `0x80000000` | `0x40000000` | `0xC0000000` | 1 GiB |
 | WAD | `0xC0000000` | `0x01400000` | `0xC1400000` | 20-MiB asset window |
@@ -142,21 +142,22 @@ The normal `translate_or_trap` path combines translation, actual physical backin
 | Illegal instruction/CSR access | Illegal instruction 2 | Handler may emulate, reject or terminate |
 | Virtualized privileged operation requiring HS intervention | Virtual instruction 22 where implemented | Hypervisor can distinguish an intercept |
 
-There is a small direct-mapped TLB ([mmu.hpp](../src/mmu.hpp)). It caches only single-stage, non-virtualized, non-M-mode translations whose A and D bits were already set, so a hit can never skip a required fault; two-stage, HLV/HSV and everything under H re-walk every time. `sfence.vma`, `sinval.vma` and writes to the CSRs a walk depends on flush it wholesale. There is also a decode cache, but it validates instruction bytes and is not the same thing as a TLB or architectural instruction cache.
+There is a small direct-mapped TLB per hart ([mmu.hpp](../src/mmu.hpp)). It caches only single-stage, non-virtualized, non-M-mode translations whose A and D bits were already set, so a hit can never skip a required fault; two-stage, HLV/HSV and everything under H re-walk every time. `sfence.vma`, `sinval.vma` and writes to the CSRs a walk depends on flush it wholesale. There is also a decode cache, but it validates instruction bytes and is not the same thing as a TLB or architectural instruction cache.
 
 ## Timer and local interrupts
 
-[Timer](../src/timer.hpp) contains two 64-bit values: `mtime` and `mtimecmp`. Reset initializes both to zero, making the machine timer condition immediately true; interrupt enables are initially clear. `tick(count)` adds to mtime. No host wall-clock thread drives it: `DoomSystem::clock_tick` adds one every second step and on each tick of a `wfi` or `wrs` wait, which is Sail's clock with `instructions_per_tick` 2 and `max_time_to_wait` 10.
+[Timer](../src/timer.hpp) is the CLINT: one 64-bit `mtime` for the machine, and for each hart a 64-bit `mtimecmp` and an `msip`. Reset sets them all to zero, making each hart's machine timer condition immediately true; interrupt enables are initially clear. `tick(count)` adds to mtime. No host wall-clock thread drives it: `DoomSystem::clock_tick` adds one every second step and on each tick of a `wfi` or `wrs` wait, which is Sail's clock with `instructions_per_tick` 2 and `max_time_to_wait` 10. With several harts the same clock counts rounds instead of steps -- see [Several harts](../README.md#harts).
 
-| Timer-relative offset | Interface | Behavior |
+| CLINT-relative offset | Interface | Behavior |
 |---|---|---|
-| `0x4000` | mtimecmp low word | Read/write deadline low 32 bits |
-| `0x4004` | mtimecmp high word | Read/write deadline high 32 bits |
-| `0xBFF8` | mtime low word | Read live counter |
-| `0xBFFC` | mtime high word | Read live counter high half |
+| `0x0000` + 4 × hart | msip | Bit 0 is the hart's MSIP; the rest read zero |
+| `0x4000` + 8 × hart | mtimecmp low word | Read/write deadline low 32 bits |
+| `0x4004` + 8 × hart | mtimecmp high word | Read/write deadline high 32 bits |
+| `0xBFF8` | mtime low word | Read/write the live counter |
+| `0xBFFC` | mtime high word | Read/write the live counter's high half |
 | Other offsets | Unimplemented | Read zero, writes ignored |
 
-The comparison is `mtime >= mtimecmp`. The timer is CLINT-compatible only in the implemented register subset: there is no live MMIO MSIP register, even though the DTS includes M-software interrupt metadata expected by firmware initialization. One hart avoids needing working cross-hart IPIs in the demonstrated boot path.
+The layout is Sail's. Hart h's MTIP is `mtime >= mtimecmp[h]` and its MSIP is `msip[h]` bit 0; `mip.MSIP` cannot be written through the CSR, as in Sail, so a write to an msip is the only way to raise it -- which is how one hart interrupts another.
 
 Sstc is implemented in CSR logic: `menvcfg.STCE` enables comparing the same mtime against `stimecmp`, contributing STIP. It is not a third independent clock. The unprivileged cycle/time/instret reads return mcycle, mtime and minstret: mcycle counts clock ticks and minstret completed instructions, each subject to mcountinhibit and the Smcntrpmf filters in mcyclecfg and minstretcfg.
 
@@ -166,7 +167,7 @@ DOOM's tick register is different: `Memory::step_instructions` accumulates steps
 
 APLIC means **Advanced Platform-Level Interrupt Controller**. Architecturally it accepts platform interrupt sources and routes them to harts, including MSI delivery to IMSIC. DoomV models one flat domain with sources 1–31; source 0 is reserved. It stores source modes and target fields, and does no edge or level sampling of its own.
 
-A source becomes pending in one of two ways: a guest MMIO write to setipnum, or a device calling `Aplic::assert_source`. The second is the virtio devices' interrupt line, raised after a queue has been processed. Both share one forwarding path. [aplic.cpp](../src/aplic.cpp) checks that the source number is valid, sourcecfg is nonzero and domain delivery is enabled, then directly sets the target EIID pending in the S IMSIC object.
+A source becomes pending in one of two ways: a guest MMIO write to setipnum, or a device calling `Aplic::assert_source`. The second is the virtio devices' interrupt line, raised after a queue has been processed. Both share one forwarding path. [aplic.cpp](../src/aplic.cpp) checks that the source number is valid, sourcecfg is nonzero and domain delivery is enabled, then directly sets the target EIID pending in the S IMSIC file of the hart the source's target register names.
 
 | Offset from `0x0C000000` | Register | Implemented behavior |
 |---|---|---|
@@ -176,7 +177,7 @@ A source becomes pending in one of two ways: a guest MMIO write to setipnum, or 
 | `0x3004 + 4×(n−1)` | target[n] | Stores target bits masked by `0xFFFFF7FF`; low 11 bits are EIID |
 | Other offsets | Not modeled | Zero reads, ignored writes |
 
-The source ID and EIID need not match. Source 5 can target identity 17. Sourcecfg must be nonzero and domain IE set for the trigger to forward. The current forwarding path does not enforce the stored DM bit; it always forwards to S IMSIC. It ignores Hart Index and Guest Index for routing and has no child-domain delegation, full enable/pending arrays, complete priority model or real big-endian mode despite storing BE.
+The source ID and EIID need not match. Source 5 can target identity 17. Sourcecfg must be nonzero and domain IE set for the trigger to forward. The current forwarding path does not enforce the stored DM bit; it always forwards to an S IMSIC file, the one of the hart the Hart Index names (none, if there is no such hart). It ignores the Guest Index for routing and has no child-domain delegation, full enable/pending arrays, complete priority model or real big-endian mode despite storing BE.
 
 ```mermaid
 flowchart TD

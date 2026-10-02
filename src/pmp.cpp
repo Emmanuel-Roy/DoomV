@@ -90,6 +90,8 @@ struct Decoded {
 
 unsigned cache_gen = 0;      // bumped by every pmpcfg/pmpaddr write
 unsigned cache_built = ~0u;  // generation the cache was built from
+// And whose PMP it is: with several harts, each has its own entries.
+const Registers *cache_regs = nullptr;
 Decoded cache[ENTRIES];
 // The enabled entries' indices, in priority order. A boot leaves most of the
 // sixteen off, and every access used to test all of them.
@@ -105,6 +107,7 @@ inline void rebuild_cache(Registers &regs)
 		if (cache[i].on) active[n_active++] = i;
 	}
 	cache_built = cache_gen;
+	cache_regs = &regs;
 }
 
 inline bool permits(uint8_t cfg, int access, uint8_t priv)
@@ -203,7 +206,7 @@ bool check(Registers &regs, uint64_t paddr, unsigned size, int access, uint8_t p
 	uint64_t first = paddr;
 	uint64_t last  = paddr + (size ? size - 1 : 0);
 
-	if (cache_built != cache_gen) rebuild_cache(regs);
+	if (cache_built != cache_gen || cache_regs != &regs) rebuild_cache(regs);
 
 	for (unsigned k = 0; k < n_active; k++) {
 		const Decoded &e = cache[active[k]];
@@ -224,7 +227,7 @@ bool check(Registers &regs, uint64_t paddr, unsigned size, int access, uint8_t p
 
 bool page_permits(Registers &regs, uint64_t page, int access, uint8_t priv)
 {
-	if (cache_built != cache_gen) rebuild_cache(regs);
+	if (cache_built != cache_gen || cache_regs != &regs) rebuild_cache(regs);
 	const uint64_t end = page + 0x1000;
 	// The first enabled entry touching the page decides. If it covers the
 	// whole page, it is also the first entry any access inside the page

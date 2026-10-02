@@ -40,6 +40,12 @@ enum class AccessType : uint8_t {
 // risk of having a cache at all -- a stale entry is a guest reading another
 // process's memory, silently and much later.
 void mmu_tlb_flush();
+// Each hart has its own TLB, as each has its own translation state. Set the
+// number before anything runs; select the hart that is about to step. The
+// flushes and mmu_tlb_gen below are always the selected hart's.
+void mmu_set_harts(unsigned n);
+void mmu_select_hart(unsigned h);
+
 // Bumped by every mmu_tlb_flush, so a cache holding translations -- the
 // fetch cache in DoomSystem, the data caches in RiscvCore -- is flushed with
 // the TLB. Read on every memory access, so inline.

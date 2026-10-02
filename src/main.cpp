@@ -94,6 +94,7 @@ int main(int argc, char *argv[])
 	std::string record_path, replay_path;
 	std::string trace_path, lockstep_path;
 	bool lockstep_strict = false;
+	unsigned harts = 1;
 	for (int i = 1; i < argc; i++) {
 		std::string arg = argv[i];
 		if (arg.rfind("-march=", 0) == 0) {
@@ -117,6 +118,15 @@ int main(int argc, char *argv[])
 			// Stop when the guest stores nonzero to this address. Every
 			// bare-metal RISC-V test suite ends that way.
 			tohost_addr = std::stoull(arg.substr(8), nullptr, 16);
+		} else if (arg.rfind("-harts=", 0) == 0) {
+			// The number of harts, all identical, numbered 0 up. They run
+			// round-robin, one step each in turn -- see "Harts" in
+			// doom_system.cpp -- so a run is as deterministic as with one.
+			harts = (unsigned)std::stoul(arg.substr(7));
+			if (harts < 1 || harts > 4095) {
+				std::cout << "-harts must be 1 through 4095, the CLINT's limit\n";
+				return -1;
+			}
 		} else if (arg.rfind("-ram=", 0) == 0) {
 			ram_arg = arg.substr(5);
 		} else if (arg.rfind("-opensbi=", 0) == 0) {
@@ -235,6 +245,7 @@ int main(int argc, char *argv[])
 
 	SupportedExtensions = Extensions;
 	DoomSystem system;
+	if (harts > 1) system.set_harts(harts);
 	// Before init: init is what opens the window.
 	if (headless) system.set_headless();
 	// Storage drives only mean something to a guest with a device tree that

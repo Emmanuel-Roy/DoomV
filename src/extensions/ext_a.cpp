@@ -126,7 +126,7 @@ void RiscvCore::exec_32A(const DecodedOp &instr, Registers &regs, Memory &mem)
 	if (!translate_or_trap(regs, mem, addr, amo_access, paddr, width)) return;
 
 	if (amo_op == 0b00011) { // SC.W/SC.D
-		if (reservation_valid && reservation_addr == addr) {
+		if (reservation_valid && (reservation_addr & ~(RESERVATION_SET - 1)) == (paddr & ~(RESERVATION_SET - 1))) {
 			if (is64) mem.write64(paddr, rs2_val);
 			else mem.write32(paddr, (uint32_t)rs2_val);
 			regs.write_x(instr.rd, 0); // success
@@ -144,7 +144,7 @@ void RiscvCore::exec_32A(const DecodedOp &instr, Registers &regs, Memory &mem)
 
 	if (amo_op == 0b00010) { // LR.W/LR.D
 		reservation_valid = true;
-		reservation_addr = addr;
+		reservation_addr = paddr;
 		regs.write_x(instr.rd, loaded);
 		regs.set_pc(pc + instr.length);
 		return;

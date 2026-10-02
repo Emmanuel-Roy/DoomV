@@ -514,6 +514,7 @@ riscv_doom.exe -opensbi=<f> -kernel=<f> -dtb=<f> -initrd=<f> [options]   # Linux
 | `-trace=<path>` | Write a trace of every instruction, register and CSR write, store and trap, in Sail's trace format. |
 | `-lockstep=<path>` | Run against a reference trace -- Sail's, or an RTL simulation's -- and halt at the first record that does not match. See [Lock-stepping](#lockstep). |
 | `-lockstep-strict` | With `-lockstep`, compare everything, counters, time and interrupt timing included, and take nothing from the reference. How DoomV is held to Sail. |
+| `-harts=<n>` | A machine of `n` identical harts (default 1), each starting at the entry with `a0` = its hart id. They take turns a step at a time, so a run is as deterministic as with one. See [Several harts](#harts). |
 
 `-ng` is what makes the conformance suites practical. With a window open a
 finished test never exits on its own and has to be killed from outside, so
@@ -1143,6 +1144,68 @@ python tools/verification/lockstep_sail.py rv64mi-p-csr     # one
 
 It found six differences on its first run that every conformance suite had
 passed over -- see [Part XIII of the bug history](docs/BUGS.md#part-xiii).
+
+<a id="harts"></a>
+**Several harts.** `-harts=N` builds a machine of N identical harts over one
+memory and one clock. Each has its own registers, CSRs (`mhartid` is its
+number), reservation, TLB and caches, its own `msip` and `mtimecmp` in the
+CLINT, and its own M and S IMSIC files, hart h's at `0x24000000`/`0x28000000`
+`+ h × 0x1000`; the APLIC sends each source to the S file of the hart its
+target register names.
+
+The harts take turns: one step each per round, hart 0 first. That order is
+the machine's and never the host's, so a run with several harts gives the
+same trace every time, as one hart does. The clock keeps Sail's rate, counted
+in rounds: mtime moves once every second round in which some hart completed a
+step, and every round in which all of them are waiting. A `wfi` or `wrs` waits
+a round at a time while the others run, for up to ten rounds, and ends early
+on an interrupt -- or, for `wrs`, when another hart's store ends its
+reservation. A store by one hart ends any other hart's LR reservation on the
+same 8-byte reservation set; its own stores leave its reservation alone, as
+the configuration says.
+
+Sail models one hart, so there is no multi-hart Sail to compare with as it
+stands. `tools/verification/simulators/sail/multihart` builds one:
+`sail_riscv_mh` runs N copies of the Sail model over Sail's one memory, in
+the same order and on the same clock, with a small patch to Sail's CLINT so
+that a hart can reach another's `msip` and `mtimecmp` -- the instruction set
+model itself is untouched. Its trace marks each hart's records with a line
+`hart <i>`, which `-lockstep` follows, and so does `-trace`.
+`lockstep_sail.py` builds the multi-hart tests in
+`tools/verification/tests/lockstep/multihart` once per hart count and
+lock-steps them, strictly:
+
+```sh
+python tools/verification/lockstep_sail.py --multihart            # 2 and 4 harts
+python tools/verification/lockstep_sail.py --multihart --harts 3,8
+```
+
+They cover AMOs and LR/SC loops contending for the same words, interrupts
+from one hart to another and to itself through the CLINT, another hart's
+`mtimecmp` read and written, each hart's own timer, `wfi` timing out and
+waking, `wrs` woken by another hart's store, and `mtime` written by one hart
+and read by all.
+
+Linux boots on several harts with a device tree that describes them.
+`tools/linux/dts/smp.py` writes one from any of the single-hart trees -- cpu0
+repeated, the CLINT and both IMSIC nodes widened to every hart -- and compiles
+it:
+
+```sh
+python tools/linux/dts/smp.py build/linux/doomv.dts 4         # -> build/linux/doomv-h4.dtb
+riscv_doom.exe -harts=4 -opensbi=build/linux/fw_jump.elf -kernel=build/linux/Image     -dtb=build/linux/doomv-h4.dtb -initrd=build/linux/initramfs.cpio
+```
+
+OpenSBI starts the other harts and sends its IPIs through the IMSIC, and the
+kernel reports `smp: Brought up 1 node, 4 CPUs`; every CPU takes its own
+timer interrupts and IPIs, and four shell loops run one on each. Such a boot
+is as deterministic as any other -- two runs to the same step leave the same
+`crash.log` -- and a snapshot of one restores to the same run.
+
+Not there yet: the harts are interpreted one step at a time, with no fast
+loop, so a machine of several harts runs several times slower per
+instruction than one; and `crash.log` holds the state of the hart that
+stepped last.
 
 The core dispatches on a plain switch statement rather than a table of
 function pointers. I went in assuming function pointers would be the

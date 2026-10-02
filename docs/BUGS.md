@@ -7125,3 +7125,41 @@ The first Linux boot after the move panicked in `virtio_mmio_probe` with a
 load access fault. `Memory::is_backed`, which says which physical addresses
 answer at all, had never listed the root disk's slot: the framebuffer's entry
 had been covering for it. It is listed now.
+
+<a id="part-xiv"></a>
+## Part XIV — Several harts, and three things one hart had never had to get right
+
+`-harts=N` gave the machine more harts, and a multi-hart build of Sail to be
+held to (`tools/verification/simulators/sail/multihart`). Three of the
+differences that turned up were there with one hart all along, unreachable
+by every test because nothing else could store, interrupt or tick.
+
+<a id="bug169"></a>
+### 169. MSIP was a bit software could set, and the CLINT had no msip
+
+`mip.MSIP` sat in the CSR's software-writable shadow, next to SSIP, and
+`csrs mip, 8` raised a machine software interrupt. Sail's `legalize_mip`
+keeps it read-only: the bit is the CLINT's `msip`, and DoomV's CLINT had no
+`msip` -- offset 0 read zero and dropped writes. With one hart nobody wrote
+either; with two, an interrupt from one hart to another had nowhere to go.
+The CLINT now has an `msip` and an `mtimecmp` per hart at Sail's offsets, MSIP
+is computed from the hart's `msip`, and the CSR write leaves it alone.
+
+<a id="bug170"></a>
+### 170. A store-conditional matched the load-reserved's virtual address
+
+The reservation kept the virtual address the LR used, and an SC succeeded
+only at that exact address. Sail reserves the physical address and an SC
+succeeds anywhere in the same reservation set -- the aligned 8 bytes,
+`reservation_set_size_exp` 3 -- so `lr.w` at 0 and `sc.w` at 4 succeed there
+and failed here. The reservation is now physical and matched by set, which
+is also what lets another hart's store end it.
+
+<a id="bug171"></a>
+### 171. mtime could not be written
+
+`Timer::write32` dropped writes to `mtime`, on the reasoning that nothing in
+the project needed to set it. The guest can: Sail's CLINT accepts both
+halves, and a write moves the time every hart reads. A write can move it
+backwards, which the interrupt check had assumed never happens -- it now
+counts as an event, as an `mtimecmp` write does.

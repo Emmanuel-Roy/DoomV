@@ -50,6 +50,17 @@ public:
 	// whatever the global enables say.
 	bool wake_for_interrupt(Registers &regs, Memory &mem);
 	bool reservation_held() const { return reservation_valid; }
+	// The reservation set: the aligned 8 bytes holding the reserved
+	// address, physical, as Sail's platform reservation is
+	// (rva23s64.json platform.reservation.reservation_set_size_exp = 3).
+	static constexpr uint64_t RESERVATION_SET = 8;
+	// Another hart wrote [paddr, paddr+size): a reservation on any of it ends.
+	void store_by_other_hart(uint64_t paddr, unsigned size)
+	{
+		if (!reservation_valid) return;
+		const uint64_t set = reservation_addr & ~(RESERVATION_SET - 1);
+		if (paddr < set + RESERVATION_SET && paddr + size > set) reservation_valid = false;
+	}
 
 	// Pages that loads and stores inside one page can reach directly -- see
 	// load_virtual. One cache for loads and one for stores, because a page
@@ -173,11 +184,11 @@ public:
 	static bool csr_access_permitted(Registers &regs, uint16_t csr, bool writing);
 
 private:
-	// LR/SC reservation state. Single-hart, no interrupts, so this only
-	// ever needs to survive the immediate LR->SC pair a retry loop does --
-	// no cross-hart invalidation logic needed. Doesn't separately track
-	// LR.W vs LR.D width (a mixed-width LR->SC pair at the same address
-	// would incorrectly succeed) -- not something compiled code produces.
+	// LR/SC reservation state: whether one is held, and the physical
+	// address the LR reserved. An SC succeeds if its own physical address is
+	// in the same reservation set, as Sail's match_reservation decides; a
+	// store by another hart to the set ends it (store_by_other_hart), and a
+	// store by this hart does not (invalidate_on_same_hart_store = false).
 	bool reservation_valid;
 	uint64_t reservation_addr;
 

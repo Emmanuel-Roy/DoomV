@@ -26,7 +26,7 @@ are lookup material; you do not need to read them before understanding the boot.
 |---|---|
 | Host | The Windows C++ process, its memory allocations and SDL window |
 | Guest | The RISC-V program whose instructions DoomV interprets |
-| Hart | One architectural execution context; DoomV models one |
+| Hart | One architectural execution context; DoomV models one, or as many as `-harts=N` asks for |
 | ISA | Instruction-set architecture: the contract visible to guest software |
 | CSR | Control/status register, accessed by CSR instructions rather than ordinary memory loads |
 | MMIO | Memory-mapped I/O: an address access handled by a device instead of RAM |

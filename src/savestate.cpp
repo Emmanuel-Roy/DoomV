@@ -41,9 +41,11 @@ namespace fs = std::filesystem;
 namespace {
 
 constexpr char MAGIC[8] = {'D', 'O', 'O', 'M', 'V', 'S', 'N', 'P'};
-// Bumped whenever the layout below changes: a snapshot is only ever read by
-// the build that wrote the same layout.
-constexpr uint32_t VERSION = 1;
+// Bumped whenever the layout below changes. A build reads the layout it
+// writes, and the ones before it that it still knows: version 1 is the
+// single-hart layout, from before a machine could have several harts, and
+// reads as a machine of one.
+constexpr uint32_t VERSION = 2;
 
 class Writer {
 public:
@@ -138,10 +140,16 @@ struct SaveState {
 		io.pod(c.wait_request);
 	}
 
-	template <class IO> static void timer(IO &io, Timer &t)
+	template <class IO> static void timer(IO &io, Timer &t, uint32_t version)
 	{
 		io.pod(t.mtime);
-		io.pod(t.mtimecmp);
+		if (version == 1) {
+			io.pod(t.cmp[0]);
+			t.msip[0] = 0;
+		} else {
+			for (uint64_t &c : t.cmp) io.pod(c);
+			for (uint32_t &m : t.msip) io.pod(m);
+		}
 		io.pod(t.cmp_gen);
 	}
 
@@ -240,7 +248,7 @@ struct SaveState {
 		}
 	}
 
-	template <class IO> static void memory(IO &io, Memory &m)
+	template <class IO> static void memory(IO &io, Memory &m, uint32_t version)
 	{
 		// RAM, as the pages that are not all zero: a booted machine has
 		// touched far less than it was given.
@@ -287,9 +295,11 @@ struct SaveState {
 		io.pod(m.htif_busy);
 		io.mark(0x4D454D00);   // "MEM"
 
-		timer(io, m.timer);
-		imsic(io, m.imsic_m);
-		imsic(io, m.imsic_s);
+		timer(io, m.timer, version);
+		for (unsigned h = 0; h < m.harts(); h++) {
+			imsic(io, m.imsic_m[h]);
+			imsic(io, m.imsic_s[h]);
+		}
 		aplic(io, m.aplic);
 		uart(io, m.uart);
 		input(io, m.kbd_dev);
@@ -300,12 +310,28 @@ struct SaveState {
 		io.mark(0x44455600);   // "DEV"
 	}
 
-	template <class IO> static void system(IO &io, DoomSystem &s)
+	// A hart's state beyond its registers and core: a wait in progress, its
+	// step count, its extensions. Version 2 on.
+	template <class IO> static void hart(IO &io, DoomSystem::Hart &h)
 	{
-		registers(io, s.regs);
-		io.mark(0x52454700);   // "REG"
-		core(io, s.core);
-		memory(io, s.memory);
+		io.pod(h.waiting);
+		io.pod(h.wait_kind);
+		io.pod(h.wait_remaining);
+		io.pod(h.wait_insn);
+		io.pod(h.wait_insn_len);
+		io.pod(h.steps);
+		io.pod(h.ext);
+	}
+
+	template <class IO> static void system(IO &io, DoomSystem &s, uint32_t version)
+	{
+		for (const auto &h : s.harts) {
+			registers(io, h->regs);
+			io.mark(0x52454700);   // "REG"
+			core(io, h->core);
+			if (version >= 2) hart(io, *h);
+		}
+		memory(io, s.memory, version);
 		io.pod(s.tick_phase);
 		io.pod(s.guest_pointer_x);
 		io.pod(s.guest_pointer_y);
@@ -379,8 +405,12 @@ bool SaveState::save(DoomSystem &s, const std::string &dir)
 	w.pod(VERSION);
 	const Shape sh = shape(s);
 	w.pod(sh);
-	w.pod(Extensions);
-	system(w, s);
+	const uint32_t harts = s.hart_count();
+	w.pod(harts);
+	// The extensions are each hart's, and the current hart's are live in
+	// Extensions rather than in its Hart.
+	s.cur->ext = Extensions;
+	system(w, s, VERSION);
 	if (!w.close()) { std::cout << "snapshot: cannot write " << dir << "/state.bin\n"; return false; }
 	std::cout << "snapshot of step " << memory.instruction_count() << " saved to " << dir << std::endl;
 	return true;
@@ -397,7 +427,8 @@ bool SaveState::restore(DoomSystem &s, const std::string &dir)
 		std::cout << "restore: " << dir << " holds no snapshot\n";
 		return false;
 	}
-	if (r.get<uint32_t>() != VERSION) {
+	const uint32_t version = r.get<uint32_t>();
+	if (version != 1 && version != VERSION) {
 		std::cout << "restore: " << dir << " was written by a build with another snapshot layout\n";
 		return false;
 	}
@@ -410,6 +441,8 @@ bool SaveState::restore(DoomSystem &s, const std::string &dir)
 	for (int i = 0; i < DISK_SLOTS; i++)
 		if (want.disks[i] != have.disks[i]) differ += " " + disk_name(i, "");
 	if (want.share != have.share) differ += " shared folder";
+	const uint32_t harts = version == 1 ? 1 : r.get<uint32_t>();
+	if (harts != s.hart_count()) differ += " -harts";
 	if (!differ.empty()) {
 		std::cout << "restore: this machine is not the one the snapshot was taken on -- start it with "
 		             "the same -ram, -march, boot files, disks and shared folder. Different:" << differ << "\n";
@@ -432,17 +465,28 @@ bool SaveState::restore(DoomSystem &s, const std::string &dir)
 		          << " now runs on " << work.string() << "\n";
 	}
 
-	r.pod(Extensions);
-	system(r, s);
+	if (version == 1) r.pod(s.harts[0]->ext);
+	system(r, s, version);
 	if (!r.ok()) { std::cout << "restore: " << dir << "/state.bin is damaged or truncated\n"; return false; }
+	// The machine resumes at the start of a round, with hart 0.
+	s.cur = s.harts[0].get();
+	Extensions = s.cur->ext;
+	memory.select_hart(0);
 
 	// Everything that only remembers an answer, forgotten, as a CSR write or a
 	// change of extensions would make it be.
 	ExtensionsEpoch++;
-	mmu_tlb_flush();
+	for (unsigned h = s.hart_count(); h-- > 0;) {
+		mmu_select_hart(h);
+		mmu_tlb_flush();
+	}
 	pmp::invalidate_cache();
 	bump_event_gen();
-	s.regs.state_gen++;
+	for (const auto &h : s.harts) {
+		h->regs.state_gen++;
+		h->irq_key = ~0ull;
+		h->counter_key = ~0ull;
+	}
 	s.irq_key = ~0ull;
 	s.counter_key = ~0ull;
 	// A -replay log runs on from here: what it delivered up to the snapshot's

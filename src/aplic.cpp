@@ -20,7 +20,7 @@ constexpr uint32_t TARGET_WRITABLE = 0xFFFFF7FFu;
 constexpr uint32_t TARGET_EIID_MASK = 0x7FFu;
 }
 
-Aplic::Aplic(Imsic &s_file) : s_file(s_file), domaincfg(0)
+Aplic::Aplic(std::vector<Imsic> &s_files) : s_files(s_files), domaincfg(0)
 {
 	std::memset(sourcecfg, 0, sizeof(sourcecfg));
 	std::memset(target, 0, sizeof(target));
@@ -67,9 +67,11 @@ void Aplic::assert_source(uint32_t n)
 	if (n == 0 || n >= NUM_SOURCES) return; // not an implemented source
 	if (sourcecfg[n] == 0) return;          // source inactive (SM == 0)
 	if (!(domaincfg & DOMAINCFG_IE)) return; // domain-wide delivery disabled
-	// Forward as an MSI: write the configured EIID to the target IMSIC
-	// file's pending set, same effect a real bus write to seteipnum_le
-	// would have (Hart Index/Guest Index ignored -- single hart, no
-	// H-extension).
-	s_file.set_pending(target[n] & TARGET_EIID_MASK);
+	// Forward as an MSI: write the configured EIID to the target hart's
+	// IMSIC file's pending set, same effect a real bus write to its
+	// seteipnum_le would have. A Hart Index with no hart behind it goes
+	// nowhere, as a write to an address with no IMSIC would; the Guest
+	// Index is ignored (the domain delivers to S-level files only).
+	const uint32_t hart = target[n] >> 18;
+	if (hart < s_files.size()) s_files[hart].set_pending(target[n] & TARGET_EIID_MASK);
 }

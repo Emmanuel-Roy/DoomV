@@ -138,14 +138,15 @@ constexpr uint64_t MIP_MTIP = 1ull << 7;
 constexpr uint64_t MIP_SEIP = 1ull << 9;
 constexpr uint64_t MIP_MEIP = 1ull << 11;
 // What mip actually stores, raw, in Registers::csr[] -- a software-
-// settable shadow for MSIP/SSIP (plain, always writable per spec),
-// SEIP (spec explicitly allows a mode to inject a virtual S-level
+// settable shadow for SSIP, SEIP (spec explicitly allows a mode to inject a virtual S-level
 // external interrupt this way, OR'd with the IMSIC's own signal below),
 // and STIP (kept for a hypothetical SBI-style M-mode-managed timer,
-// OR'd with the Sstc-derived condition). MTIP/MEIP have no shadow at
-// all -- purely timer-derived and purely IMSIC-M-derived respectively,
+// OR'd with the Sstc-derived condition). MSIP/MTIP/MEIP have no shadow at
+// all -- the CLINT's msip and mtimecmp and the IMSIC M file respectively,
 // matching real hardware where M-mode's own sources are never
-// software-injectable.
+// software-injectable. (MSIP was writable here once; Sail's legalize_mip
+// keeps it read-only, and with harts to interrupt each other the CLINT's
+// msip is the only way to raise it.)
 // Sscofpmf's LCOFI joins the software-settable shadow bits rather than
 // being computed from the mhpmevent OF bits.
 //
@@ -156,7 +157,7 @@ constexpr uint64_t MIP_MEIP = 1ull << 11;
 // impossible for a handler to clear the interrupt without also clearing the
 // overflow record it was about to read.
 constexpr uint64_t MIP_LCOFIP = 1ull << 13;
-constexpr uint64_t MIP_SHADOW_MASK = MIP_SSIP | MIP_MSIP | MIP_SEIP | MIP_STIP | MIP_LCOFIP;
+constexpr uint64_t MIP_SHADOW_MASK = MIP_SSIP | MIP_SEIP | MIP_STIP | MIP_LCOFIP;
 
 // VS-level interrupts. These live in mip/mie alongside the M and S ones,
 // and they are the mechanism by which a hypervisor makes a guest believe
@@ -260,8 +261,9 @@ bool vstip_from_sstc(Registers &regs, Memory &mem)
 uint64_t compute_mip(Registers &regs, Memory &mem)
 {
 	uint64_t raw = regs.read_csr(CSR_MIP) & MIP_SHADOW_MASK;
-	uint64_t mip = raw & (MIP_MSIP | MIP_SSIP);
+	uint64_t mip = raw & MIP_SSIP;
 
+	if (mem.get_timer().msip_pending()) mip |= MIP_MSIP;
 	if (mem.get_timer().mtip_pending()) mip |= MIP_MTIP;
 	if ((raw & MIP_STIP) || stip_from_sstc(regs, mem)) mip |= MIP_STIP;
 	if (mem.get_imsic_m().aggregate_pending()) mip |= MIP_MEIP;
