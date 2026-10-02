@@ -1204,8 +1204,9 @@ is as deterministic as any other -- two runs to the same step leave the same
 
 How far it goes: the multi-hart lock-step tests pass strictly against Sail
 on 2 to 256 harts (a 256-hart AMO test is six million matching records).
-Linux comes up with every CPU on 8, 16, 32 and 64 harts, in 95 s, 230 s,
-816 s and 37 minutes. The kernel is built for 4096 CPUs, past the 512 RISC-V's
+Linux comes up with every CPU on 8, 16, 32, 64 and 128 harts, in 95 s,
+230 s, 816 s, 37 minutes and two and a half hours (the last over two runs
+joined by a snapshot). The kernel is built for 4096 CPUs, past the 512 RISC-V's
 Kconfig allows (it was 64 while the console used the legacy SBI calls; see
 [bug 172](docs/BUGS.md#bug172)). OpenSBI is built for 4096 harts, as many as `-harts` can make (v1.3's
 default of 128 faulted at 256, in `imsic_map_hartid_to_data`), with the
