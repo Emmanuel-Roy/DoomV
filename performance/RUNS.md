@@ -401,3 +401,4 @@ and nothing else.
 | 20261001-235752 | linux 300M | multi-hart r2, 1 hart | c4f0129+ | 228.99 | 1.3 | `38c23122994c` |  |
 | 20261001-235753 | desktop 3000M | multi-hart r2, 1 hart (reference) | c4f0129+ | 250.44 | 12.0 | `35c61483d5e3` |  |
 | 20261001-235820 | desktop 3000M | multi-hart r2, 1 hart | c4f0129+ | 253.40 | 11.8 | `35c61483d5e3` |  |
+| 20261002-102227 | ubuntu 3000M | boot layout at 128MB | 63ad8cf+ | 167.44 | 17.9 | `317e8cd24ffc` |  |

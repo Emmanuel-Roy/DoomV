@@ -1,0 +1,16 @@
+{
+  "time": "20261002-102227",
+  "label": "boot layout at 128MB",
+  "workload": "ubuntu",
+  "steps": 3000000000,
+  "seconds": 17.917,
+  "restore_seconds": 0.0,
+  "mips": 167.441,
+  "crash_log_sha256": "317e8cd24ffca6e1ea39751356fcebb18a397323098b9e0b4506755c4969b3ce",
+  "exe": "Z:\\Code\\Dev\\DoomV\\riscv_doom.exe",
+  "exe_sha256": "37f760b3ddc09980533592d1c4d6a37fe9191cd29ba56b75dea2f53cf207304d",
+  "commit": "63ad8cf",
+  "dirty": true,
+  "host": "AMD64 Family 25 Model 97 Stepping 2, AuthenticAMD / Windows 10",
+  "profiled": false
+}
