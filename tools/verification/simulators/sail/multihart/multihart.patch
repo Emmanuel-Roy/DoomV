@@ -1,0 +1,168 @@
+diff -ruN a/c_emulator/CMakeLists.txt b/c_emulator/CMakeLists.txt
+--- a/c_emulator/CMakeLists.txt
++++ b/c_emulator/CMakeLists.txt
+@@ -110,6 +110,43 @@
+     gdb/triggers.h
+ )
+ 
++# DoomV patch: the multi-hart driver (tools/verification/simulators/sail/multihart).
++add_executable(sail_riscv_mh
++    sail_riscv_mh.cpp
++    riscv_sim.cpp
++    riscv_sim.h
++    cli_options.cpp
++    cli_options.h
++    rvfi_dii.cpp
++    rvfi_dii.h
++    riscv_callbacks_log.cpp
++    riscv_callbacks_log.h
++    riscv_callbacks_rvfi.cpp
++    riscv_callbacks_rvfi.h
++    traploop_detector.cpp
++    traploop_detector.h
++    gdb/gdb_run_info.h
++    gdb/gdbserver.cpp
++    gdb/gdbserver.h
++    gdb/connection.cpp
++    gdb/connection.h
++    gdb/parse_utils.h
++    gdb/parse_utils.cpp
++    gdb/protocol_handler.cpp
++    gdb/protocol_handler.h
++    gdb/requests.cpp
++    gdb/requests.h
++    gdb/responses.cpp
++    gdb/responses.h
++    gdb/target_regs.cpp
++    gdb/target_regs.h
++    gdb/triggers.cpp
++    gdb/triggers.h
++)
++add_dependencies(sail_riscv_mh generated_sail_riscv_model)
++target_link_libraries(sail_riscv_mh PRIVATE CLI11 riscv_model asio)
++target_include_directories(sail_riscv_mh PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
++
+ # The generated C model is not warnings-clean, silence them.
+ set(_generated_c_warning_opt_out
+     -Wno-extra
+diff -ruN a/c_emulator/riscv_model_impl.h b/c_emulator/riscv_model_impl.h
+--- a/c_emulator/riscv_model_impl.h
++++ b/c_emulator/riscv_model_impl.h
+@@ -115,6 +115,12 @@
+   void set_pc(uint64_t val);
+   void set_fcsr(uint64_t val);
+ 
++  // Multi-hart driver support (a DoomV patch): the model's own state, for
++  // the CLINT registers it holds per hart, and its platform side, for the
++  // clint_remote hook.
++  hart::Model &state() { return *this; }
++  PlatformInterface &platform() { return *this; }
++
+   // RVFI support
+ 
+   friend class rvfi_handler;
+diff -ruN a/c_emulator/riscv_platform_if.h b/c_emulator/riscv_platform_if.h
+--- a/c_emulator/riscv_platform_if.h
++++ b/c_emulator/riscv_platform_if.h
+@@ -3,6 +3,7 @@
+ #include "sail.h"
+ 
+ class callbacks_if;
++class PlatformInterface;
+ 
+ namespace hart {
+ 
+@@ -24,8 +25,33 @@
+ // b) This allows exposing the Model in the library without fixing
+ //    the Platform implementation.
+ 
++// Another hart's CLINT registers, for a driver that runs several models
++// over one memory (a DoomV patch; see clint_remote_claim in
++// model/sys/platform.sail). `self` is the model making the access; `offset`
++// is from the CLINT base.
++class ClintRemote {
++public:
++  virtual ~ClintRemote() = default;
++  virtual bool claim(PlatformInterface &self, uint64_t offset, uint64_t width, bool store) = 0;
++  virtual uint64_t read(PlatformInterface &self, uint64_t offset, uint64_t width) = 0;
++  virtual void write(PlatformInterface &self, uint64_t offset, uint64_t width, uint64_t value) = 0;
++};
++
+ class PlatformInterface {
+ public:
++  // Unset, no access is claimed and the model is the single hart it was.
++  ClintRemote *clint_remote = nullptr;
++  bool clint_remote_claim(uint64_t offset, uint64_t width, bool store) {
++    return clint_remote != nullptr && clint_remote->claim(*this, offset, width, store);
++  }
++  uint64_t clint_remote_read(uint64_t offset, uint64_t width) {
++    return clint_remote->read(*this, offset, width);
++  }
++  unit clint_remote_write(uint64_t offset, uint64_t width, uint64_t value) {
++    clint_remote->write(*this, offset, width, value);
++    return UNIT;
++  }
++
+   virtual unit fetch_callback(sbits opcode);
+ 
+   virtual unit mem_write_callback(const char *type, sbits paddr, int64_t width, lbits value);
+diff -ruN a/model/sys/platform.sail b/model/sys/platform.sail
+--- a/model/sys/platform.sail
++++ b/model/sys/platform.sail
+@@ -109,6 +109,18 @@
+ let MTIME_BASE       : physaddrbits = zero_extend(0x0bff8)
+ let MTIME_BASE_HI    : physaddrbits = zero_extend(0x0bffc)
+ 
++// Other harts' CLINT registers (a DoomV patch, for its multi-hart driver).
++//
++// The model is one hart, so above it decodes only that hart's own `msip` and
++// `mtimecmp`. These externs let a driver that runs several models over one
++// memory serve the rest of the array: `clint_remote_claim` says whether the
++// offset (from the CLINT base) and width name another hart's register, and
++// the other two read and write it. A single-hart driver claims nothing, so
++// the model behaves exactly as before.
++val clint_remote_claim = impure {cpp: "clint_remote_claim"} : (bits(64), bits(64), bool) -> bool
++val clint_remote_read  = impure {cpp: "clint_remote_read"}  : (bits(64), bits(64)) -> bits(64)
++val clint_remote_write = impure {cpp: "clint_remote_write"} : (bits(64), bits(64), bits(64)) -> unit
++
+ private val clint_load : forall 'n, 'n > 0. (MemoryAccessType(mem_payload), physaddr, int('n)) -> MemoryOpResult(bits(8 * 'n))
+ function clint_load(access, paddr, width) = {
+   let hart_msip_addr        = MSIP_BASE        + zero_extend(mhartid << 2);
+@@ -163,6 +175,20 @@
+     then print_log("clint[" ^ bits_str(addr) ^ "] -> " ^ bits_str(mtime));
+     Ok(zero_extend(32, mtime[63..32]))
+   }
++  else if 'n == 4 & clint_remote_claim(zero_extend(64, addr), 0x0000000000000004, false)
++  then {
++    let v = clint_remote_read(zero_extend(64, addr), 0x0000000000000004);
++    if   get_config_print_clint()
++    then print_log("clint<4>[" ^ bits_str(addr) ^ "] -> " ^ bits_str(v[31..0]) ^ " (other hart)");
++    Ok(v[31..0])
++  }
++  else if 'n == 8 & clint_remote_claim(zero_extend(64, addr), 0x0000000000000008, false)
++  then {
++    let v = clint_remote_read(zero_extend(64, addr), 0x0000000000000008);
++    if   get_config_print_clint()
++    then print_log("clint<8>[" ^ bits_str(addr) ^ "] -> " ^ bits_str(v) ^ " (other hart)");
++    Ok(v)
++  }
+   else {
+     if   get_config_print_clint()
+     then print_log("clint[" ^ bits_str(addr) ^ "] -> <not-mapped>");
+@@ -213,6 +239,16 @@
+     then print_log("clint<4>[" ^ bits_str(addr) ^ "] <- " ^ bits_str(data) ^ " (mtime)");
+     mtime[63 .. 32] = data;
+     Ok(true)
++  } else if 'n == 4 & clint_remote_claim(zero_extend(64, addr), 0x0000000000000004, true) then {
++    if   get_config_print_clint()
++    then print_log("clint<4>[" ^ bits_str(addr) ^ "] <- " ^ bits_str(data) ^ " (other hart)");
++    clint_remote_write(zero_extend(64, addr), 0x0000000000000004, zero_extend(64, data));
++    Ok(true)
++  } else if 'n == 8 & clint_remote_claim(zero_extend(64, addr), 0x0000000000000008, true) then {
++    if   get_config_print_clint()
++    then print_log("clint<8>[" ^ bits_str(addr) ^ "] <- " ^ bits_str(data) ^ " (other hart)");
++    clint_remote_write(zero_extend(64, addr), 0x0000000000000008, data);
++    Ok(true)
+   } else {
+     if   get_config_print_clint()
+     then print_log("clint[" ^ bits_str(addr) ^ "] <- " ^ bits_str(data) ^ " (<unmapped>)");
