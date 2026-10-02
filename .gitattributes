@@ -19,3 +19,6 @@
 *.S text eol=lf
 *.lds text eol=lf
 **/Makefile text eol=lf
+
+# Patches are applied in WSL to sources exported with LF endings.
+*.patch text eol=lf
