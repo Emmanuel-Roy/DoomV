@@ -133,7 +133,7 @@ mixed:    .dword 0, 0, -1, 0, -1, 0, 0
 .align 6
 lrsc:     .dword 0, 0
 .align 6
-own:      .fill 16 * 16, 1, 0
+own:      .fill NHARTS * 16, 1, 0
 .align 6
 arrived:  .dword 0
 .align 3

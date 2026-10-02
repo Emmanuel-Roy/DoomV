@@ -1,6 +1,7 @@
 #pragma once
 #include <cstdint>
 #include <vector>
+#include <memory>
 
 // One byte, so that it packs with the register fields in DecodedOp below.
 enum class Extension : uint8_t {
@@ -114,7 +115,10 @@ bool fp_rm_illegal(const DecodedOp &d, uint8_t frm);
 class Decoder {
 	friend class DoomSystem;
 public:
-	Decoder(RiscvCore &core, Registers &regs, Memory &mem);
+	// `share`: another hart's decoder, whose cache this one uses too. A decode
+	// depends on the instruction's bytes and the extension set alone, never on
+	// whose they are, and a cache is 24 MB -- one per hart was 6 GB at 256.
+	Decoder(RiscvCore &core, Registers &regs, Memory &mem, const Decoder *share = nullptr);
 
 	DispatchResult decode_and_dispatch(uint64_t pc, uint32_t raw_instr);
 	// What decode_and_dispatch would decode `raw` (as the history records
@@ -216,7 +220,9 @@ private:
 	static constexpr uint32_t CACHE_BITS = 19;
 	static constexpr uint32_t CACHE_SIZE = 1u << CACHE_BITS;
 	static constexpr uint32_t CACHE_MASK = CACHE_SIZE - 1;
-	std::vector<CacheEntry> cache;
+	struct Storage;
+	std::shared_ptr<Storage> storage;
+	std::vector<CacheEntry> &cache;
 	// The same decodes, as DoomSystem::run_fast reads them: 16 bytes instead of
 	// 32, at the same index, written whenever `cache` is. A 4-byte instruction
 	// took a whole 64-byte host cache line in `cache` (it is indexed by
@@ -238,8 +244,14 @@ private:
 		uint8_t pad;
 	};
 	static_assert(sizeof(FastEntry) == 16, "four fast entries to a host cache line");
-	std::vector<FastEntry> fast;
-	uint32_t cache_epoch = ~0u;   // the ExtensionsEpoch the cache holds decodes for
+	std::vector<FastEntry> &fast;
+	uint32_t &cache_epoch;   // the ExtensionsEpoch the cache holds decodes for
 	// The extension set changed: empty the cache.
 	void sync_extensions();
+};
+
+struct Decoder::Storage {
+	std::vector<CacheEntry> cache = std::vector<CacheEntry>(CACHE_SIZE);
+	std::vector<FastEntry> fast = std::vector<FastEntry>(CACHE_SIZE);
+	uint32_t epoch = ~0u;
 };

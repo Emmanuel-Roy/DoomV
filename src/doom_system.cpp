@@ -15,13 +15,15 @@
 #include <cstring>
 #include <fstream>
 #include <sstream>
+#include <iomanip>
 #include <cstdlib>
 #include <chrono>
 #include <thread>
 #include <vector>
 #include <sys/stat.h>
 
-DoomSystem::Hart::Hart(Memory &mem, unsigned id) : id(id), decoder(core, regs, mem), ext(Extensions)
+DoomSystem::Hart::Hart(Memory &mem, unsigned id, const Hart *first)
+	: id(id), decoder(core, regs, mem, first ? &first->decoder : nullptr), ext(Extensions)
 {
 	regs.write_csr(0xF14, id);   // mhartid
 	core.drop_fetch_page_ctx = this;
@@ -33,7 +35,7 @@ DoomSystem::Hart::Hart(Memory &mem, unsigned id) : id(id), decoder(core, regs, m
 
 DoomSystem::DoomSystem()
 {
-	harts.push_back(std::make_unique<Hart>(memory, 0));
+	harts.push_back(std::make_unique<Hart>(memory, 0, nullptr));
 	cur = harts[0].get();
 }
 
@@ -60,7 +62,7 @@ void DoomSystem::set_harts(unsigned n)
 {
 	cur = nullptr;
 	harts.clear();
-	for (unsigned h = 0; h < n; h++) harts.push_back(std::make_unique<Hart>(memory, h));
+	for (unsigned h = 0; h < n; h++) harts.push_back(std::make_unique<Hart>(memory, h, h ? harts[0].get() : nullptr));
 	memory.set_harts(n);
 	mmu_set_harts(n);
 	cur = harts[0].get();
@@ -118,30 +120,48 @@ void DoomSystem::run_round()
 
 // One hart's step in a round. While any other hart holds a reservation, the
 // stores this one makes are watched, so that they can end it.
+//
+// `reserved` counts the harts holding a reservation, so that asking whether
+// any other hart does costs the same at 256 harts as at 2. A hart's own
+// reservation changes only in its own step, and another's only in
+// stores_seen, which keeps the count as it goes.
 void DoomSystem::hart_slot()
 {
-	if (tracing) { traced_step(); return; }   // traced_step watches its own stores
-	if (!others_reserved()) { step(); return; }
-	std::vector<std::pair<uint64_t, uint8_t>> stored;
-	memory.store_log = &stored;
-	step();
-	memory.store_log = nullptr;
-	stores_seen(stored);
+	const bool had = cur->core.reservation_held();
+	if (tracing) {
+		traced_step();   // traced_step watches its own stores
+	} else if (!others_reserved()) {
+		step();
+	} else {
+		std::vector<std::pair<uint64_t, uint8_t>> stored;
+		memory.store_log = &stored;
+		step();
+		memory.store_log = nullptr;
+		stores_seen(stored);
+	}
+	const bool has = cur->core.reservation_held();
+	if (has != had) reserved += has ? 1 : -1;
 }
 
 bool DoomSystem::others_reserved() const
 {
-	for (const auto &h : harts)
-		if (h.get() != cur && h->core.reservation_held()) return true;
-	return false;
+	return reserved > (cur->core.reservation_held() ? 1u : 0u);
 }
 
 void DoomSystem::stores_seen(const std::vector<std::pair<uint64_t, uint8_t>> &stored)
 {
+	if (!others_reserved()) return;
 	for (const auto &h : harts) {
 		if (h.get() == cur || !h->core.reservation_held()) continue;
 		for (const auto &b : stored) h->core.store_by_other_hart(b.first, 1);
+		if (!h->core.reservation_held()) reserved--;
 	}
+}
+
+void DoomSystem::count_reservations()
+{
+	reserved = 0;
+	for (const auto &h : harts) reserved += h->core.reservation_held() ? 1 : 0;
 }
 
 static bool filtered_here(const Registers &regs, uint16_t cfg);
@@ -1336,6 +1356,16 @@ void DoomSystem::stop_at_limit()
 	debugger.halted = true;
 	console_drain();
 		debugger.dump_log(regs, memory, "crash.log");
+	// With several harts the log above is the hart that stepped last; every
+	// hart's place follows it.
+	if (multi) {
+		std::ofstream f("crash.log", std::ios::app);
+		f << std::hex << std::setfill('0');
+		for (const auto &h : harts)
+			f << "hart " << std::dec << h->id << std::hex << " pc " << std::setw(16) << h->regs.get_pc()
+			  << " priv " << (int)h->regs.get_priv() << " steps " << std::dec << h->steps
+			  << (h->waiting ? " waiting" : "") << std::hex << '\n';
+	}
 	std::cout << "stopped after instruction " << n << "; state in crash.log" << std::endl;
 	if (std::getenv("DOOMV_FASTSTATS")) {
 		std::printf("fast steps %llu (%.1f%%)\nslow at run entry (irq/state checks) %llu\nruns ended by irq deadline %llu\n"

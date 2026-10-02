@@ -1202,10 +1202,19 @@ timer interrupts and IPIs, and four shell loops run one on each. Such a boot
 is as deterministic as any other -- two runs to the same step leave the same
 `crash.log` -- and a snapshot of one restores to the same run.
 
+How far it goes: the multi-hart lock-step tests pass strictly against Sail
+on 2 to 256 harts (a 256-hart AMO test is six million matching records).
+Linux comes up with every CPU on 8, 16, 32 and 64 harts, in 95 s, 230 s,
+816 s and 37 minutes. Past 64 the boot is long rather than broken: hart 0
+parses OpenSBI's device tree in time that grows with the square of the hart
+count while getting one step in N. At 256 the pinned OpenSBI itself faults,
+in `imsic_map_hartid_to_data`: its generic platform is built for at most 128
+harts (`SBI_HARTMASK_MAX_BITS`).
+
 Not there yet: the harts are interpreted one step at a time, with no fast
 loop, so a machine of several harts runs several times slower per
-instruction than one; and `crash.log` holds the state of the hart that
-stepped last.
+instruction than one. With several harts, `crash.log` from `-stopat` ends
+with each hart's pc, privilege and step count.
 
 The core dispatches on a plain switch statement rather than a table of
 function pointers. I went in assuming function pointers would be the

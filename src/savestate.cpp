@@ -489,6 +489,7 @@ bool SaveState::restore(DoomSystem &s, const std::string &dir)
 	}
 	s.irq_key = ~0ull;
 	s.counter_key = ~0ull;
+	s.count_reservations();
 	// A -replay log runs on from here: what it delivered up to the snapshot's
 	// step is already in the machine.
 	const uint64_t now = memory.instruction_count();

@@ -143,7 +143,7 @@ interrupt:
 
 .section .data
 .align 6
-fired:      .fill 64, 1, 0
+fired:      .fill NHARTS, 1, 0
 .align 6
 flag:       .dword 0
 .align 6

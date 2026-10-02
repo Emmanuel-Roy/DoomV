@@ -7,8 +7,10 @@
 #include "extensions.hpp"
 #include <algorithm>
 
-Decoder::Decoder(RiscvCore &core, Registers &regs, Memory &mem)
-	: core(core), regs(regs), mem(mem), cache(CACHE_SIZE), fast(CACHE_SIZE)
+Decoder::Decoder(RiscvCore &core, Registers &regs, Memory &mem, const Decoder *share)
+	: core(core), regs(regs), mem(mem),
+	  storage(share ? share->storage : std::make_shared<Storage>()),
+	  cache(storage->cache), fast(storage->fast), cache_epoch(storage->epoch)
 {
 }
 

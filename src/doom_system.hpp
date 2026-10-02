@@ -300,7 +300,7 @@ private:
 	// work on `cur`, the hart being stepped, through local references named
 	// as the members once were (regs, core, decoder, fetch_cache).
 	struct Hart {
-		explicit Hart(Memory &mem, unsigned id);
+		Hart(Memory &mem, unsigned id, const Hart *first);
 		unsigned id;
 		Registers regs;
 		RiscvCore core;
@@ -341,6 +341,8 @@ private:
 	// A store this step made ends any other hart's reservation on it.
 	void stores_seen(const std::vector<std::pair<uint64_t, uint8_t>> &stored);
 	bool others_reserved() const;
+	unsigned reserved = 0;   // harts holding a reservation; see hart_slot
+	void count_reservations();
 
 	// lockstep.cpp
 	void traced_step();
