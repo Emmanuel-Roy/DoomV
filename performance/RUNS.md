@@ -385,3 +385,19 @@ and nothing else.
 | 20260930-201420 | linux 300M | Sail's misaligned split + reserved rm illegal, PGO, vs 1938684+progress | 4bf624e+ | 225.72 | 1.3 | `38c23122994c` |  |
 | 20260930-201421 | doom 1000M | Sail's misaligned split + reserved rm illegal, PGO, vs 1938684+progress (reference) | 4bf624e+ | 309.37 | 3.2 | `3d73dac132f3` |  |
 | 20260930-201425 | doom 1000M | Sail's misaligned split + reserved rm illegal, PGO, vs 1938684+progress | 4bf624e+ | 306.19 | 3.3 | `3d73dac132f3` |  |
+| 20261001-235231 | doom 1000M | multi-hart, 1 hart (reference) | c4f0129+ | 309.03 | 3.2 | `3d73dac132f3` |  |
+| 20261001-235234 | doom 1000M | multi-hart, 1 hart | c4f0129+ | 306.90 | 3.3 | `3d73dac132f3` |  |
+| 20261001-235237 | linux 300M | multi-hart, 1 hart (reference) | c4f0129+ | 226.94 | 1.3 | `38c23122994c` |  |
+| 20261001-235239 | linux 300M | multi-hart, 1 hart | c4f0129+ | 215.84 | 1.4 | `38c23122994c` |  |
+| 20261001-235240 | session 3000M | multi-hart, 1 hart (reference) | c4f0129+ | 75.34 | 39.8 | `d749ffd00dac` |  |
+| 20261001-235334 | session 3000M | multi-hart, 1 hart | c4f0129+ | 75.25 | 39.9 | `d749ffd00dac` |  |
+| 20261001-235424 | desktop 3000M | multi-hart, 1 hart (reference) | c4f0129+ | 258.42 | 11.6 | `35c61483d5e3` |  |
+| 20261001-235458 | desktop 3000M | multi-hart, 1 hart | c4f0129+ | 248.57 | 12.1 | `35c61483d5e3` |  |
+| 20261001-235702 | linux 300M | multi-hart r2, 1 hart (reference) | c4f0129+ | 227.23 | 1.3 | `38c23122994c` |  |
+| 20261001-235703 | linux 300M | multi-hart r2, 1 hart | c4f0129+ | 217.67 | 1.4 | `38c23122994c` |  |
+| 20261001-235705 | desktop 3000M | multi-hart r2, 1 hart (reference) | c4f0129+ | 257.55 | 11.6 | `35c61483d5e3` |  |
+| 20261001-235728 | desktop 3000M | multi-hart r2, 1 hart | c4f0129+ | 252.69 | 11.9 | `35c61483d5e3` |  |
+| 20261001-235751 | linux 300M | multi-hart r2, 1 hart (reference) | c4f0129+ | 227.11 | 1.3 | `38c23122994c` |  |
+| 20261001-235752 | linux 300M | multi-hart r2, 1 hart | c4f0129+ | 228.99 | 1.3 | `38c23122994c` |  |
+| 20261001-235753 | desktop 3000M | multi-hart r2, 1 hart (reference) | c4f0129+ | 250.44 | 12.0 | `35c61483d5e3` |  |
+| 20261001-235820 | desktop 3000M | multi-hart r2, 1 hart | c4f0129+ | 253.40 | 11.8 | `35c61483d5e3` |  |
