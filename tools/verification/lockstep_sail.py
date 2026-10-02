@@ -10,6 +10,11 @@ instruction and field where DoomV and the reference parted ways.
     python tools/verification/lockstep_sail.py              # every rv64 test
     python tools/verification/lockstep_sail.py rv64ui-p-add rv64mi-p-illegal
     python tools/verification/lockstep_sail.py --jobs 8 --keep
+    python tools/verification/lockstep_sail.py --multihart  # only the multi-hart tests
+
+The tests in tests/lockstep/multihart run on machines of several harts: Sail
+as tools/verification/simulators/sail/multihart's sail_riscv_mh --harts N,
+DoomV as -harts=N. Each is built and run once per count in --harts.
 """
 import argparse
 import concurrent.futures
@@ -45,6 +50,16 @@ def wsl(path: pathlib.Path) -> str:
 # check.
 LOCKSTEP_TESTS = ROOT / "tools" / "verification" / "tests" / "lockstep"
 LOCKSTEP_ELFS = ROOT / "build" / "lockstep-elf"
+MULTIHART_TESTS = LOCKSTEP_TESTS / "multihart"
+WSL_SAIL_MH = wsl(ROOT / "tools" / "verification" / "simulators" / "sail" / "multihart"
+                  / "build" / "cmake" / "c_emulator" / "sail_riscv_mh")
+
+
+def compile_test(source: pathlib.Path, elf: pathlib.Path, defines=()):
+    subprocess.run(["wsl", "-d", "Ubuntu", "-u", "root", "--", "riscv64-unknown-elf-gcc",
+                    "-march=rv64ima_zicsr", "-mabi=lp64", "-nostdlib", "-static",
+                    "-Wl,-N", "-Wl,-Ttext=0x80000000", "-Wl,--no-relax"] + list(defines)
+                   + ["-o", wsl(elf), wsl(source)], check=True, env=run_suite._env())
 
 
 def build_lockstep_tests() -> dict:
@@ -52,21 +67,32 @@ def build_lockstep_tests() -> dict:
     built = {}
     for source in sorted(LOCKSTEP_TESTS.glob("*.S")):
         elf = LOCKSTEP_ELFS / source.stem
-        subprocess.run(["wsl", "-d", "Ubuntu", "-u", "root", "--", "riscv64-unknown-elf-gcc",
-                        "-march=rv64ima_zicsr", "-mabi=lp64", "-nostdlib", "-static",
-                        "-Wl,-N", "-Wl,-Ttext=0x80000000", "-Wl,--no-relax",
-                        "-o", wsl(elf), wsl(source)], check=True, env=run_suite._env())
-        built[elf.name] = elf
+        compile_test(source, elf)
+        built[elf.name] = (elf, 1)
     return built
 
 
-def one(elf: pathlib.Path, config: pathlib.Path, keep: bool, timeout: int):
+# A multi-hart test is built once per hart count, as <name>-h<N>, with NHARTS
+# defined; the count is what both simulators are then run with.
+def build_multihart_tests(counts) -> dict:
+    LOCKSTEP_ELFS.mkdir(parents=True, exist_ok=True)
+    built = {}
+    for source in sorted(MULTIHART_TESTS.glob("*.S")):
+        for n in counts:
+            elf = LOCKSTEP_ELFS / f"{source.stem}-h{n}"
+            compile_test(source, elf, [f"-DNHARTS={n}"])
+            built[elf.name] = (elf, n)
+    return built
+
+
+def one(elf: pathlib.Path, harts: int, config: pathlib.Path, keep: bool, timeout: int):
     work = WORK / elf.name
     shutil.rmtree(work, ignore_errors=True)
     work.mkdir(parents=True)
     trace = work / "sail.log"
 
-    sail = subprocess.run(["wsl", "-d", "Ubuntu", "-u", "root", "--", run_suite.WSL_SAIL, "--config", wsl(config)]
+    sail_cmd = [run_suite.WSL_SAIL] if harts == 1 else [WSL_SAIL_MH, "--harts", str(harts)]
+    sail = subprocess.run(["wsl", "-d", "Ubuntu", "-u", "root", "--"] + sail_cmd + ["--config", wsl(config)]
                           + SAIL_FLAGS + ["--trace-output", wsl(trace), wsl(elf)],
                           capture_output=True, text=True, timeout=timeout, env=run_suite._env())
     if "SUCCESS" not in (sail.stdout or "") + (sail.stderr or ""):
@@ -77,6 +103,8 @@ def one(elf: pathlib.Path, config: pathlib.Path, keep: bool, timeout: int):
     cmd = [str(ROOT / "riscv_doom.exe"), "-ng", str(ROOT / "tools" / "doom" / "doombuild" / "DOOM1.WAD"), str(elf),
            "-march=" + run_suite.SUITE_MARCH, "-tohost={:x}".format(syms["tohost"]),
            "-lockstep=" + str(trace), "-lockstep-strict", "-stopat=100000000"]
+    if harts > 1:
+        cmd.append(f"-harts={harts}")
     try:
         r = subprocess.run(cmd, cwd=work, capture_output=True, text=True, timeout=timeout)
         out = (r.stdout or "") + (r.stderr or "")
@@ -102,21 +130,26 @@ def main():
     ap.add_argument("--jobs", type=int, default=8)
     ap.add_argument("--keep", action="store_true", help="keep traces of passing tests")
     ap.add_argument("--timeout", type=int, default=300)
+    ap.add_argument("--harts", default="2,4", help="hart counts for the multi-hart tests (default 2,4)")
+    ap.add_argument("--multihart", action="store_true", help="run only the multi-hart tests")
     args = ap.parse_args()
 
     own = build_lockstep_tests()
+    own.update(build_multihart_tests([int(n) for n in args.harts.split(",")]))
     if args.tests:
-        elfs = [own.get(t, TESTS / t) for t in args.tests]
+        elfs = [own.get(t, (TESTS / t, 1)) for t in args.tests]
+    elif args.multihart:
+        elfs = [v for v in own.values() if v[1] > 1]
     else:
-        elfs = sorted(p for p in TESTS.iterdir()
-                      if re.match(r"rv64[a-z]+-[pv]-", p.name) and p.is_file() and not p.suffix)
+        elfs = [(p, 1) for p in sorted(TESTS.iterdir())
+                if re.match(r"rv64[a-z]+-[pv]-", p.name) and p.is_file() and not p.suffix]
         elfs += list(own.values())
     WORK.mkdir(parents=True, exist_ok=True)
     config = SAIL_CONFIG
 
     results = {"pass": [], "fail": [], "skip": []}
     with concurrent.futures.ThreadPoolExecutor(args.jobs) as pool:
-        for name, status, detail in pool.map(lambda e: one(e, config, args.keep, args.timeout), elfs):
+        for name, status, detail in pool.map(lambda e: one(e[0], e[1], config, args.keep, args.timeout), elfs):
             results[status].append((name, detail))
             if status == "fail":
                 print(f"FAIL {name}\n  " + detail.replace("\n", "\n  "), flush=True)
