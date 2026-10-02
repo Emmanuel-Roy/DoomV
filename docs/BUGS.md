@@ -7163,3 +7163,23 @@ the project needed to set it. The guest can: Sail's CLINT accepts both
 halves, and a write moves the time every hart reads. A write can move it
 backwards, which the interrupt check had assumed never happens -- it now
 counts as an event, as an `mtimecmp` write does.
+
+<a id="bug172"></a>
+### 172. The console's workaround capped Linux at 64 CPUs
+
+[Bug 18](#bug18) gave the console back by enabling `CONFIG_RISCV_SBI_V01`, the
+legacy SBI calls, because OpenSBI v1.3 reports SBI 1.0 and Linux only uses
+the DBCN console under 2.0. With several harts that had a second cost:
+`arch/riscv/Kconfig` limits `NR_CPUS` to 64 while `RISCV_SBI_V01` is on, so a
+128-hart machine booted Linux on 64 CPUs and left the rest parked ("Invalid
+cpuid [64] for hartid [64]", once per hart).
+
+The cause bug 18 named is fixed at its source instead: the build has the
+pinned OpenSBI report SBI 2.0 (`scripts/build_linux.sh`). v1.3 already
+implements the one 2.0 extension the console needs, DBCN; Linux probes each
+of the others before using it -- steal-time and suspend probe, the PMU
+driver's snapshot falls back -- so what v1.3 lacks is found missing rather
+than called. `RISCV_SBI_V01` is off, and `NR_CPUS` is 4096 -- every hart
+DoomV's CLINT serves -- in a copy of `arch/riscv/Kconfig` widened from its
+512; the generic kernel goes to 8192.
+

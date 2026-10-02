@@ -31,6 +31,15 @@ sed -i 's/^#define SBI_PLATFORM_DEFAULT_HART_STACK_SIZE\t[0-9]*$/#define SBI_PLA
 grep -qP 'SBI_SCRATCH_SIZE\t\t\t\(0x2000\)' "$SBI/include/sbi/sbi_scratch.h" \
     && grep -qP 'HART_STACK_SIZE\t16384' "$SBI/include/sbi/sbi_platform.h" \
     || { echo "could not resize OpenSBI's per-hart areas" >&2; exit 1; }
+# v1.3 implements the SBI debug console (DBCN) but reports spec 1.0, and
+# Linux only looks for DBCN under 2.0 or later, so the console used to need
+# the legacy SBI v0.1 calls -- which cap Linux at 64 CPUs. It reports 2.0
+# instead. Linux probes every 2.0 extension before using it, so what v1.3
+# lacks (steal-time, PMU snapshots) is found missing, not called.
+sed -i 's/^#define SBI_ECALL_VERSION_MAJOR\t\t[0-9]*$/#define SBI_ECALL_VERSION_MAJOR\t\t2/' \
+    "$SBI/include/sbi/sbi_ecall.h"
+grep -qP 'SBI_ECALL_VERSION_MAJOR\t\t2$' "$SBI/include/sbi/sbi_ecall.h" \
+    || { echo "could not set OpenSBI's reported SBI version" >&2; exit 1; }
 # Each hart the device tree names then costs OpenSBI ~18KB after its image
 # (stack and scratch, and its share of the heap): 72MB for 4096 harts, so the
 # kernel cannot sit at the default 2MB. 128MB leaves room; the FDT follows the
@@ -67,14 +76,21 @@ make -C "$KERNEL" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- defconfig
 # to and the kernel settles for "Console: colour dummy device 80x25" -- a
 # console that exists and displays nowhere. These three give fbcon a real
 # device, which is what puts Linux in the DoomV window.
-"$KERNEL/scripts/config" --file "$KERNEL/.config" --enable RISCV_SBI_V01 \
+# NR_CPUS: 4096, as many as the machine can have -- DoomV's CLINT serves
+# harts 0..4094, and OpenSBI is built for 4096 above. arch/riscv/Kconfig stops
+# at 512, so the build's copy of it is widened; the generic kernel goes to
+# 8192 (x86's MAXSMP). Per-CPU data is allocated for the CPUs the device tree
+# names, so a one-hart boot does not pay for the rest. NR_CPUS above 64 needs
+# RISCV_SBI_V01 off, and the console then goes through SBI DBCN, which is why
+# OpenSBI reports spec 2.0 (see the OpenSBI step above, and docs/BUGS.md
+# bugs 18 and 172).
+sed -i 's/^	range 2 [0-9]* if !RISCV_SBI_V01$/	range 2 4096 if !RISCV_SBI_V01/' "$KERNEL/arch/riscv/Kconfig"
+grep -qP '^	range 2 4096 if !RISCV_SBI_V01$' "$KERNEL/arch/riscv/Kconfig"     || { echo "could not widen NR_CPUS in arch/riscv/Kconfig" >&2; exit 1; }
+"$KERNEL/scripts/config" --file "$KERNEL/.config" --disable RISCV_SBI_V01 \
     --enable NONPORTABLE --enable HVC_RISCV_SBI --enable BLK_DEV_INITRD --enable BINFMT_SCRIPT \
     --enable FB --enable FB_SIMPLE --enable FRAMEBUFFER_CONSOLE \
-    --enable MAGIC_SYSRQ --enable VIRTIO_INPUT --enable INPUT_EVDEV
-# NR_CPUS stays at 64: arch/riscv/Kconfig allows up to 512, but only 64 with
-# RISCV_SBI_V01, which HVC_RISCV_SBI (the hvc0 console every boot uses)
-# needs. On a machine of more harts (-harts=N) Linux runs on 64 and leaves
-# the rest stopped in OpenSBI.
+    --enable MAGIC_SYSRQ --enable VIRTIO_INPUT --enable INPUT_EVDEV \
+    --set-val NR_CPUS 4096
 make -C "$KERNEL" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- olddefconfig
 make -C "$KERNEL" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- Image -j"$JOBS"
 cp "$KERNEL/arch/riscv/boot/Image" "$OUT/Image"

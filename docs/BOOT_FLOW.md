@@ -194,7 +194,7 @@ The kernel options enabled on top of `defconfig`, and what each is for:
 
 | Option | Needed for |
 |---|---|
-| `RISCV_SBI_V01` | The legacy SBI console calls this OpenSBI's reported version leads Linux to use |
+| `RISCV_SBI_V01` off, `NR_CPUS=4096` | Up to 4096 CPUs, as many harts as DoomV can have (the build widens `arch/riscv/Kconfig`'s 512); the legacy SBI calls would cap it at 64. The console goes through SBI DBCN instead, which OpenSBI reports as SBI 2.0 for (see [bug 172](BUGS.md#bug172)) |
 | `NONPORTABLE`, `HVC_RISCV_SBI` | `hvc0`; Kconfig does not offer the second without the first |
 | `BLK_DEV_INITRD`, `BINFMT_SCRIPT` | The initramfs, and a shell script as init |
 | `FB`, `FB_SIMPLE`, `FRAMEBUFFER_CONSOLE` | The `simple-framebuffer` console on tty0 |
@@ -295,7 +295,7 @@ The larger timebase avoids a feedback problem recorded in [BUGS.md](BUGS.md): if
 
 When AIA is advertised, the local interrupt driver reads `stopi` to discover the pending local cause. For external interrupt delivery it then reaches the IMSIC identity level via `stopei`/indirect registers. A timer interrupt is a local cause, not an APLIC source. Implementing only the external identity registers does not satisfy the local dispatcher.
 
-The console uses `earlycon=sbi console=tty0 console=hvc0`. Both regular consoles are registered, so kernel messages reach the framebuffer and the SBI serial; the last one named becomes `/dev/console`, which puts the initramfs shell on hvc0, where scripts can drive it. Early and regular console phases are different drivers; seeing early text does not prove the later console exists. This pinned firmware's reported SBI version leads the documented kernel setup to use legacy SBI v0.1 console calls. `CONFIG_RISCV_SBI_V01` supports that path; `CONFIG_HVC_RISCV_SBI` supplies hvc0. The latter also requires its Kconfig prerequisites.
+The console uses `earlycon=sbi console=tty0 console=hvc0`. Both regular consoles are registered, so kernel messages reach the framebuffer and the SBI serial; the last one named becomes `/dev/console`, which puts the initramfs shell on hvc0, where scripts can drive it. Early and regular console phases are different drivers; seeing early text does not prove the later console exists. Both go through SBI DBCN, the debug console extension: the build has the pinned OpenSBI report SBI 2.0, which Linux requires before it looks for DBCN (it used the legacy v0.1 calls before, and they cap Linux at 64 CPUs). `CONFIG_HVC_RISCV_SBI` supplies hvc0. The latter also requires its Kconfig prerequisites.
 
 For output, Linux asks firmware through ECALL; firmware writes the polled UART; the host prints stdout. For hvc0 input, SDL keypresses are also translated into UART RX bytes, which firmware's polled receive returns through SBI; the UART has no interrupt wire in this model or DTS. tty0 takes its keys from the virtio keyboard instead, as evdev events that arrive by interrupt. DOOM key events and Linux console characters use different queues and encodings.
 
