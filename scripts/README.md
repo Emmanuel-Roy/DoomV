@@ -28,6 +28,7 @@ to exit. `python scripts/boot.py <guest> --help` lists everything a guest takes.
 |---|---|
 | `--ram 4G` | Guest memory (default 1G). DOOM is capped near 2G. |
 | `--harts 4` | CPUs, 1 to 4095 (Linux and Ubuntu). The device tree is made to match. |
+| `--net` | A network card (Linux and Ubuntu); the guest reaches the internet through the host. |
 | `--headless` | No window; output goes to the console. |
 | `--no-build` | Use what is already built. |
 
@@ -44,6 +45,7 @@ python scripts/boot.py ubuntu --no-autologin       # stop at the login prompt (r
 python scripts/boot.py ubuntu --desktop xfce       # boot into a desktop: xfce, openbox or x
 python scripts/boot.py ubuntu --desktop-snapshot   # the booted XFCE desktop, in seconds
 python scripts/boot.py ubuntu --install-desktops   # once, before --desktop (hours)
+python scripts/boot.py ubuntu --setup-network      # once, before --net, for an image made before networking
 ```
 
 `--desktop` boots from scratch, about 25 minutes to a usable desktop.
@@ -91,7 +93,11 @@ python performance/pgo.py                      # retrain the speed profile after
 The first build also trains a profile-guided build (a few minutes); `--no-pgo`
 skips it.
 
-## Disks and the shared folder
+## Network, disks and the shared folder
+
+With `--net`, BusyBox Linux gets its address from `udhcpc -i eth0` and Ubuntu
+by itself at boot. The guest is `10.0.2.15`; the host is `10.0.2.2`. See
+[Networking](../README.md#networking).
 
 ```powershell
 python scripts/mkdrive.py data 1G    # every *.img in drives/ is attached to Linux and Ubuntu

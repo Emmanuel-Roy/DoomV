@@ -109,6 +109,10 @@ make -C "$BUSYBOX" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- CONFIG_PREFIX="$S
 mkdir -p "$STAGE/dev" "$STAGE/proc" "$STAGE/sys" "$STAGE/tmp"
 mknod -m 600 "$STAGE/dev/console" c 5 1
 mknod -m 666 "$STAGE/dev/null" c 1 3
+# With -net, `udhcpc -i eth0` configures the network card: BusyBox's own
+# example script sets the address, the route and /etc/resolv.conf.
+mkdir -p "$STAGE/etc" "$STAGE/usr/share/udhcpc"
+install -m 755 "$BUSYBOX/examples/udhcp/simple.script" "$STAGE/usr/share/udhcpc/default.script"
 cp "$ROOT/scripts/linux_smoke_init.sh" "$STAGE/doomv-smoke"
 chmod 755 "$STAGE/doomv-smoke"
 (cd "$STAGE" && find . -print0 | sort -z | cpio --null -o --format=newc --owner=0:0) > "$OUT/smoke.cpio"

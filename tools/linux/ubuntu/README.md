@@ -191,6 +191,16 @@ python scripts/boot.py ubuntu --desktop x          # bare X: xterm windows, no w
 
 Plain `boot.py ubuntu`, without `--desktop`, is the text console as before.
 
+**Networking.** `boot.py ubuntu --net` boots with a network card, and
+systemd-networkd takes an address by DHCP. Images made by `mkrootfs.sh` are
+set up for it; an image made before that needs it once, which
+`mknetwork.sh` does from the host (DHCP on any Ethernet card, networkd
+enabled, `/etc/resolv.conf` naming `10.0.2.3`):
+
+```
+python scripts/boot.py ubuntu --setup-network
+```
+
 **Installing** follows the same split as building the image. On the host,
 `mkdesktop.sh` downloads the riscv64 packages -- 270 of them, about 124 MB --
 into the image as a local apt repository, and writes the X configuration,

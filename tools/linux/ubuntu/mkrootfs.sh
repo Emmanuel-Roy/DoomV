@@ -206,9 +206,21 @@ if [ "$rc" = 0 ]; then
 	for t in hvc0 tty1; do
 		grep -qx "$t" /etc/securetty 2>/dev/null || echo "$t" >> /etc/securetty
 	done
-	# No NIC in this machine, so this unit would block the boot for two
-	# minutes waiting for a link that never comes up.
+	# The network card is optional (-net), so this unit would block a boot
+	# without one for two minutes waiting for a link that never comes up.
 	systemctl disable systemd-networkd-wait-online.service 2>/dev/null || true
+	# With a card, DHCP from DoomV's user-mode NAT; see mknetwork.sh, which
+	# does the same for an image made before this.
+	mkdir -p /etc/systemd/network
+	printf '[Match]
+Name=e*
+
+[Network]
+DHCP=ipv4
+' > /etc/systemd/network/20-doomv.network
+	systemctl enable systemd-networkd.service 2>/dev/null || true
+	rm -f /etc/resolv.conf
+	echo "nameserver 10.0.2.3" > /etc/resolv.conf
 	# A login prompt on the framebuffer, which is the whole point of having
 	# one. getty-static.service covers tty2-tty6 "if dbus and logind are not
 	# available" -- tty1 is normally logind's job through autovt, and there

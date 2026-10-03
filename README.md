@@ -327,9 +327,13 @@ src/
   debugger.*             breakpoints, halt conditions, crash/signature dumps
   gui.*                  the SDL window, framebuffer scaling, and the debug dashboard
   uart.*                 8250-compatible serial, which is the SBI console
-  virtio_blk.*           virtio-blk over MMIO: the root disk and the storage drives
-  virtio_input.*         virtio-input over MMIO: the keyboard and the mouse
-  virtio_9p.*            virtio-9p over MMIO: a 9P2000.L file server for the shared folder
+  virtio/                one file per virtio device, over one shared transport:
+    virtio_mmio.*          the MMIO transport and virtqueues every device uses
+    virtio_blk.*           the root disk and the storage drives
+    virtio_input.*         the keyboard and the mouse
+    virtio_9p.*            a 9P2000.L file server for the shared folder
+    virtio_net.*           the network card
+  net/usernet.*          user-mode NAT behind the network card
   timer.* aplic.* imsic.*  CLINT timer and the AIA interrupt controllers
   mmu.* pmp.*            Sv39/48/57 translation with a TLB, and the PMP
 ```
@@ -514,6 +518,7 @@ riscv_doom.exe -opensbi=<f> -kernel=<f> -dtb=<f> -initrd=<f> [options]   # Linux
 | `-trace=<path>` | Write a trace of every instruction, register and CSR write, store and trap, in Sail's trace format. |
 | `-lockstep=<path>` | Run against a reference trace -- Sail's, or an RTL simulation's -- and halt at the first record that does not match. See [Lock-stepping](#lockstep). |
 | `-lockstep-strict` | With `-lockstep`, compare everything, counters, time and interrupt timing included, and take nothing from the reference. How DoomV is held to Sail. |
+| `-net` | A network card, with user-mode NAT behind it: the guest reaches the internet through the host. See [Networking](#networking). |
 | `-harts=<n>` | A machine of `n` identical harts (default 1), each starting at the entry with `a0` = its hart id. They take turns a step at a time, so a run is as deterministic as with one. See [Several harts](#harts). |
 
 `-ng` is what makes the conformance suites practical. With a window open a
@@ -680,6 +685,31 @@ wheel 1
 sleep 500       # 500 x 10,000 instructions: about half a host second
 wait 2M         # two million instructions (k, M, G)
 ```
+
+<a id="networking"></a>
+### Networking
+
+`-net` (or `boot.py linux --net`, `boot.py ubuntu --net`) gives the guest a
+virtio-net card and a network behind it made of ordinary host sockets -- no
+driver, no administrator, the same idea as QEMU's user-mode network. The
+guest sees `10.0.2.15` (by DHCP), a gateway at `10.0.2.2` that is the host
+itself, and a DNS server at `10.0.2.3` that asks the host's own. TCP, UDP,
+DNS and ping all work; there is no port forwarding yet, so nothing outside
+can connect in.
+
+```
+python scripts/boot.py linux --net          # then, at the shell: udhcpc -i eth0
+python scripts/boot.py ubuntu --setup-network   # once, for an image made before this
+python scripts/boot.py ubuntu --net         # DHCP at boot; apt works
+```
+
+The network is outside the machine, like a keyboard: what arrives, and when,
+is not repeatable by nature. So incoming frames enter the guest only at the
+same instruction counts typed keys do, `-record` logs every one, and
+`-replay` delivers them again with no network at all -- a recorded session
+replays to the same machine state. Without `-net` the card is not there
+(device id 0) and nothing changes. A snapshot keeps the card and the frames
+in flight, not the connections.
 
 <a id="drives"></a>
 ### Storage drives

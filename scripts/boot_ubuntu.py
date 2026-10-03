@@ -4,6 +4,7 @@
   python scripts/boot.py ubuntu                       # window; logs in as root
   python scripts/boot.py ubuntu --desktop xfce        # boot into a desktop
   python scripts/boot.py ubuntu --desktop-snapshot    # the booted XFCE desktop, in seconds
+  python scripts/boot.py ubuntu --net                 # with a network (once: --setup-network)
   python scripts/boot.py ubuntu --login               # test: log in, run a command, exit
 
 The image is an input: it takes hours to build, so this script never builds
@@ -252,7 +253,8 @@ def desktop_snapshot_command(image: Path, snapshot: Path, args, passthrough):
         raise RuntimeError(f"No desktop snapshot at {snapshot}. Make it once (about 25 minutes):\n"
                            "    python performance/make_desktop_snapshot.py")
     changed = [name for name in ("ram", "march", "restore", "drives", "shared")
-               if getattr(args, name) not in (None, "")] + (["harts"] if args.harts != 1 else [])
+               if getattr(args, name) not in (None, "")] + (["harts"] if args.harts != 1 else []) \
+              + (["net"] if args.net else [])
     if changed:
         raise RuntimeError("--desktop-snapshot restores the machine the snapshot was made on; "
                            "it cannot take --" + ", --".join(changed))
@@ -273,6 +275,8 @@ def main():
     u.add_argument("--no-autologin", action="store_true", help="stop at the login prompt (root / doomv)")
     u.add_argument("--install-desktops", action="store_true",
                    help="install all three desktops into the image, once (hours)")
+    u.add_argument("--setup-network", action="store_true",
+                   help="set the image up for --net (DHCP, DNS), once; images made since need not")
     add_boot_options(parser)
     t = parser.add_argument_group("test")
     t.add_argument("--login", action="store_true", help="headless: log in, run a command, exit")
@@ -292,6 +296,12 @@ def main():
             wsl_script("build_linux.sh")
         if args.install_desktops:
             install_desktops(image, args.install_timeout, boot_args(args, passthrough))
+            return 0
+        if args.setup_network:
+            if emulator_running():
+                raise RuntimeError("A DoomV is already running; close it before changing the image.")
+            run(["wsl.exe", "-d", "Ubuntu", "-u", "root", "--", "bash",
+                 wsl_path(ROOT / "tools/linux/ubuntu/mknetwork.sh"), wsl_path(image)])
             return 0
         if args.login:
             login_test(image, args.timeout, boot_args(args, passthrough), args.harts)

@@ -411,5 +411,16 @@
 			interrupt-parent = <&aplic>;
 			interrupts = <12 4>;
 		};
+
+		// The network card, virtio-net (src/virtio/virtio_net.cpp). Always
+		// declared; without -net it answers device id 0 and Linux skips it,
+		// as it does an empty drive slot. With it, eth0 gets 10.0.2.15 by
+		// DHCP from the user-mode NAT (src/net/usernet.cpp).
+		virtio_mmio@1010b000 {
+			compatible = "virtio,mmio";
+			reg = <0x0 0x1010b000 0x0 0x1000>;
+			interrupt-parent = <&aplic>;
+			interrupts = <13 4>;
+		};
 	};
 };

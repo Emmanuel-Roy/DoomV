@@ -44,8 +44,8 @@ constexpr char MAGIC[8] = {'D', 'O', 'O', 'M', 'V', 'S', 'N', 'P'};
 // Bumped whenever the layout below changes. A build reads the layout it
 // writes, and the ones before it that it still knows: version 1 is the
 // single-hart layout, from before a machine could have several harts, and
-// reads as a machine of one.
-constexpr uint32_t VERSION = 2;
+// reads as a machine of one; version 2 has no network card.
+constexpr uint32_t VERSION = 3;
 
 class Writer {
 public:
@@ -211,13 +211,45 @@ struct SaveState {
 		io.pod(b.device_feat_sel);
 		io.pod(b.driver_feat_sel);
 		io.pod(b.driver_feat);
-		io.pod(b.queue_num);
-		io.pod(b.queue_ready);
+		io.pod(b.queues[0].num);
+		io.pod(b.queues[0].ready);
 		io.pod(b.interrupt_status);
-		io.pod(b.desc_addr);
-		io.pod(b.avail_addr);
-		io.pod(b.used_addr);
-		io.pod(b.last_avail);
+		io.pod(b.queues[0].desc);
+		io.pod(b.queues[0].avail);
+		io.pod(b.queues[0].used);
+		io.pod(b.queues[0].last_avail);
+	}
+
+	// Version 3 on. The frames waiting for the guest are part of the machine;
+	// the network behind the card is not, and a restored run starts with no
+	// connections open.
+	template <class IO> static void net(IO &io, VirtioNet &n)
+	{
+		io.pod(n.status);
+		io.pod(n.device_feat_sel);
+		io.pod(n.driver_feat_sel);
+		io.pod(n.driver_feat);
+		io.pod(n.queue_sel);
+		io.pod(n.interrupt_status);
+		io.pod(n.queues);
+		uint64_t count = n.rx_pending.size();
+		io.pod(count);
+		if constexpr (std::is_same_v<IO, Writer>) {
+			for (const auto &f : n.rx_pending) {
+				uint64_t size = f.size();
+				io.pod(size);
+				io.bytes(f.data(), f.size());
+			}
+		} else {
+			n.rx_pending.clear();
+			for (uint64_t i = 0; i < count && io.ok(); i++) {
+				const uint64_t size = io.template get<uint64_t>();
+				if (size > VirtioNet::MAX_FRAME) { io.fail(); return; }
+				std::vector<uint8_t> f(size);
+				io.bytes(f.data(), size);
+				n.rx_pending.push_back(std::move(f));
+			}
+		}
 	}
 
 	template <class IO> static void share(IO &io, Virtio9p &s)
@@ -225,13 +257,13 @@ struct SaveState {
 		io.pod(s.status);
 		io.pod(s.device_feat_sel);
 		io.pod(s.queue_sel);
-		io.pod(s.queue_num);
-		io.pod(s.queue_ready);
+		io.pod(s.queues[0].num);
+		io.pod(s.queues[0].ready);
 		io.pod(s.interrupt_status);
-		io.pod(s.desc_addr);
-		io.pod(s.avail_addr);
-		io.pod(s.used_addr);
-		io.pod(s.last_avail);
+		io.pod(s.queues[0].desc);
+		io.pod(s.queues[0].avail);
+		io.pod(s.queues[0].used);
+		io.pod(s.queues[0].last_avail);
 		io.pod(s.msize);
 		io.pod(s.guest_ns);
 		io.pod(s.next_id);
@@ -307,6 +339,7 @@ struct SaveState {
 		blk(io, m.disk);
 		for (VirtioBlk &d : m.drives) blk(io, d);
 		share(io, m.share);
+		if (version >= 3) net(io, m.net);
 		io.mark(0x44455600);   // "DEV"
 	}
 
@@ -407,6 +440,8 @@ bool SaveState::save(DoomSystem &s, const std::string &dir)
 	w.pod(sh);
 	const uint32_t harts = s.hart_count();
 	w.pod(harts);
+	const uint8_t net = memory.net.is_connected();
+	w.pod(net);
 	// The extensions are each hart's, and the current hart's are live in
 	// Extensions rather than in its Hart.
 	s.cur->ext = Extensions;
@@ -428,7 +463,7 @@ bool SaveState::restore(DoomSystem &s, const std::string &dir)
 		return false;
 	}
 	const uint32_t version = r.get<uint32_t>();
-	if (version != 1 && version != VERSION) {
+	if (version < 1 || version > VERSION) {
 		std::cout << "restore: " << dir << " was written by a build with another snapshot layout\n";
 		return false;
 	}
@@ -443,6 +478,8 @@ bool SaveState::restore(DoomSystem &s, const std::string &dir)
 	if (want.share != have.share) differ += " shared folder";
 	const uint32_t harts = version == 1 ? 1 : r.get<uint32_t>();
 	if (harts != s.hart_count()) differ += " -harts";
+	const uint8_t net = version >= 3 ? r.get<uint8_t>() : 0;
+	if (net != (uint8_t)memory.net.is_connected()) differ += " -net";
 	if (!differ.empty()) {
 		std::cout << "restore: this machine is not the one the snapshot was taken on -- start it with "
 		             "the same -ram, -march, boot files, disks and shared folder. Different:" << differ << "\n";

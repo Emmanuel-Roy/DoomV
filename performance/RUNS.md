@@ -402,3 +402,11 @@ and nothing else.
 | 20261001-235753 | desktop 3000M | multi-hart r2, 1 hart (reference) | c4f0129+ | 250.44 | 12.0 | `35c61483d5e3` |  |
 | 20261001-235820 | desktop 3000M | multi-hart r2, 1 hart | c4f0129+ | 253.40 | 11.8 | `35c61483d5e3` |  |
 | 20261002-102227 | ubuntu 3000M | boot layout at 128MB | 63ad8cf+ | 167.44 | 17.9 | `317e8cd24ffc` |  |
+| 20261003-114918 | doom 1000M | virtio split + net (reference) | 5529126+ | 298.58 | 3.3 | `3d73dac132f3` |  |
+| 20261003-114922 | doom 1000M | virtio split + net | 5529126+ | 293.56 | 3.4 | `3d73dac132f3` |  |
+| 20261003-114925 | desktop 3000M | virtio split + net (reference) | 5529126+ | 248.72 | 12.1 | `35c61483d5e3` |  |
+| 20261003-114951 | desktop 3000M | virtio split + net | 5529126+ | 242.09 | 12.4 | `35c61483d5e3` |  |
+| 20261003-115015 | doom 1000M | virtio split + net (reference) | 5529126+ | 299.06 | 3.3 | `3d73dac132f3` |  |
+| 20261003-115019 | doom 1000M | virtio split + net | 5529126+ | 302.26 | 3.3 | `3d73dac132f3` |  |
+| 20261003-115022 | desktop 3000M | virtio split + net (reference) | 5529126+ | 248.45 | 12.1 | `35c61483d5e3` |  |
+| 20261003-115046 | desktop 3000M | virtio split + net | 5529126+ | 249.50 | 12.0 | `35c61483d5e3` |  |

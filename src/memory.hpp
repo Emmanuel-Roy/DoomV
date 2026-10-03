@@ -4,9 +4,10 @@
 #include "imsic.hpp"
 #include "aplic.hpp"
 #include "uart.hpp"
-#include "virtio_blk.hpp"
-#include "virtio_input.hpp"
-#include "virtio_9p.hpp"
+#include "virtio/virtio_blk.hpp"
+#include "virtio/virtio_input.hpp"
+#include "virtio/virtio_9p.hpp"
+#include "virtio/virtio_net.hpp"
 #include <cstdint>
 #include <mutex>
 #include <vector>
@@ -221,10 +222,22 @@ public:
 	static constexpr uint64_t VIRTIO_SHARE_BASE = 0x1010A000;
 	static_assert(VIRTIO_SHARE_BASE == VIRTIO_DRIVE_BASE + NUM_DRIVES * VIRTIO_SIZE,
 	              "the shared folder's slot follows the last drive slot");
+
+	// The network card: virtio-net, one slot after the shared folder, APLIC
+	// source 13. The device tree always declares it; without -net it answers
+	// device id 0 and the guest skips it.
+	static constexpr uint64_t VIRTIO_NET_BASE = VIRTIO_SHARE_BASE + VIRTIO_SIZE;
+	static constexpr uint32_t NET_IRQ = 13;
+	// Every slot from the keyboard on is a virtio device, in this order:
+	// keyboard, mouse, eight drives, the shared folder, the network card.
+	static constexpr uint64_t VIRTIO_SLOTS_END = VIRTIO_NET_BASE + VIRTIO_SIZE;
+	static_assert(VIRTIO_MOUSE_BASE == VIRTIO_KBD_BASE + VIRTIO_SIZE
+	              && VIRTIO_DRIVE_BASE == VIRTIO_MOUSE_BASE + VIRTIO_SIZE,
+	              "Memory::virtio_at finds a device by its slot number");
 	// No device window may overlap DOOM's framebuffer. The address decoders
 	// test ranges in different orders on different paths, so an overlap is
 	// never an error anyone sees -- only pixels or registers that go missing.
-	static_assert(MMIO_FB >= VIRTIO_SHARE_BASE + VIRTIO_SIZE,
+	static_assert(MMIO_FB >= VIRTIO_SLOTS_END,
 	              "DOOM's framebuffer must start past the last virtio slot");
 	static_assert(MMIO_FB >= VIRTIO_BASE + VIRTIO_SIZE && MMIO_FB >= UART_BASE + UART_SIZE,
 	              "DOOM's framebuffer must not overlap the root disk or the UART");
@@ -438,6 +451,8 @@ public:
 	VirtioBlk &get_disk() { return disk; }
 	VirtioBlk &get_drive(int i) { return drives[i]; }
 	Virtio9p &get_share() { return share; }
+	VirtioNet &get_net() { return net; }
+	Aplic &get_aplic() { return aplic; }
 
 private:
 	// RAM and WAD are contiguous (RAM_BASE..RAM_BASE+RAM_SIZE == WAD_BASE),
@@ -483,6 +498,9 @@ private:
 		VirtioBlk(DRIVE_IRQ_BASE + 6), VirtioBlk(DRIVE_IRQ_BASE + 7),
 	};
 	Virtio9p share;
+	VirtioNet net{NET_IRQ};
+	// The virtio device whose window holds addr, and the offset into it.
+	VirtioMmio *virtio_at(uint64_t addr, uint64_t &offset);
 
 	// Declaration order matters here: aplic's constructor takes a
 	// reference to imsic_s, so imsic_s must finish constructing first --

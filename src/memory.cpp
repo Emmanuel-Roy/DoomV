@@ -153,17 +153,10 @@ uint8_t Memory::read8(uint64_t addr)
 		return lfb[addr - LFB_BASE];
 	if (addr >= UART_BASE && addr < UART_BASE + UART_SIZE)
 		return uart.read(addr - UART_BASE);
-	// virtio-input's config space is a packed struct of bytes, so unlike
-	// the block device these have to answer narrow reads.
-	if (addr >= VIRTIO_KBD_BASE && addr < VIRTIO_KBD_BASE + VIRTIO_SIZE)
-		return kbd_dev.read8(addr - VIRTIO_KBD_BASE);
-	if (addr >= VIRTIO_MOUSE_BASE && addr < VIRTIO_MOUSE_BASE + VIRTIO_SIZE)
-		return mouse_dev.read8(addr - VIRTIO_MOUSE_BASE);
-	// virtio-9p's config space holds the mount tag, read a byte at a time,
-	// and its length, read as a 16-bit load -- which read16 builds from two
-	// of these.
-	if (addr >= VIRTIO_SHARE_BASE && addr < VIRTIO_SHARE_BASE + VIRTIO_SIZE)
-		return share.read8(addr - VIRTIO_SHARE_BASE);
+	// Config spaces are read a byte at a time (virtio-input's window, the 9P
+	// mount tag, the network card's MAC), and 16-bit loads are built from two.
+	uint64_t off;
+	if (VirtioMmio *dev = virtio_at(addr, off)) return dev->read8(off);
 	return 0;
 }
 
@@ -218,15 +211,10 @@ uint32_t Memory::read32(uint64_t addr)
 	if (addr == MMIO_WAD_SIZE) return wad_len;
 	if (addr >= CLINT_BASE && addr < CLINT_BASE + CLINT_SIZE) return timer.read32(addr - CLINT_BASE);
 	if (addr >= APLIC_BASE && addr < APLIC_BASE + APLIC_SIZE) return aplic.read32(addr - APLIC_BASE);
-	if (addr >= VIRTIO_BASE && addr < VIRTIO_BASE + VIRTIO_SIZE) return disk.read32(addr - VIRTIO_BASE);
-	if (addr >= VIRTIO_DRIVE_BASE && addr < VIRTIO_DRIVE_BASE + NUM_DRIVES * VIRTIO_SIZE) {
-		const uint64_t off = addr - VIRTIO_DRIVE_BASE;
-		return drives[off / VIRTIO_SIZE].read32(off % VIRTIO_SIZE);
+	{
+		uint64_t off;
+		if (VirtioMmio *dev = virtio_at(addr, off)) return dev->read32(off);
 	}
-	if (addr >= VIRTIO_SHARE_BASE && addr < VIRTIO_SHARE_BASE + VIRTIO_SIZE)
-		return share.read32(addr - VIRTIO_SHARE_BASE);
-	if (addr >= VIRTIO_KBD_BASE && addr < VIRTIO_KBD_BASE + VIRTIO_SIZE) return kbd_dev.read32(addr - VIRTIO_KBD_BASE);
-	if (addr >= VIRTIO_MOUSE_BASE && addr < VIRTIO_MOUSE_BASE + VIRTIO_SIZE) return mouse_dev.read32(addr - VIRTIO_MOUSE_BASE);
 	if (addr >= IMSIC_M_BASE && addr < IMSIC_M_BASE + imsic_span) return 0; // seteipnum_le reads as zero, per spec
 	if (addr >= IMSIC_S_BASE && addr < IMSIC_S_BASE + imsic_span) return 0;
 
@@ -296,10 +284,9 @@ void Memory::write8(uint64_t addr, uint8_t val)
 		console_put(val);
 	} else if (addr >= UART_BASE && addr < UART_BASE + UART_SIZE) {
 		uart.write(addr - UART_BASE, val);
-	} else if (addr >= VIRTIO_KBD_BASE && addr < VIRTIO_KBD_BASE + VIRTIO_SIZE) {
-		kbd_dev.write8(addr - VIRTIO_KBD_BASE, val);
-	} else if (addr >= VIRTIO_MOUSE_BASE && addr < VIRTIO_MOUSE_BASE + VIRTIO_SIZE) {
-		mouse_dev.write8(addr - VIRTIO_MOUSE_BASE, val);
+	} else {
+		uint64_t off;
+		if (VirtioMmio *dev = virtio_at(addr, off)) dev->write8(off, val);
 	}
 }
 
@@ -402,26 +389,12 @@ void Memory::write32(uint64_t addr, uint32_t val)
 	// A virtio register write can start I/O, which needs to read
 	// descriptors out of guest memory and raise an interrupt -- hence the
 	// device taking both back rather than being self-contained.
-	if (addr >= VIRTIO_KBD_BASE && addr < VIRTIO_KBD_BASE + VIRTIO_SIZE) {
-		kbd_dev.write32(addr - VIRTIO_KBD_BASE, val, *this, aplic);
-		return;
-	}
-	if (addr >= VIRTIO_MOUSE_BASE && addr < VIRTIO_MOUSE_BASE + VIRTIO_SIZE) {
-		mouse_dev.write32(addr - VIRTIO_MOUSE_BASE, val, *this, aplic);
-		return;
-	}
-	if (addr >= VIRTIO_DRIVE_BASE && addr < VIRTIO_DRIVE_BASE + NUM_DRIVES * VIRTIO_SIZE) {
-		const uint64_t off = addr - VIRTIO_DRIVE_BASE;
-		drives[off / VIRTIO_SIZE].write32(off % VIRTIO_SIZE, val, *this, aplic);
-		return;
-	}
-	if (addr >= VIRTIO_SHARE_BASE && addr < VIRTIO_SHARE_BASE + VIRTIO_SIZE) {
-		share.write32(addr - VIRTIO_SHARE_BASE, val, *this, aplic);
-		return;
-	}
-	if (addr >= VIRTIO_BASE && addr < VIRTIO_BASE + VIRTIO_SIZE) {
-		disk.write32(addr - VIRTIO_BASE, val, *this, aplic);
-		return;
+	{
+		uint64_t off;
+		if (VirtioMmio *dev = virtio_at(addr, off)) {
+			dev->write32(off, val, *this, aplic);
+			return;
+		}
 	}
 	// Each hart's file is one IMSIC_SIZE page, seteipnum_le at its start.
 	if (addr >= IMSIC_M_BASE && addr < IMSIC_M_BASE + imsic_span) {
@@ -557,10 +530,7 @@ bool Memory::is_backed(uint64_t addr, unsigned size) const
 	// it. Moving the framebuffer made every probe of the slot an access
 	// fault -- Linux's virtio_mmio_probe, at boot.
 	if (in(VIRTIO_BASE, VIRTIO_SIZE)) return true;
-	if (in(VIRTIO_KBD_BASE, VIRTIO_SIZE)) return true;
-	if (in(VIRTIO_MOUSE_BASE, VIRTIO_SIZE)) return true;
-	if (in(VIRTIO_DRIVE_BASE, NUM_DRIVES * VIRTIO_SIZE)) return true;
-	if (in(VIRTIO_SHARE_BASE, VIRTIO_SIZE)) return true;
+	if (in(VIRTIO_KBD_BASE, VIRTIO_SLOTS_END - VIRTIO_KBD_BASE)) return true;
 	if (in(UART_BASE, UART_SIZE)) return true;
 	if (in(CLINT_BASE, CLINT_SIZE)) return true;
 	if (in(APLIC_BASE, APLIC_SIZE)) return true;
@@ -587,4 +557,21 @@ void Memory::pump_input()
 {
 	kbd_dev.pump(*this, aplic);
 	mouse_dev.pump(*this, aplic);
+	net.pump(*this, aplic);
+}
+
+VirtioMmio *Memory::virtio_at(uint64_t addr, uint64_t &offset)
+{
+	if (addr >= VIRTIO_BASE && addr < VIRTIO_BASE + VIRTIO_SIZE) {
+		offset = addr - VIRTIO_BASE;
+		return &disk;
+	}
+	if (addr < VIRTIO_KBD_BASE || addr >= VIRTIO_SLOTS_END) return nullptr;
+	const uint64_t slot = (addr - VIRTIO_KBD_BASE) / VIRTIO_SIZE;
+	offset = (addr - VIRTIO_KBD_BASE) % VIRTIO_SIZE;
+	if (slot == 0) return &kbd_dev;
+	if (slot == 1) return &mouse_dev;
+	if (slot < 2 + NUM_DRIVES) return &drives[slot - 2];
+	if (slot == 2 + NUM_DRIVES) return &share;
+	return &net;
 }

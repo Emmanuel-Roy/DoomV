@@ -1928,6 +1928,18 @@ bool DoomSystem::set_input_replay(const char *path)
 		std::string kind;
 		unsigned a = 0, b = 0;
 		int c = 0, dd = 0;
+		// A network frame: "<instruction> net <hex bytes>".
+		if (in >> stamp >> kind && kind == "net") {
+			std::string hex;
+			in >> hex;
+			std::vector<uint8_t> frame;
+			for (size_t i = 0; i + 1 < hex.size(); i += 2)
+				frame.push_back((uint8_t)std::stoul(hex.substr(i, 2), nullptr, 16));
+			replay_net.push_back({(uint64_t)stamp, std::move(frame)});
+			continue;
+		}
+		in.clear();
+		in.seekg(0);
 		if (!(in >> stamp >> kind >> a >> b >> c >> dd)) {
 			std::cout << "input log: cannot parse '" << line << "'" << std::endl;
 			return false;
@@ -2057,6 +2069,7 @@ void DoomSystem::service_input(uint64_t now)
 			input_incoming.clear();
 			input_waiting.store(false, std::memory_order_relaxed);
 		}
+		service_network(now);
 		memory.pump_input();
 		return;
 	}
@@ -2092,11 +2105,58 @@ void DoomSystem::service_input(uint64_t now)
 		}
 	}
 
+	service_network(now);
 	if (record_dirty) {
 		std::fflush(record_file);
 		record_dirty = false;
 	}
 	memory.pump_input();
+}
+
+// Network frames for the guest enter here, at the input points, as keys do:
+// the network is outside the machine, and this is where its timing is fixed.
+// Live, they come from the NAT and are recorded; on a replay, from the log.
+void DoomSystem::service_network(uint64_t now)
+{
+	VirtioNet &net = memory.get_net();
+	Aplic &aplic = memory.get_aplic();
+	if (replaying) {
+		while (replay_net_pos < replay_net.size() && replay_net[replay_net_pos].first <= now)
+			net.receive(replay_net[replay_net_pos++].second, memory, aplic);
+		return;
+	}
+	if (!usernet || !usernet->has_frames()) return;
+	std::vector<std::vector<uint8_t>> frames;
+	usernet->to_guest(frames);
+	for (auto &f : frames) {
+		record_frame(now, f);
+		net.receive(std::move(f), memory, aplic);
+	}
+}
+
+void DoomSystem::record_frame(uint64_t now, const std::vector<uint8_t> &frame)
+{
+	if (!record_file) return;
+	std::fprintf(record_file, "%llu net ", (unsigned long long)now);
+	for (uint8_t b : frame) std::fprintf(record_file, "%02x", b);
+	std::fputc('\n', record_file);
+	record_dirty = true;
+}
+
+bool DoomSystem::set_network(std::string &error)
+{
+	VirtioNet &net = memory.get_net();
+	net.set_connected(true);
+	if (replaying) return true;   // the log's frames, and nothing sent anywhere
+	usernet = std::make_unique<UserNet>();
+	if (!usernet->start(error)) {
+		usernet.reset();
+		net.set_connected(false);
+		return false;
+	}
+	UserNet *backend = usernet.get();
+	net.on_transmit = [backend](const uint8_t *frame, size_t len) { backend->from_guest(frame, len); };
+	return true;
 }
 
 void DoomSystem::submit_paste(const std::string &text)

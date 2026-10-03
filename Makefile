@@ -87,11 +87,11 @@ SOFTFLOAT_SRCS = $(wildcard $(SOFTFLOAT_DIR)/*.c)
 SOFTFLOAT_OBJS = $(patsubst $(SOFTFLOAT_DIR)/%.c,$(SOFTFLOAT_OBJDIR)/%.o,$(SOFTFLOAT_SRCS))
 
 INCLUDES = -Isrc/include -Isrc -Isrc/softfloat -I$(SOFTFLOAT_DIR)
-LIBS = -Lsrc/lib -lmingw32 -lSDL2main -lSDL2
+LIBS = -Lsrc/lib -lmingw32 -lSDL2main -lSDL2 -lws2_32 -liphlpapi
 
 # Source files
 SRCS = src/main.cpp src/doom_system.cpp src/memory.cpp src/guest_ram.cpp src/fdt_patch.cpp src/registers.cpp \
-       src/riscv_decoder.cpp src/mmu.cpp src/pmp.cpp src/timer.cpp src/imsic.cpp src/aplic.cpp src/uart.cpp src/virtio_blk.cpp src/virtio_input.cpp src/virtio_9p.cpp src/lockstep.cpp src/savestate.cpp \
+       src/riscv_decoder.cpp src/mmu.cpp src/pmp.cpp src/timer.cpp src/imsic.cpp src/aplic.cpp src/uart.cpp src/virtio/virtio_mmio.cpp src/virtio/virtio_blk.cpp src/virtio/virtio_input.cpp src/virtio/virtio_9p.cpp src/virtio/virtio_net.cpp src/net/usernet.cpp src/lockstep.cpp src/savestate.cpp \
        src/debugger.cpp src/gui.cpp \
        src/controls.cpp src/extensions.cpp \
        src/extensions/ext_i.cpp src/extensions/ext_m.cpp src/extensions/ext_a.cpp \
@@ -128,7 +128,7 @@ $(SOFTFLOAT_OBJDIR)/%.o: $(SOFTFLOAT_DIR)/%.c
 # previous binary in place -- which then gets tested and blamed for a bug
 # that was already fixed. Before SoftFloat, `all` was phony and always
 # relinked, so nothing depended on this being right.
-HEADERS = $(wildcard src/*.hpp src/extensions/*.hpp src/include/*.h)
+HEADERS = $(wildcard src/*.hpp src/extensions/*.hpp src/virtio/*.hpp src/net/*.hpp src/include/*.h)
 $(OUT): $(SOFTFLOAT_OBJS) $(SRCS) $(HEADERS) $(PGO_DEP)
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -o $(OUT) $(SRCS) $(SOFTFLOAT_OBJS) $(LIBS)
 

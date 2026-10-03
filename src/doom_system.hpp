@@ -10,6 +10,7 @@
 #include "controls.hpp"
 #include "snapshot.hpp"
 #include "extensions.hpp"
+#include "net/usernet.hpp"
 #include <memory>
 #include <map>
 #include <cstdio>
@@ -82,6 +83,10 @@ public:
 	// at exactly those counts and ignores the window, stdin and -input.
 	bool set_input_record(const char *path);
 	bool set_input_replay(const char *path);
+	// -net: a network card, with user-mode NAT behind it (src/net/usernet).
+	// Call after set_input_replay: a replay gets the card but no network,
+	// only the frames the log recorded.
+	bool set_network(std::string &error);
 	// -trace: a commit log of every instruction and trap, in Spike's format.
 	// -lockstep: run against a reference's commit log and halt at the first
 	// record that does not match. See lockstep.cpp.
@@ -219,6 +224,13 @@ private:
 	std::FILE *record_file = nullptr;
 	bool record_dirty = false;
 	std::vector<std::pair<uint64_t, GuestInput>> replay_events;
+	// Network frames for the guest: from the NAT live, committed and recorded
+	// at the input points; from the log on a replay.
+	std::unique_ptr<UserNet> usernet;
+	std::vector<std::pair<uint64_t, std::vector<uint8_t>>> replay_net;
+	size_t replay_net_pos = 0;
+	void service_network(uint64_t now);
+	void record_frame(uint64_t now, const std::vector<uint8_t> &frame);
 	size_t replay_pos = 0;
 	bool replaying = false;
 

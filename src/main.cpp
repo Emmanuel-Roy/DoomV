@@ -95,6 +95,7 @@ int main(int argc, char *argv[])
 	std::string trace_path, lockstep_path;
 	bool lockstep_strict = false;
 	unsigned harts = 1;
+	bool network = false;
 	for (int i = 1; i < argc; i++) {
 		std::string arg = argv[i];
 		if (arg.rfind("-march=", 0) == 0) {
@@ -127,6 +128,10 @@ int main(int argc, char *argv[])
 				std::cout << "-harts must be 1 through 4095, the CLINT's limit\n";
 				return -1;
 			}
+		} else if (arg == "-net") {
+			// A network card, with user-mode NAT behind it: the guest gets
+			// 10.0.2.15 by DHCP and reaches the outside through host sockets.
+			network = true;
 		} else if (arg.rfind("-ram=", 0) == 0) {
 			ram_arg = arg.substr(5);
 		} else if (arg.rfind("-opensbi=", 0) == 0) {
@@ -288,6 +293,14 @@ int main(int argc, char *argv[])
 	if (!replay_path.empty() && !system.set_input_replay(replay_path.c_str())) {
 		std::cout << "cannot read input log: " << replay_path << "\n";
 		return -1;
+	}
+	// After -replay: a replayed run has the card and only the recorded frames.
+	if (network) {
+		std::string error;
+		if (!system.set_network(error)) {
+			std::cout << "cannot start the network: " << error << '\n';
+			return -1;
+		}
 	}
 	if (!record_path.empty() && !system.set_input_record(record_path.c_str())) {
 		std::cout << "cannot write input log: " << record_path << "\n";

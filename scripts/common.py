@@ -101,6 +101,8 @@ def add_boot_options(parser, linux=True):
     if linux:
         g.add_argument("--harts", type=int, default=1, metavar="N",
                        help="CPUs, 1 to 4095 (default 1); the device tree is made to match")
+        g.add_argument("--net", action="store_true",
+                       help="a network card; the guest reaches the internet through the host")
     g.add_argument("--headless", action="store_true", help="no window; output goes to this console")
     g.add_argument("--no-build", action="store_true", help="skip the build; use what is already built")
 
@@ -132,6 +134,8 @@ def boot_args(args, passthrough=()):
         out.append(f"-ram={args.ram}")
     if harts > 1:
         out.append(f"-harts={harts}")
+    if getattr(args, "net", False):
+        out.append("-net")
     if args.headless:
         out.append("-ng")
     if args.march:

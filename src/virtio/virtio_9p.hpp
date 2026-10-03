@@ -25,51 +25,21 @@
 // file belongs to root with permissive modes, the read-only attribute stands
 // in for the write bit, and symlinks, device nodes and extended attributes
 // are refused with EOPNOTSUPP rather than faked. See shared/README.md.
+#include "virtio_mmio.hpp"
 #include <cstdint>
 #include <map>
 #include <string>
 #include <vector>
 
-class Memory;
-class Aplic;
-
-class Virtio9p {
+class Virtio9p final : public VirtioMmio {
 	// Machine state is saved and restored field by field in savestate.cpp.
 	friend struct SaveState;
 public:
-	enum : uint64_t {
-		REG_MAGIC           = 0x000,
-		REG_VERSION         = 0x004,
-		REG_DEVICE_ID       = 0x008,
-		REG_VENDOR_ID       = 0x00c,
-		REG_DEVICE_FEAT     = 0x010,
-		REG_DEVICE_FEAT_SEL = 0x014,
-		REG_DRIVER_FEAT     = 0x020,
-		REG_DRIVER_FEAT_SEL = 0x024,
-		REG_QUEUE_SEL       = 0x030,
-		REG_QUEUE_NUM_MAX   = 0x034,
-		REG_QUEUE_NUM       = 0x038,
-		REG_QUEUE_READY     = 0x044,
-		REG_QUEUE_NOTIFY    = 0x050,
-		REG_INTERRUPT_STAT  = 0x060,
-		REG_INTERRUPT_ACK   = 0x064,
-		REG_STATUS          = 0x070,
-		REG_QUEUE_DESC_LO   = 0x080,
-		REG_QUEUE_DESC_HI   = 0x084,
-		REG_QUEUE_AVAIL_LO  = 0x090,
-		REG_QUEUE_AVAIL_HI  = 0x094,
-		REG_QUEUE_USED_LO   = 0x0a0,
-		REG_QUEUE_USED_HI   = 0x0a4,
-		REG_CONFIG_GEN      = 0x0fc,
-		REG_CONFIG          = 0x100,
-	};
-
-	static constexpr uint32_t MAGIC     = 0x74726976; // "virt"
-	static constexpr uint32_t VERSION   = 2;
 	static constexpr uint32_t DEVICE_ID = 9;          // 9P transport
-	static constexpr uint32_t QUEUE_MAX = 256;
 	// The APLIC source, matching the device tree node.
 	static constexpr uint32_t IRQ = 12;
+
+	Virtio9p() : VirtioMmio(DEVICE_ID, VENDOR_DOOM, IRQ, 1) {}
 
 	// Serve `host_dir` under `mount_tag`. Returns false if the directory
 	// cannot be used, in which case the slot stays empty (device ID 0).
@@ -78,11 +48,7 @@ public:
 	// The shared directory as an absolute host path, for messages.
 	const std::string &host_root() const { return root_utf8; }
 
-	uint8_t  read8(uint64_t offset) const;
-	uint32_t read32(uint64_t offset) const;
-	void write32(uint64_t offset, uint32_t value, Memory &mem, Aplic &aplic);
-
-	~Virtio9p();
+	~Virtio9p() override;
 
 private:
 	struct DirEntry {
@@ -101,7 +67,13 @@ private:
 		bool listed = false;
 	};
 
-	void process_queue(Memory &mem, Aplic &aplic);
+	bool present() const override { return is_open; }
+	// Word 0 bit 0 is VIRTIO_9P_MOUNT_TAG, without which the driver never
+	// reads the tag and nothing can mount it; word 1 bit 0 is VERSION_1.
+	uint32_t features(uint32_t) const override { return 1u; }
+	uint8_t config_read8(uint64_t offset) const override;
+	void notify(unsigned q, Memory &mem, Aplic &aplic) override;
+	void reset() override { reset_fids(); }
 	void handle_message(const std::vector<uint8_t> &req, std::vector<uint8_t> &resp);
 	void close_fid(Fid &f);
 	void reset_fids();
@@ -129,15 +101,6 @@ private:
 		return next_id++;
 	}
 	void forget_id(uint64_t host_id) { ids.erase(host_id); }
-
-	uint32_t status = 0;
-	uint32_t device_feat_sel = 0;
-	uint32_t queue_sel = 0;
-	uint32_t queue_num = 0;
-	uint32_t queue_ready = 0;
-	uint32_t interrupt_status = 0;
-	uint64_t desc_addr = 0, avail_addr = 0, used_addr = 0;
-	uint16_t last_avail = 0;
 
 	friend class NinePServer;
 };

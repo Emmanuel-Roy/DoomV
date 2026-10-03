@@ -3,6 +3,7 @@
 
   python scripts/boot.py linux                  # window; type at the shell
   python scripts/boot.py linux --harts 4        # four CPUs
+  python scripts/boot.py linux --net            # a network card; `udhcpc -i eth0` in the guest
   python scripts/boot.py linux --smoke          # test: BusyBox runs, then exit
 """
 import argparse
@@ -80,6 +81,8 @@ def main():
         else:
             if not args.headless:
                 print("Linux opens in the emulator window. Type there for the shell; close it to exit.")
+            if args.net:
+                print("For the network, run `udhcpc -i eth0` at the shell.")
             run(linux_command(False, boot_args(args, passthrough), args.harts))
     return 0
 

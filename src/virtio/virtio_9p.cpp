@@ -21,16 +21,6 @@
 
 namespace {
 
-constexpr uint16_t DESC_F_NEXT  = 1;
-constexpr uint16_t DESC_F_WRITE = 2;
-constexpr uint64_t DESC_SIZE    = 16;
-
-void write16_phys(Memory &mem, uint64_t addr, uint16_t v)
-{
-	mem.write8(addr, (uint8_t)(v & 0xFF));
-	mem.write8(addr + 1, (uint8_t)(v >> 8));
-}
-
 // 9P2000.L message types. Each reply is its request's type plus one.
 enum : uint8_t {
 	Rlerror    = 7,
@@ -1163,118 +1153,44 @@ Virtio9p::~Virtio9p()
 	reset_fids();
 }
 
-uint8_t Virtio9p::read8(uint64_t offset) const
+// struct virtio_9p_config { le16 tag_len; u8 tag[]; } -- the tag read a byte
+// at a time, the length as a 16-bit load.
+uint8_t Virtio9p::config_read8(uint64_t o) const
 {
-	// struct virtio_9p_config { le16 tag_len; u8 tag[]; } -- read a byte at
-	// a time by the driver, the length as a 16-bit load.
-	if (offset >= REG_CONFIG && offset < REG_CONFIG + 2 + 64) {
-		const uint64_t o = offset - REG_CONFIG;
-		if (o < 2) return (uint8_t)(tag.size() >> (8 * o));
-		const uint64_t i = o - 2;
-		return i < tag.size() ? (uint8_t)tag[(size_t)i] : 0;
-	}
-	const uint32_t word = read32(offset & ~3ull);
-	return (uint8_t)(word >> (8 * (offset & 3)));
+	if (o < 2) return (uint8_t)(tag.size() >> (8 * o));
+	const uint64_t i = o - 2;
+	return i < tag.size() && i < 64 ? (uint8_t)tag[(size_t)i] : 0;
 }
 
-uint32_t Virtio9p::read32(uint64_t offset) const
+// One request is one chain: device-readable buffers carrying the T-message,
+// then device-writable ones for the reply. For large reads and writes Linux
+// splits these -- a small header buffer and then the caller's own pages -- so
+// the request is gathered from every readable buffer in order, and the reply
+// is laid across the writable ones in order. That handles the plain and
+// zero-copy forms of every message with one piece of code.
+void Virtio9p::notify(unsigned, Memory &mem, Aplic &aplic)
 {
-	switch (offset) {
-	case REG_MAGIC:     return MAGIC;
-	case REG_VERSION:   return VERSION;
-	case REG_DEVICE_ID: return is_open ? DEVICE_ID : 0;
-	case REG_VENDOR_ID: return 0x564d4f44;
-	// Word 0: VIRTIO_9P_MOUNT_TAG, without which the driver will not read
-	// the tag and nothing can mount it. Word 1: VIRTIO_F_VERSION_1.
-	case REG_DEVICE_FEAT: return 1u;
-	case REG_QUEUE_NUM_MAX:  return queue_sel == 0 ? QUEUE_MAX : 0;
-	case REG_QUEUE_READY:    return queue_sel == 0 ? queue_ready : 0;
-	case REG_INTERRUPT_STAT: return interrupt_status;
-	case REG_STATUS:         return status;
-	case REG_CONFIG_GEN:     return 0;
-	default:
-		if (offset >= REG_CONFIG) {
-			uint32_t v = 0;
-			for (int i = 0; i < 4; i++) v |= (uint32_t)read8(offset + (uint64_t)i) << (8 * i);
-			return v;
-		}
-		return 0;
-	}
-}
-
-void Virtio9p::write32(uint64_t offset, uint32_t value, Memory &mem, Aplic &aplic)
-{
-	switch (offset) {
-	case REG_DEVICE_FEAT_SEL: device_feat_sel = value; break;
-	case REG_DRIVER_FEAT_SEL:
-	case REG_DRIVER_FEAT:     break;
-	case REG_QUEUE_SEL:       queue_sel = value; break;
-	case REG_QUEUE_NUM:       if (queue_sel == 0) queue_num = value; break;
-	case REG_QUEUE_READY:     if (queue_sel == 0) queue_ready = value; break;
-	case REG_QUEUE_DESC_LO:   if (queue_sel == 0) desc_addr = (desc_addr & ~0xFFFFFFFFull) | value; break;
-	case REG_QUEUE_DESC_HI:   if (queue_sel == 0) desc_addr = (desc_addr & 0xFFFFFFFFull) | ((uint64_t)value << 32); break;
-	case REG_QUEUE_AVAIL_LO:  if (queue_sel == 0) avail_addr = (avail_addr & ~0xFFFFFFFFull) | value; break;
-	case REG_QUEUE_AVAIL_HI:  if (queue_sel == 0) avail_addr = (avail_addr & 0xFFFFFFFFull) | ((uint64_t)value << 32); break;
-	case REG_QUEUE_USED_LO:   if (queue_sel == 0) used_addr = (used_addr & ~0xFFFFFFFFull) | value; break;
-	case REG_QUEUE_USED_HI:   if (queue_sel == 0) used_addr = (used_addr & 0xFFFFFFFFull) | ((uint64_t)value << 32); break;
-	case REG_QUEUE_NOTIFY:
-		if (value == 0 && queue_ready && is_open) process_queue(mem, aplic);
-		break;
-	case REG_INTERRUPT_ACK:   interrupt_status &= ~value; break;
-	case REG_STATUS:
-		status = value;
-		if (value == 0) {
-			// A reset forgets the queue and every fid the driver held.
-			queue_num = queue_ready = 0;
-			desc_addr = avail_addr = used_addr = 0;
-			last_avail = 0;
-			interrupt_status = 0;
-			reset_fids();
-		}
-		break;
-	default: break;
-	}
-}
-
-void Virtio9p::process_queue(Memory &mem, Aplic &aplic)
-{
-	if (!avail_addr || !used_addr || !desc_addr) return;
+	if (!queues[0].desc) return;
 	// Every request in this notify is served at the instruction that sent it.
 	guest_ns = mem.instruction_count();
-	const uint32_t qsz = queue_num ? queue_num : QUEUE_MAX;
-	const uint16_t avail_idx = mem.read16(avail_addr + 2);
 	bool completed = false;
-
 	std::vector<uint8_t> req, resp;
-	while (last_avail != avail_idx) {
-		const uint16_t slot = (uint16_t)(last_avail % qsz);
-		const uint16_t head = mem.read16(avail_addr + 4 + (uint64_t)slot * 2);
-
-		// One request is one chain: device-readable buffers carrying the
-		// T-message, then device-writable ones for the reply. For large
-		// reads and writes Linux splits these -- a small header buffer and
-		// then the caller's own pages -- so the request is gathered from
-		// every readable buffer in order, and the reply is laid across the
-		// writable ones in order. That handles the plain and zero-copy
-		// forms of every message with one piece of code.
+	uint16_t head;
+	while (next_chain(mem, 0, head)) {
 		req.clear();
 		std::vector<std::pair<uint64_t, uint32_t>> outs;
 		uint16_t d = head;
-		for (uint32_t guard = 0; guard <= qsz; guard++) {
-			const uint64_t da    = desc_addr + (uint64_t)d * DESC_SIZE;
-			const uint64_t addr  = mem.read64(da);
-			const uint32_t len   = mem.read32(da + 8);
-			const uint16_t flags = mem.read16(da + 12);
-			const uint16_t next  = mem.read16(da + 14);
-			if (flags & DESC_F_WRITE) {
-				outs.push_back({addr, len});
+		for (uint32_t guard = 0; guard <= queue_size(queues[0]); guard++) {
+			const Desc desc = descriptor(mem, 0, d);
+			if (desc.flags & DESC_F_WRITE) {
+				outs.push_back({desc.addr, desc.len});
 			} else {
 				const size_t at = req.size();
-				req.resize(at + len);
-				mem.read_bytes(addr, req.data() + at, len);
+				req.resize(at + desc.len);
+				mem.read_bytes(desc.addr, req.data() + at, desc.len);
 			}
-			if (!(flags & DESC_F_NEXT)) break;
-			d = next;
+			if (!(desc.flags & DESC_F_NEXT)) break;
+			d = desc.next;
 		}
 
 		handle_message(req, resp);
@@ -1286,19 +1202,8 @@ void Virtio9p::process_queue(Memory &mem, Aplic &aplic)
 			mem.write_bytes(seg.first, resp.data() + written, n);
 			written += n;
 		}
-
-		const uint16_t used_idx = mem.read16(used_addr + 2);
-		const uint64_t slot_addr = used_addr + 4 + (uint64_t)(used_idx % qsz) * 8;
-		mem.write32(slot_addr, head);
-		mem.write32(slot_addr + 4, (uint32_t)written);
-		write16_phys(mem, used_addr + 2, (uint16_t)(used_idx + 1));
-
-		last_avail++;
+		complete(mem, 0, head, (uint32_t)written);
 		completed = true;
 	}
-
-	if (completed) {
-		interrupt_status |= 1;
-		aplic.assert_source(IRQ);
-	}
+	if (completed) interrupt(aplic);
 }

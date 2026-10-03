@@ -79,6 +79,7 @@ All ranges below are half-open: base is included, end is excluded. Values come f
 | Mouse (virtio-input) | `0x10101000` | `0x1000` | `0x10102000` | APLIC source 3 |
 | Drive slots (8 × virtio-blk) | `0x10102000` | `0x8000` | `0x1010A000` | `drives/*.img`; APLIC sources 4–11 |
 | Shared folder (virtio-9p) | `0x1010A000` | `0x1000` | `0x1010B000` | `shared/`; APLIC source 12 |
+| Network card (virtio-net) | `0x1010B000` | `0x1000` | `0x1010C000` | `-net`; APLIC source 13 |
 | DOOM framebuffer | `0x10200000` | `0x3E800` | `0x1023E800` | 320×200×4 bytes, past every virtio slot |
 | M IMSIC files | `0x24000000` | `0x1000` per hart | `0x24000000` + harts × `0x1000` | M-target MSI doorbell, hart h's at `+ h × 0x1000` |
 | S IMSIC files | `0x28000000` | `0x1000` per hart | `0x28000000` + harts × `0x1000` | S-target MSI doorbell, hart h's at `+ h × 0x1000` |
@@ -251,22 +252,25 @@ There is no baud-rate timing, serial bit stream, divisor-latch bank switching or
 
 In Linux mode each keypress goes two places. The virtio keyboard receives it as an evdev key event, which is what the framebuffer console on tty0 and X read. The same press is also translated into console bytes for `push_rx`, with typed text arriving as SDL text input, so the SBI console on hvc0 can be driven from the window too. A mutex protects RX producer/consumer operations. From the GUI, the ring drops incoming bytes when full. The headless stdin feed (`-ng`) waits for room instead, and `-expect=` holds that feed back until the guest has printed a given string. Output goes to the host process's stdout, so the terminal and SDL window serve different roles.
 
-## Virtio devices: disks, input and the shared folder
+## Virtio devices: disks, input, the shared folder and the network
 
-Every device a distribution needs beyond the console is virtio over MMIO, version 2 (the non-legacy transport). Each has a 4-KiB register window with the standard layout, split virtqueues of up to 256 entries, and one APLIC source. The guest builds descriptor tables in its own RAM. On `QueueNotify` the device walks them, reads and writes guest memory directly, updates the used ring and asserts its source. There is no DMA timing: the whole request completes inside the store that announced it.
+Every device a distribution needs beyond the console is virtio over MMIO, version 2 (the non-legacy transport), in [src/virtio/](../src/virtio), one file per device. The transport itself -- the 4-KiB register window, feature selection, split virtqueues of up to 256 entries, the APLIC source -- is one class, [virtio_mmio.cpp](../src/virtio/virtio_mmio.cpp), that each device extends with only its id, features, config space and what a notify does. `Memory::virtio_at` finds the device for an address. The guest builds descriptor tables in its own RAM. On `QueueNotify` the device walks them, reads and writes guest memory directly, updates the used ring and asserts its source. There is no DMA timing: the whole request completes inside the store that announced it.
 
 | Device | Implementation | Device ID | Queues | Backing |
 |---|---|---|---|---|
-| Root disk | [virtio_blk.cpp](../src/virtio_blk.cpp) | 2, or 0 without `-disk` | 1 | The `-disk=` image |
+| Root disk | [virtio_blk.cpp](../src/virtio/virtio_blk.cpp) | 2, or 0 without `-disk` | 1 | The `-disk=` image |
 | Drive slots 0–7 | Same class | 2, or 0 when empty | 1 | `drives/*.img` in name order, at most eight; a read-only drive sets `VIRTIO_BLK_F_RO` |
-| Keyboard, mouse | [virtio_input.cpp](../src/virtio_input.cpp) | 18 | 2 (eventq, statusq) | SDL events, or a `-input=` replay script |
-| Shared folder | [virtio_9p.cpp](../src/virtio_9p.cpp) | 9 | 1 | `shared/` on the host, mount tag `shared` |
+| Keyboard, mouse | [virtio_input.cpp](../src/virtio/virtio_input.cpp) | 18 | 2 (eventq, statusq) | SDL events, or a `-input=` replay script |
+| Shared folder | [virtio_9p.cpp](../src/virtio/virtio_9p.cpp) | 9 | 1 | `shared/` on the host, mount tag `shared` |
+| Network card | [virtio_net.cpp](../src/virtio/virtio_net.cpp) | 1, or 0 without `-net` | 2 (receiveq, transmitq) | User-mode NAT, [src/net/usernet.cpp](../src/net/usernet.cpp) |
 
 A block request is a header, data buffers and a status byte, in 512-byte sectors. The root disk and the drives are one class at different addresses and sources, so the drives enumerate after the root disk as further `/dev/vd*` devices.
 
 virtio-input answers the config-space select/subsel queries the Linux driver uses to learn a device's name and which event types and codes it sends. SDL scancodes map to evdev key codes. The pointer is absolute: its position over the display becomes `ABS_X`/`ABS_Y` in framebuffer pixels, with the range (0–1167 by 0–1055) answered through `CFG_ABS_INFO`, so the guest cursor sits under the host pointer. The wheels stay relative, and the buttons map to `BTN_LEFT`, `BTN_RIGHT` and `BTN_MIDDLE`. Only events over the display area are forwarded. The window thread only submits events. The CPU thread commits them to the device -- and `pump_input` delivers them -- at instruction counts that are multiples of 4,096 (`DoomSystem::service_input`), so when the guest sees an input depends on the instruction count alone; `-record` and `-replay` log and reproduce those commits.
 
 The 9P device is a 9P2000.L file server running inside the emulator. Requests are gathered from all of a request's readable descriptors and replies laid across its writable ones, which is what the Linux client's zero-copy reads and writes require. The server uses Windows wide-character APIs with extended-length paths and returns Linux errno values. It resolves the final path of every handle it opens and refuses anything outside the shared folder, including through links. Changes on either side are visible to the other immediately, because there is no cache to synchronize. Guest-visible metadata never comes from host state: timestamps for anything the guest changes are 2024-01-01 plus the instruction count as nanoseconds (and are written to the host file), access and change times equal the modification time, inode numbers are assigned in the order the guest first sees each file, listings are sorted by name, and `statfs` reports a fixed 1 TiB.
+
+The network card offers only `VIRTIO_NET_F_MAC`: no checksum or segmentation offloads, so frames are plain Ethernet of at most 1514 bytes behind a 12-byte header. What it sends goes to the user-mode NAT, which runs on its own thread and speaks ARP, DHCP, ICMP echo, UDP and TCP to the guest over host sockets (the guest is `10.0.2.15`, the host `10.0.2.2`, DNS `10.0.2.3`). What the NAT has for the guest enters at the same 4,096-instruction commit points as input, and `-record`/`-replay` log and reproduce it, so a networked run is as reproducible as a typed one.
 
 ## Linux framebuffer and power-off
 
@@ -418,7 +422,7 @@ The superproject tree was inventoried, including binary artifacts and submodule 
 | Shared FP/state helpers | `ext_fp16.hpp`, `ext_fp_common.hpp`, `ext_softfloat.hpp`, `ext_xstate.hpp`, `ext_v_common.hpp` | Numeric conversions, flags and state enable/dirty utilities |
 | Privileged features | `ext_h*`, `ext_sscofpmf*`, `ext_ssstateen*`, `ext_svinval.cpp`, `ext_zicsr.cpp` | H, traps, CSR-only extensions and fences |
 | Addressing | `src/memory.*`, `src/mmu.*`, `src/pmp.*` | Physical bus, loaders, translations and protection |
-| Devices | `src/timer.*`, `aplic.*`, `imsic.*`, `uart.*`, `virtio_blk.*`, `virtio_input.*`, `virtio_9p.*` | Timer, interrupt controllers, console, disks, keyboard and mouse, shared folder |
+| Devices | `src/timer.*`, `aplic.*`, `imsic.*`, `uart.*`, `virtio/*`, `net/usernet.*` | Timer, interrupt controllers, console, disks, keyboard and mouse, shared folder, network |
 | Host inspection | `src/debugger.*`, `gui.*`, `snapshot.hpp`, `controls.*` | Breakpoints, snapshots, rendering and keys |
 | Bare-metal platform | `tools/doom/doombuild/` first-party files | Guest startup, linking, MMIO callbacks and libc/WAD adapters |
 | Linux platform | `tools/linux/dts`, `tools/linux/ubuntu/`, `scripts/build_linux.sh`, `scripts/prepare_dtb.py` | Hardware description; kernel, BusyBox and Ubuntu build contracts |
