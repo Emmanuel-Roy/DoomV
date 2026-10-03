@@ -577,5 +577,6 @@ VirtioMmio *Memory::virtio_at(uint64_t addr, uint64_t &offset)
 	if (slot == 1) return &mouse_dev;
 	if (slot < 2 + NUM_DRIVES) return &drives[slot - 2];
 	if (slot == 2 + NUM_DRIVES) return &share;
-	return &net;
+	if (slot == 3 + NUM_DRIVES) return &net;
+	return &snd;
 }

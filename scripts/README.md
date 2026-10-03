@@ -29,6 +29,7 @@ to exit. `python scripts/boot.py <guest> --help` lists everything a guest takes.
 | `--ram 4G` | Guest memory (default 1G). DOOM is capped near 2G. |
 | `--harts 4` | CPUs, 1 to 4095 (Linux and Ubuntu). The device tree is made to match. |
 | `--net` | A network card (Linux and Ubuntu); the guest reaches the internet through the host. |
+| `--no-sound` | No sound card. By default Linux and Ubuntu play and record through this computer's default devices. |
 | `--headless` | No window; output goes to the console. |
 | `--no-build` | Use what is already built. |
 
@@ -47,6 +48,7 @@ python scripts/boot.py ubuntu --desktop-snapshot   # the booted XFCE desktop, in
 python scripts/boot.py ubuntu --install-desktops   # once, before --desktop (hours)
 python scripts/boot.py ubuntu --setup-network      # once, before --net, for an image made before networking
 python scripts/boot.py ubuntu --setup-browser      # once: a browser (NetSurf) and w3m; includes --setup-network
+python scripts/boot.py ubuntu --setup-sound        # once: aplay, arecord and speaker-test; includes --setup-network
 ```
 
 `--desktop` boots from scratch, about 25 minutes to a usable desktop.

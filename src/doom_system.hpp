@@ -11,6 +11,7 @@
 #include "snapshot.hpp"
 #include "extensions.hpp"
 #include "net/usernet.hpp"
+#include "audio/host_audio.hpp"
 #include <memory>
 #include <map>
 #include <cstdio>
@@ -87,6 +88,10 @@ public:
 	// Call after set_input_replay: a replay gets the card but no network,
 	// only the frames the log recorded.
 	bool set_network(std::string &error);
+	// -snd: a sound card, played through and recorded from the host's
+	// default devices. Call after set_input_replay, as set_network: a replay
+	// has the card and the log's periods, and no host audio.
+	void set_sound();
 	// -rtc: where the real-time clock starts, in seconds since 1970. Call
 	// before set_input_replay, whose log names the clock it was made with.
 	void set_rtc_epoch(uint64_t seconds) { memory.get_rtc().set_epoch(seconds); }
@@ -240,6 +245,17 @@ private:
 	size_t replay_net_pos = 0;
 	void service_network(uint64_t now);
 	void record_frame(uint64_t now, const std::vector<uint8_t> &frame);
+	// Sound periods, which finish when the host has played or recorded one:
+	// at the input points, recorded; from the log on a replay. A recorded
+	// period carries its samples; a played one only its moment.
+	struct SoundEvent { uint64_t at; bool rx; std::vector<uint8_t> data; };
+	std::unique_ptr<HostAudio> host_audio;
+	std::vector<SoundEvent> replay_snd;
+	size_t replay_snd_pos = 0;
+	std::vector<uint8_t> snd_buf;
+	bool snd_out_live = false;   // the host has output queued for a stream
+	void service_sound(uint64_t now);
+	void record_sound(uint64_t now, bool rx, const std::vector<uint8_t> &data);
 	size_t replay_pos = 0;
 	bool replaying = false;
 

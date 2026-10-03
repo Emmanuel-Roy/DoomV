@@ -7223,3 +7223,16 @@ since would fail the same way. DoomV now has a Goldfish RTC
 ([src/rtc.cpp](../src/rtc.cpp)), which the stock kernel already drives. Its
 start date is an input, fixed unless `-rtc` names one, so the trace stays
 the same run to run; the boot scripts pass the host's time.
+
+<a id="bug176"></a>
+### 176. A bigger kernel erased its own device tree
+
+The device tree was loaded 32 MB after the kernel. Turning on the sound
+driver took the kernel's size in memory -- its image and its BSS -- to
+0x2032000 bytes, 200 KB past that, and the kernel clears its BSS before it
+reads the device tree: every Linux boot stopped right after OpenSBI, with no
+output from the kernel at all. The device tree and the initramfs now sit
+64 MB after the kernel (0x8C000000 and 0x8C100000), OpenSBI is built for the
+new address, and `init_linux_boot` reads the size from the RISC-V Image
+header and refuses a kernel that would reach the device tree, with a message
+that says so.

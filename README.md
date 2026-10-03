@@ -6,8 +6,9 @@ DOOM and now boots OpenSBI, Linux, and Ubuntu 24.04 with a desktop.
 No existing core as a reference implementation — just an instruction
 decoder, a register file, a memory bus, and the RVA23S64 profile (RV64GCV
 plus the extensions below, and H), with the handful of devices a
-distribution needs on top: AIA interrupt controllers, a framebuffer, virtio
-disks, a virtio keyboard and mouse, and a 9P folder shared with Windows.
+distribution needs on top: AIA interrupt controllers, a framebuffer, a
+real-time clock, and virtio disks, keyboard and mouse, network card, sound
+card, and a 9P folder shared with Windows.
 
 <img width="1920" height="1080" alt="DOOM E1M1 running on DoomV, with the register file and trace log beside it" src="docs/images/doomv-hero.png" />
 
@@ -334,7 +335,9 @@ src/
     virtio_input.*         the keyboard and the mouse
     virtio_9p.*            a 9P2000.L file server for the shared folder
     virtio_net.*           the network card
+    virtio_snd.*           the sound card
   net/usernet.*          user-mode NAT behind the network card
+  audio/host_audio.*     the host's default speakers and microphone, behind the sound card
   timer.* aplic.* imsic.*  CLINT timer and the AIA interrupt controllers
   mmu.* pmp.*            Sv39/48/57 translation with a TLB, and the PMP
 ```
@@ -520,6 +523,7 @@ riscv_doom.exe -opensbi=<f> -kernel=<f> -dtb=<f> -initrd=<f> [options]   # Linux
 | `-lockstep=<path>` | Run against a reference trace -- Sail's, or an RTL simulation's -- and halt at the first record that does not match. See [Lock-stepping](#lockstep). |
 | `-lockstep-strict` | With `-lockstep`, compare everything, counters, time and interrupt timing included, and take nothing from the reference. How DoomV is held to Sail. |
 | `-net` | A network card, with user-mode NAT behind it: the guest reaches the internet through the host. See [Networking](#networking). |
+| `-snd` | A sound card, playing through the host's default output and recording from its default input. See [Sound](#sound). |
 | `-rtc=host` or `-rtc=<seconds>` | Where the guest's clock starts: the host's time, read once at start, or seconds since 1970. Without it, 2026-01-01, so a run repeats exactly. The boot scripts pass `host`. See [The clock](#clock). |
 | `-harts=<n>` | A machine of `n` identical harts (default 1), each starting at the entry with `a0` = its hart id. They take turns a step at a time, so a run is as deterministic as with one. See [Several harts](#harts). |
 
@@ -720,6 +724,32 @@ same instruction counts typed keys do, `-record` logs every one, and
 replays to the same machine state. Without `-net` the card is not there
 (device id 0) and nothing changes. A snapshot keeps the card and the frames
 in flight, not the connections.
+
+<a id="sound"></a>
+### Sound
+
+`-snd` gives a Linux guest a virtio-snd card with one output and one input
+stream, played through the host's default speakers and recorded from its
+default microphone -- whatever Windows has selected. The boot scripts add it
+for Linux and Ubuntu unless given `--no-sound`. The microphone is opened only
+while the guest records, and closed again after.
+
+```
+python scripts/boot.py ubuntu --setup-sound   # once: aplay, arecord, speaker-test
+python scripts/boot.py ubuntu                 # then, in the guest:
+speaker-test -c 2 -t wav -l 1                 #   play
+arecord -d 5 a.wav && aplay a.wav             #   record, and play it back
+```
+
+The card takes 8- or 16-bit samples, mono or stereo, at 5.5 to 48 kHz; ALSA's
+`plug` layer, which `aplay` and most programs go through, converts anything
+else. A period of sound is returned to the guest when the host has played it,
+and a recorded one when the host has captured it, so the guest runs at the
+host sound card's pace, like real hardware. That timing comes from outside
+the machine, so it is an input: periods finish only at the input points,
+`-record` logs each (with the recorded samples), and `-replay` reproduces the
+session exactly, with no sound device needed. A guest that runs slower than
+real time can not keep a stream fed, and its sound breaks up.
 
 <a id="clock"></a>
 ### The clock
@@ -1044,6 +1074,12 @@ closed the same way: timestamps for anything the guest changes come from the
 instruction count, inode numbers from the order the guest sees files, and
 free space is a fixed figure. The folder's starting contents are an input,
 like a disk image; given the same contents, the guest sees the same folder.
+
+The outside world the guest can reach is handled as input too. The clock's
+starting date is read once, before the first instruction. Network frames,
+and the moments sound periods finish, arrive at the input points like keys,
+and `-record` and `-replay` carry them. Without `-net` and `-snd`, and with
+the clock's default start, a run depends on nothing outside the machine.
 
 <a id="lockstep"></a>
 **Lock-stepping against Sail.** That determinism is what makes DoomV

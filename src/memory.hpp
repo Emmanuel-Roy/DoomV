@@ -9,6 +9,7 @@
 #include "virtio/virtio_input.hpp"
 #include "virtio/virtio_9p.hpp"
 #include "virtio/virtio_net.hpp"
+#include "virtio/virtio_snd.hpp"
 #include <cstdint>
 #include <mutex>
 #include <vector>
@@ -141,8 +142,8 @@ public:
 	// matching OpenSBI's own already-built default is strictly simpler
 	// (real hardware/QEMU-virt convention too). RAM_SIZE grew from 16MB
 	// since even just the DTB load offset OpenSBI expects
-	// (FW_TEXT_START + 0xA000000, see DoomSystem::init_linux_boot) is 160MB
-	// in, past the ~23MB kernel Image at 128MB, before any of Linux's own
+	// (FW_TEXT_START + 0xC000000, see DoomSystem::init_linux_boot) is 192MB
+	// in, past the kernel at 128MB, before any of Linux's own
 	// runtime allocation.
 	static constexpr uint64_t RAM_BASE  = 0x80000000;
 	// 1GB. 256MB was ample for a busybox initramfs and is not enough for a
@@ -235,9 +236,14 @@ public:
 	// device id 0 and the guest skips it.
 	static constexpr uint64_t VIRTIO_NET_BASE = VIRTIO_SHARE_BASE + VIRTIO_SIZE;
 	static constexpr uint32_t NET_IRQ = 13;
+	// The sound card: virtio-snd, after the network card, APLIC source 15
+	// (14 is the real-time clock). Without -snd it answers device id 0.
+	static constexpr uint64_t VIRTIO_SND_BASE = VIRTIO_NET_BASE + VIRTIO_SIZE;
+	static constexpr uint32_t SND_IRQ = 15;
 	// Every slot from the keyboard on is a virtio device, in this order:
-	// keyboard, mouse, eight drives, the shared folder, the network card.
-	static constexpr uint64_t VIRTIO_SLOTS_END = VIRTIO_NET_BASE + VIRTIO_SIZE;
+	// keyboard, mouse, eight drives, the shared folder, the network card,
+	// the sound card.
+	static constexpr uint64_t VIRTIO_SLOTS_END = VIRTIO_SND_BASE + VIRTIO_SIZE;
 	static_assert(VIRTIO_MOUSE_BASE == VIRTIO_KBD_BASE + VIRTIO_SIZE
 	              && VIRTIO_DRIVE_BASE == VIRTIO_MOUSE_BASE + VIRTIO_SIZE,
 	              "Memory::virtio_at finds a device by its slot number");
@@ -459,6 +465,7 @@ public:
 	VirtioBlk &get_drive(int i) { return drives[i]; }
 	Virtio9p &get_share() { return share; }
 	VirtioNet &get_net() { return net; }
+	VirtioSnd &get_snd() { return snd; }
 	Aplic &get_aplic() { return aplic; }
 	Rtc &get_rtc() { return rtc; }
 
@@ -507,6 +514,7 @@ private:
 	};
 	Virtio9p share;
 	VirtioNet net{NET_IRQ};
+	VirtioSnd snd{SND_IRQ};
 	// The virtio device whose window holds addr, and the offset into it.
 	VirtioMmio *virtio_at(uint64_t addr, uint64_t &offset);
 

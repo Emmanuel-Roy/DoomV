@@ -53,7 +53,7 @@ public:
 	static constexpr uint32_t MAGIC      = 0x74726976;   // "virt"
 	static constexpr uint32_t VERSION    = 2;
 	static constexpr uint32_t QUEUE_MAX  = 256;
-	static constexpr unsigned MAX_QUEUES = 2;
+	static constexpr unsigned MAX_QUEUES = 4;   // virtio-snd has four
 	// Vendor ids: any value will do; these are the two in use.
 	static constexpr uint32_t VENDOR_DOOM = 0x564d4f44;   // "DOMV"
 	static constexpr uint32_t VENDOR_QEMU = 0x554d4551;   // "QEMU", the conventional value

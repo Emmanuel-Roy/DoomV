@@ -407,8 +407,27 @@ bool DoomSystem::init_linux_boot(const char *sbi_path, const char *kernel_path, 
 	// a share of its heap -- about 18KB -- for each hart the device tree
 	// names, straight after its own image: 72MB for 4096. 2MB ran out at
 	// about 140 harts.
-	constexpr uint64_t KERNEL_OFFSET = 0x8000000, DTB_OFFSET = 0xA000000, INITRD_OFFSET = 0xA100000;
+	//
+	// The device tree is 64MB past the kernel. It was 32MB, and the kernel
+	// outgrew that when the sound driver went in: its BSS, which it clears
+	// before it reads the device tree, ran 200KB into it, and the boot
+	// stopped with no output at all.
+	constexpr uint64_t KERNEL_OFFSET = 0x8000000, DTB_OFFSET = 0xC000000, INITRD_OFFSET = 0xC100000;
 	if (!memory.load_blob(kernel_path, Memory::RAM_BASE + KERNEL_OFFSET)) return false;
+	// So that cannot happen quietly again: a RISC-V Image header (magic
+	// "RSC\x05" at byte 56) gives the kernel's whole size in memory, BSS
+	// included, at byte 16.
+	{
+		const uint8_t *image = memory.ram_data() + KERNEL_OFFSET;
+		uint64_t size = 0;
+		std::memcpy(&size, image + 16, sizeof size);
+		if (std::memcmp(image + 56, "RSC\x05", 4) == 0 && KERNEL_OFFSET + size > DTB_OFFSET) {
+			std::cerr << kernel_path << " needs " << (size >> 20) << " MB in memory, and the device tree is "
+			          << ((DTB_OFFSET - KERNEL_OFFSET) >> 20) << " MB after it: move DTB_OFFSET and "
+			          << "INITRD_OFFSET in src/doom_system.cpp, with what follows them\n";
+			return false;
+		}
+	}
 	if (!memory.load_blob(dtb_path, Memory::RAM_BASE + DTB_OFFSET)) return false;
 	// The device tree ships with a memory size baked in; -ram= makes that a
 	// choice, so the blob is corrected to match what was actually allocated.
@@ -1938,6 +1957,17 @@ bool DoomSystem::set_input_replay(const char *path)
 			memory.get_rtc().set_epoch(seconds);
 			continue;
 		}
+		// A sound period: "<instruction> snd tx" (played), or
+		// "<instruction> snd rx <hex samples>" (recorded).
+		if (kind == "snd") {
+			std::string dir, hex;
+			in >> dir >> hex;
+			SoundEvent e{(uint64_t)stamp, dir == "rx", {}};
+			for (size_t i = 0; i + 1 < hex.size(); i += 2)
+				e.data.push_back((uint8_t)std::stoul(hex.substr(i, 2), nullptr, 16));
+			replay_snd.push_back(std::move(e));
+			continue;
+		}
 		// A network frame: "<instruction> net <hex bytes>".
 		if (kind == "net") {
 			std::string hex;
@@ -2080,6 +2110,7 @@ void DoomSystem::service_input(uint64_t now)
 			input_waiting.store(false, std::memory_order_relaxed);
 		}
 		service_network(now);
+		service_sound(now);
 		memory.get_rtc().poll(memory.get_timer().get_mtime(), memory.get_aplic());
 		memory.pump_input();
 		return;
@@ -2117,6 +2148,7 @@ void DoomSystem::service_input(uint64_t now)
 	}
 
 	service_network(now);
+	service_sound(now);
 	memory.get_rtc().poll(memory.get_timer().get_mtime(), memory.get_aplic());
 	if (record_dirty) {
 		std::fflush(record_file);
@@ -2153,6 +2185,80 @@ void DoomSystem::record_frame(uint64_t now, const std::vector<uint8_t> &frame)
 	for (uint8_t b : frame) std::fprintf(record_file, "%02x", b);
 	std::fputc('\n', record_file);
 	record_dirty = true;
+}
+
+void DoomSystem::set_sound()
+{
+	memory.get_snd().set_enabled(true);
+	if (!replaying) host_audio = std::make_unique<HostAudio>();
+}
+
+void DoomSystem::record_sound(uint64_t now, bool rx, const std::vector<uint8_t> &data)
+{
+	if (!record_file) return;
+	std::fprintf(record_file, "%llu snd %s", (unsigned long long)now, rx ? "rx " : "tx");
+	if (rx)
+		for (uint8_t b : data) std::fprintf(record_file, "%02x", b);
+	std::fputc('\n', record_file);
+	record_dirty = true;
+}
+
+// A period of sound finishes here, at an input point, when the host is ready
+// for it: played once the host's queue has room -- so the guest is paced by
+// the host's sound card, as by real hardware -- and recorded once the host
+// has captured as much as the guest's buffer holds. With no host device,
+// periods finish at once: played into nothing, or recorded as silence.
+void DoomSystem::service_sound(uint64_t now)
+{
+	VirtioSnd &snd = memory.get_snd();
+	if (!snd.is_enabled()) return;
+	Aplic &aplic = memory.get_aplic();
+	if (replaying) {
+		while (replay_snd_pos < replay_snd.size() && replay_snd[replay_snd_pos].at <= now) {
+			const SoundEvent &e = replay_snd[replay_snd_pos++];
+			if (!e.rx) snd.finish_tx(memory, aplic);
+			else if (snd.next_rx_size() == e.data.size()) snd.finish_rx(e.data.data(), memory, aplic);
+		}
+		return;
+	}
+
+	// Output: every period the guest posts goes to the host as soon as the
+	// stream runs, and returns to the guest once the host has played past its
+	// end -- a period finishes when it has been heard, as on real hardware,
+	// not when it was handed over; finishing the whole buffer at once reads
+	// to ALSA as an underrun.
+	const VirtioSnd::Stream &out = snd.stream(VirtioSnd::OUTPUT);
+	const bool host_out = snd.tx_count() && host_audio && host_audio->open_output(out.hz(), out.channels, out.format);
+	for (size_t i = 0; host_out && i < snd.tx_count(); i++) {
+		if (!snd.tx_mark(i)) snd.tx_mark(i) = host_audio->play(snd.tx_data(i).data(), snd.tx_data(i).size());
+	}
+	while (snd.tx_count()) {
+		if (host_out && snd.tx_mark(0) && snd.tx_mark(0) > host_audio->played()) break;
+		snd.finish_tx(memory, aplic);   // played, or no host device to play it
+		record_sound(now, false, snd_buf);
+	}
+	// A stream released while sound was queued -- an aborted player -- stops
+	// now, rather than playing out what the guest has thrown away.
+	if (host_out) snd_out_live = true;
+	if (snd_out_live && (out.state == VirtioSnd::State::Ready || out.state == VirtioSnd::State::Idle)) {
+		host_audio->stop_output();
+		snd_out_live = false;
+	}
+
+	if (!snd.running(VirtioSnd::INPUT)) {
+		if (host_audio) host_audio->close_input();
+		return;
+	}
+	while (const uint32_t want = snd.next_rx_size()) {
+		const VirtioSnd::Stream &s = snd.stream(VirtioSnd::INPUT);
+		snd_buf.assign(want, s.format == VirtioSnd::FMT_U8 ? 0x80 : 0);   // silence
+		if (host_audio && host_audio->open_input(s.hz(), s.channels, s.format)) {
+			if (host_audio->available() < want) break;
+			host_audio->record(snd_buf.data(), want);
+		}
+		snd.finish_rx(snd_buf.data(), memory, aplic);
+		record_sound(now, true, snd_buf);
+	}
 }
 
 bool DoomSystem::set_network(std::string &error)

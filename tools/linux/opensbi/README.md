@@ -13,7 +13,7 @@ aimed at real hardware where the load address varies by board).
 
 Entry point: `0x80000000`, which is also DoomV's `RAM_BASE`. The
 platform learns where RAM and the devices live from the device tree DoomV
-loads at `0x8A000000`, and jumps to the kernel at `0x88000000`.
+loads at `0x8C000000`, and jumps to the kernel at `0x88000000`.
 
 The build raises v1.3's hart limit from 128 to 4096 (`SBI_HARTMASK_MAX_BITS`,
 with the per-hart scratch and stack areas it then needs), as many as DoomV's

@@ -421,3 +421,9 @@ and nothing else.
 | 20261003-141709 | desktop 3000M | rtc | 2be8a7a+ | 255.33 | 11.7 | `35c61483d5e3` |  |
 | 20261003-141732 | desktop 3000M | rtc (reference) | 2be8a7a+ | 256.46 | 11.7 | `35c61483d5e3` |  |
 | 20261003-141755 | desktop 3000M | rtc | 2be8a7a+ | 252.30 | 11.9 | `35c61483d5e3` |  |
+| 20261003-160155 | doom 1000M | virtio-snd (reference) | 5fecfe4+ | 292.55 | 3.4 | `3d73dac132f3` |  |
+| 20261003-160159 | doom 1000M | virtio-snd | 5fecfe4+ | 296.83 | 3.4 | `3d73dac132f3` |  |
+| 20261003-160202 | desktop 3000M | virtio-snd (reference) | 5fecfe4+ | 243.50 | 12.3 | `35c61483d5e3` |  |
+| 20261003-160229 | desktop 3000M | virtio-snd | 5fecfe4+ | 252.81 | 11.9 | `35c61483d5e3` |  |
+| 20261003-160253 | desktop 3000M | virtio-snd (reference) | 5fecfe4+ | 243.97 | 12.3 | `35c61483d5e3` |  |
+| 20261003-160317 | desktop 3000M | virtio-snd | 5fecfe4+ | 249.83 | 12.0 | `35c61483d5e3` |  |

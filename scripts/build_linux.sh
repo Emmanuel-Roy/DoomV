@@ -49,7 +49,7 @@ rm -rf "$SBI/build"
 make -C "$SBI" PLATFORM=generic CROSS_COMPILE=riscv64-linux-gnu- \
     CC='riscv64-linux-gnu-gcc -std=gnu11' PLATFORM_RISCV_XLEN=64 \
     PLATFORM_RISCV_ISA=rv64imafdc_zicsr_zifencei PLATFORM_RISCV_ABI=lp64d \
-    FW_JUMP_ADDR=0x88000000 FW_JUMP_FDT_ADDR=0x8A000000 -j"$JOBS"
+    FW_JUMP_ADDR=0x88000000 FW_JUMP_FDT_ADDR=0x8C000000 -j"$JOBS"
 cp "$SBI/build/platform/generic/firmware/fw_jump.elf" "$OUT/fw_jump.elf"
 
 echo '=== Linux (pinned gitlink; source stays on the WSL filesystem) ==='
@@ -89,7 +89,7 @@ grep -qP '^	range 2 4096 if !RISCV_SBI_V01$' "$KERNEL/arch/riscv/Kconfig"     ||
 "$KERNEL/scripts/config" --file "$KERNEL/.config" --disable RISCV_SBI_V01 \
     --enable NONPORTABLE --enable HVC_RISCV_SBI --enable BLK_DEV_INITRD --enable BINFMT_SCRIPT \
     --enable FB --enable FB_SIMPLE --enable FRAMEBUFFER_CONSOLE \
-    --enable MAGIC_SYSRQ --enable VIRTIO_INPUT --enable INPUT_EVDEV \
+    --enable MAGIC_SYSRQ --enable VIRTIO_INPUT --enable INPUT_EVDEV --enable SND_VIRTIO \
     --set-val NR_CPUS 4096
 make -C "$KERNEL" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- olddefconfig
 make -C "$KERNEL" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- Image -j"$JOBS"

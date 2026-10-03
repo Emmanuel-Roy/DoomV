@@ -202,6 +202,14 @@ and the updates and security suites):
 python scripts/boot.py ubuntu --setup-network
 ```
 
+**Sound.** Ubuntu boots with a sound card unless given `--no-sound`. The
+image has no ALSA tools; `--setup-sound` installs them (the same way as the
+browser, below):
+
+```
+python scripts/boot.py ubuntu --setup-sound      # then: speaker-test -c 2 -t wav -l 1
+```
+
 **A browser.** `--setup-browser` does the above, then boots the image with the
 network and the host's clock, logs in, and installs `systemd-timesyncd`, the
 CA certificates, `curl`, `w3m` and NetSurf (`netsurf-gtk`), about seven
@@ -267,38 +275,37 @@ wsl -d Ubuntu -u root -- bash tools/linux/ubuntu/mkdesktop.sh --sessions-only /m
 
 ## Known constraints
 
-**Memory.** DoomV currently has 1 GB (`Memory::RAM_SIZE` in
-`src/memory.hpp`, mirrored by the `memory@80000000` node in
-`tools/linux/dts/doomv.dts` — the two have to agree). systemd in 1 GB is
-workable but tight, and `apt` is not. If the boot dies in the OOM killer,
-that pair is the thing to raise, and both must be changed together.
+**Memory.** The default is 1 GB. systemd in 1 GB is workable but tight, and
+a big `apt` run is not; `--ram 4G` (or `-ram=4G`) raises it, and the device
+tree is corrected to match at load.
 
 **A guest-side timer is not a wall clock.** Guest time here is driven by
 instructions -- `mtime` advances once every two and `timebase-frequency` is
 5e8 -- so one guest second is a billion instructions,
-which is minutes of real time. A `sleep 60` inside the guest is a
-three-and-a-half *hour* wait, which is how the first version of the stage-2
-heartbeat produced no output at all. Anything scripted inside a guest that
+about four seconds at today's speed, and was minutes when this was first
+written: a `sleep 60` inside the guest was then a three-and-a-half *hour*
+wait, which is how the first version of the stage-2 heartbeat produced no
+output at all. The date is right at boot -- the real-time clock starts at
+the host's time -- and then falls behind; `systemd-timesyncd`, from
+`--setup-browser`, corrects it over the network. Anything scripted inside a guest that
 means to wait for a wall-clock interval has to be scaled, or keyed off work
 done rather than time passed.
 
 **Speed.** A Linux boot measured about 6.6 MIPS when this page was
-written, and the initramfs boot in [performance/](../../../performance/README.md)
-now runs at about 30 MIPS, or 36 with its PGO build -- run
-`tools/verification/bench_boot.sh` to check yours -- so a systemd boot that
-takes two seconds on hardware still takes minutes here. The figure is worth
+written; the benchmarks in [performance/](../../../performance/README.md) now
+run at 220 to 300 MIPS with the PGO build -- see `performance/RUNS.md` -- so a
+systemd boot that takes two seconds on hardware takes about a minute here. The figure is worth
 measuring rather than assuming: it was 1.67 MIPS before a TLB, a `read16` fast
 path and a PMP region cache, and the timings quoted on this page were taken at
 6.6. That is expected, not a fault, and
 it is why `-ng` exists for the test suites — but for this image you want the
 window, since the point is to log in and look around.
 
-**No network.** There is no NIC in this machine, so `apt` cannot reach a
-mirror from inside the guest; everything the image needs has to be in it
-before it boots. `mkrootfs.sh`'s `--include=` list is where to add packages.
-`systemd-networkd-wait-online` is disabled by the script for the same
-reason — left enabled it blocks the boot for two minutes waiting for a link
-that will never come up.
+**The network is optional.** Without `--net` there is no network card, so
+`apt` cannot reach a mirror; with it, it can (`--setup-network` once for an
+older image). `systemd-networkd-wait-online` is disabled for the boots
+without one -- left enabled it blocks the boot for two minutes waiting for a
+link that will never come up.
 
 ## Status
 

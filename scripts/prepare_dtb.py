@@ -11,7 +11,7 @@ import re
 import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
-INITRD_START = 0x8A100000   # RAM_BASE + INITRD_OFFSET, src/doom_system.cpp
+INITRD_START = 0x8C100000   # RAM_BASE + INITRD_OFFSET, src/doom_system.cpp
 RAM_END = 0x90000000
 
 

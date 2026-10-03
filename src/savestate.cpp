@@ -44,9 +44,10 @@ constexpr char MAGIC[8] = {'D', 'O', 'O', 'M', 'V', 'S', 'N', 'P'};
 // Bumped whenever the layout below changes. A build reads the layout it
 // writes, and the ones before it that it still knows: version 1 is the
 // single-hart layout, from before a machine could have several harts, and
-// reads as a machine of one; version 2 has no network card, and 3 no
-// real-time clock.
-constexpr uint32_t VERSION = 4;
+// reads as a machine of one; version 2 has no network card, 3 no
+// real-time clock, and 4 no sound card, with two queues to a virtio device
+// where there are now four.
+constexpr uint32_t VERSION = 5;
 
 class Writer {
 public:
@@ -65,6 +66,7 @@ public:
 	// A section marker: a reader that has drifted by a byte stops here.
 	void mark(uint32_t tag) { pod(tag); }
 	bool close() { const bool good = ok() && std::fclose(f) == 0; f = nullptr; return good; }
+	void fail() { failed = true; }
 private:
 	std::FILE *f;
 	bool failed = false;
@@ -184,13 +186,20 @@ struct SaveState {
 		io.pod(u.scr);
 	}
 
-	template <class IO> static void input(IO &io, VirtioInput &v)
+	// A device's virtqueues: four since version 5, two before.
+	template <class IO> static void queues(IO &io, VirtioMmio::Queue (&q)[VirtioMmio::MAX_QUEUES], uint32_t version)
+	{
+		const unsigned n = version >= 5 ? VirtioMmio::MAX_QUEUES : 2;
+		for (unsigned i = 0; i < n; i++) io.pod(q[i]);
+	}
+
+	template <class IO> static void input(IO &io, VirtioInput &v, uint32_t version)
 	{
 		io.pod(v.status);
 		io.pod(v.device_feat_sel);
 		io.pod(v.queue_sel);
 		io.pod(v.interrupt_status);
-		io.pod(v.queues);
+		queues(io, v.queues, version);
 		io.pod(v.cfg_select);
 		io.pod(v.cfg_subsel);
 		std::lock_guard<std::mutex> lock(v.event_mutex);
@@ -224,7 +233,7 @@ struct SaveState {
 	// Version 3 on. The frames waiting for the guest are part of the machine;
 	// the network behind the card is not, and a restored run starts with no
 	// connections open.
-	template <class IO> static void net(IO &io, VirtioNet &n)
+	template <class IO> static void net(IO &io, VirtioNet &n, uint32_t version)
 	{
 		io.pod(n.status);
 		io.pod(n.device_feat_sel);
@@ -232,7 +241,7 @@ struct SaveState {
 		io.pod(n.driver_feat);
 		io.pod(n.queue_sel);
 		io.pod(n.interrupt_status);
-		io.pod(n.queues);
+		queues(io, n.queues, version);
 		uint64_t count = n.rx_pending.size();
 		io.pod(count);
 		if constexpr (std::is_same_v<IO, Writer>) {
@@ -266,6 +275,38 @@ struct SaveState {
 		io.pod(r.alarm_running);
 		io.pod(r.irq_enabled);
 		io.pod(r.irq_pending);
+	}
+
+	// The sound card: its streams and the periods it holds. Version 5 on.
+	template <class IO> static void snd(IO &io, VirtioSnd &d)
+	{
+		io.pod(d.status);
+		io.pod(d.device_feat_sel);
+		io.pod(d.driver_feat_sel);
+		io.pod(d.driver_feat);
+		io.pod(d.queue_sel);
+		io.pod(d.interrupt_status);
+		io.pod(d.queues);
+		io.pod(d.streams);
+		for (std::deque<VirtioSnd::Msg> *list : {&d.tx, &d.rx}) {
+			uint64_t count = list->size();
+			io.pod(count);
+			if constexpr (std::is_same_v<IO, Reader>) list->assign(count, VirtioSnd::Msg{});
+			for (VirtioSnd::Msg &m : *list) {
+				if (!io.ok()) return;
+				io.pod(m.head);
+				io.pod(m.status_addr);
+				io.pod(m.rx_bytes);
+				uint64_t bytes = m.data.size(), bufs = m.buffers.size();
+				io.pod(bytes);
+				io.pod(bufs);
+				if (bytes > (1u << 20) || bufs > VirtioMmio::QUEUE_MAX) { io.fail(); return; }
+				m.data.resize(bytes);
+				m.buffers.resize(bufs);
+				io.bytes(m.data.data(), bytes);
+				for (auto &b : m.buffers) { io.pod(b.first); io.pod(b.second); }
+			}
+		}
 	}
 
 	template <class IO> static void share(IO &io, Virtio9p &s)
@@ -350,13 +391,14 @@ struct SaveState {
 		}
 		aplic(io, m.aplic);
 		uart(io, m.uart);
-		input(io, m.kbd_dev);
-		input(io, m.mouse_dev);
+		input(io, m.kbd_dev, version);
+		input(io, m.mouse_dev, version);
 		blk(io, m.disk);
 		for (VirtioBlk &d : m.drives) blk(io, d);
 		share(io, m.share);
-		if (version >= 3) net(io, m.net);
+		if (version >= 3) net(io, m.net, version);
 		if (version >= 4) rtc(io, m.rtc);
+		if (version >= 5) snd(io, m.snd);
 		io.mark(0x44455600);   // "DEV"
 	}
 
@@ -459,6 +501,8 @@ bool SaveState::save(DoomSystem &s, const std::string &dir)
 	w.pod(harts);
 	const uint8_t net = memory.net.is_connected();
 	w.pod(net);
+	const uint8_t snd = memory.snd.is_enabled();
+	w.pod(snd);
 	// The extensions are each hart's, and the current hart's are live in
 	// Extensions rather than in its Hart.
 	s.cur->ext = Extensions;
@@ -497,6 +541,8 @@ bool SaveState::restore(DoomSystem &s, const std::string &dir)
 	if (harts != s.hart_count()) differ += " -harts";
 	const uint8_t net = version >= 3 ? r.get<uint8_t>() : 0;
 	if (net != (uint8_t)memory.net.is_connected()) differ += " -net";
+	const uint8_t snd = version >= 5 ? r.get<uint8_t>() : 0;
+	if (snd != (uint8_t)memory.snd.is_enabled()) differ += " -snd";
 	if (!differ.empty()) {
 		std::cout << "restore: this machine is not the one the snapshot was taken on -- start it with "
 		             "the same -ram, -march, boot files, disks and shared folder. Different:" << differ << "\n";
@@ -548,6 +594,8 @@ bool SaveState::restore(DoomSystem &s, const std::string &dir)
 	// step is already in the machine.
 	const uint64_t now = memory.instruction_count();
 	while (s.replay_pos < s.replay_events.size() && s.replay_events[s.replay_pos].first <= now) s.replay_pos++;
+	while (s.replay_net_pos < s.replay_net.size() && s.replay_net[s.replay_net_pos].first <= now) s.replay_net_pos++;
+	while (s.replay_snd_pos < s.replay_snd.size() && s.replay_snd[s.replay_snd_pos].at <= now) s.replay_snd_pos++;
 	// The time it took is printed for bench.py, which leaves it out of a
 	// measurement that starts from a snapshot.
 	const double took = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();

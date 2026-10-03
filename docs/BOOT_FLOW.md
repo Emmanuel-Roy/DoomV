@@ -221,11 +221,11 @@ Use the default runtime configuration with the supplied DT: a Linux boot with no
 |---|---|---|
 | OpenSBI PT_LOAD segments | Starting around `0x80000000` according to ELF layout | `load_elf` |
 | Kernel Image | `0x88000000` | Raw blob at RAM_BASE + `0x8000000` |
-| Compiled DTB | `0x8A000000` | Raw blob at RAM_BASE + `0xA000000` |
-| Initramfs | `0x8A100000` | Raw blob at RAM_BASE + `0xA100000` |
+| Compiled DTB | `0x8C000000` | Raw blob at RAM_BASE + `0xC000000` |
+| Initramfs | `0x8C100000` | Raw blob at RAM_BASE + `0xC100000` |
 | Initial PC | `0x80000000` | Set explicitly, on every hart |
 | a0 / x10 | the hart's ID | Hart ID |
-| a1 / x11 | `0x8A000000` | DTB pointer |
+| a1 / x11 | `0x8C000000` | DTB pointer |
 
 The kernel sits 128 MiB in, not at OpenSBI's default of 2 MiB, because the
 firmware is built for up to 4096 harts (`scripts/build_linux.sh`) and keeps
@@ -236,7 +236,7 @@ about 140.
 
 Firmware jump constants, host offsets, DTS memory ranges and rebuilt artifact sizes must agree. The loader checks the backing allocation boundary, but does not detect overlap between separately loaded blobs. In this source inventory the kernel Image is 24,220,160 bytes, smaller than the 32-MiB space to the DTB, and initramfs is 2,024,960 bytes. These are snapshot file sizes, not permanent maximums.
 
-The checked-in DTS declares initrd start `0x8A100000` and end `0x8A2EE600`, an exclusive end, 2,024,960 bytes apart. Those values are placeholders. The host does not patch the DTB when it loads the archive, so `prepare_dtb.py` rewrites the end address from the real archive size each time the scripts build, and removes both properties from the disk-boot trees.
+The checked-in DTS declares initrd start `0x8C100000` and end `0x8C2EE600`, an exclusive end, 2,024,960 bytes apart. Those values are placeholders. The host does not patch the DTB when it loads the archive, so `prepare_dtb.py` rewrites the end address from the real archive size each time the scripts build, and removes both properties from the disk-boot trees.
 
 ## What the device tree tells firmware and Linux
 
@@ -375,18 +375,20 @@ on a 2-MiB boundary. These are boot interface requirements, not a consequence
 of the ELF format. See the [Linux 6.12 boot requirements](https://www.kernel.org/doc/html/v6.12/arch/riscv/boot.html).
 
 In DoomV, `init_linux_boot` initially sets `a0` to each hart's ID and
-`a1 = 0x8A000000`, then starts the firmware at `0x80000000` on every hart.
+`a1 = 0x8C000000`, then starts the firmware at `0x80000000` on every hart.
 OpenSBI prepares the supervisor handoff; the raw kernel is already loaded at
 `0x88000000`. The firmware entry and
 kernel entry are two different transitions, even though both pass a hart ID
 and a device-tree pointer. The source is
 [DoomSystem::init_linux_boot](../src/doom_system.cpp).
 
-The image layout leaves 32 MiB between the kernel load address and the DTB.
-Since the host loads those blobs separately, check actual file sizes: a
-kernel image reaching the DTB can be overwritten when the DTB is loaded.
-Likewise, the DTB has 1 MiB before the initramfs at `0x8A100000`. Those gaps
-are layout constraints, not automatic collision checks in the loader.
+The image layout leaves 64 MiB between the kernel load address and the DTB.
+It was 32 MiB until the kernel's BSS outgrew it (see bug 176): the kernel
+clears its BSS before reading the device tree, so a kernel that reaches the
+DTB erases it and the boot stops with no output. The loader now checks: the
+RISC-V Image header gives the kernel's size in memory, and a kernel that
+would reach the DTB is refused with a message. The DTB has 1 MiB before the
+initramfs at `0x8C100000`; that gap is still a layout constraint only.
 
 ## A console character, end to end
 

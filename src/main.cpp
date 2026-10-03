@@ -98,6 +98,7 @@ int main(int argc, char *argv[])
 	unsigned harts = 1;
 	bool network = false;
 	bool have_rtc = false;
+	bool sound = false;
 	uint64_t rtc_epoch = 0;
 	for (int i = 1; i < argc; i++) {
 		std::string arg = argv[i];
@@ -135,6 +136,10 @@ int main(int argc, char *argv[])
 			// A network card, with user-mode NAT behind it: the guest gets
 			// 10.0.2.15 by DHCP and reaches the outside through host sockets.
 			network = true;
+		} else if (arg == "-snd") {
+			// A sound card, playing through and recording from the host's
+			// default audio devices.
+			sound = true;
 		} else if (arg.rfind("-rtc=", 0) == 0) {
 			// Where the real-time clock starts: "host" for the host's clock,
 			// read once, now; or seconds since 1970. Without it, a fixed
@@ -324,6 +329,7 @@ int main(int argc, char *argv[])
 			return -1;
 		}
 	}
+	if (sound) system.set_sound();
 	if (!record_path.empty() && !system.set_input_record(record_path.c_str())) {
 		std::cout << "cannot write input log: " << record_path << "\n";
 		return -1;

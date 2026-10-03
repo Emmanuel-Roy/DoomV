@@ -6,6 +6,7 @@
   python scripts/boot.py ubuntu --desktop-snapshot    # the booted XFCE desktop, in seconds
   python scripts/boot.py ubuntu --net                 # with a network (once: --setup-network)
   python scripts/boot.py ubuntu --setup-browser       # once: a browser, and the network for it
+  python scripts/boot.py ubuntu --setup-sound         # once: aplay, arecord, speaker-test
   python scripts/boot.py ubuntu --login               # test: log in, run a command, exit
 
 The image is an input: it takes hours to build, so this script never builds
@@ -243,11 +244,19 @@ def install_desktops(image: Path, timeout_hours: float, emulator_args=()):
             stop(proc, 10)
 
 
-# What --setup-browser types once logged in: wait for DHCP and DNS, install,
-# report on the serial console, power off. One line, because the input script
-# types it into the shell as it is.
+# What --setup-browser and --setup-sound install. The browser set: a clock
+# that keeps itself right over the network (systemd-timesyncd), the CA
+# certificates, curl, w3m, and NetSurf, a browser light enough to use on an
+# emulated CPU. The sound set: ALSA's aplay, arecord, speaker-test and mixer.
 BROWSER_PACKAGES = "systemd-timesyncd ca-certificates curl w3m netsurf-gtk"
-BROWSER_SCRIPT = f"""\
+SOUND_PACKAGES = "alsa-utils"
+
+
+def install_script(packages: str) -> str:
+    """What the install boot types once logged in: wait for DHCP and DNS,
+    install, report on the serial console, power off. One line, because the
+    input script types it into the shell as it is."""
+    return f"""\
 sleep 20000
 type root
 key 28 1
@@ -257,36 +266,34 @@ type doomv
 key 28 1
 key 28 0
 sleep 75000
-type (for i in $(seq 90); do getent hosts ports.ubuntu.com >/dev/null && break; sleep 2; done; export DEBIAN_FRONTEND=noninteractive; apt-get update -q && apt-get install -y -q {BROWSER_PACKAGES}) > /dev/hvc0 2>&1 && echo DOOMV-BROWSER-OK > /dev/hvc0 || echo DOOMV-BROWSER-FAILED > /dev/hvc0; sync; poweroff
+type (for i in $(seq 90); do getent hosts ports.ubuntu.com >/dev/null && break; sleep 2; done; export DEBIAN_FRONTEND=noninteractive; apt-get update -q && apt-get install -y -q {packages}) > /dev/hvc0 2>&1 && echo DOOMV-INSTALL-OK > /dev/hvc0 || echo DOOMV-INSTALL-FAILED > /dev/hvc0; sync; poweroff
 key 28 1
 key 28 0
 """
 
 
-def setup_browser(image: Path, timeout: float, emulator_args=()):
-    """Make the image able to open websites, with DoomV running apt.
+def install_packages(image: Path, packages: str, timeout: float, emulator_args=()):
+    """Install Ubuntu packages into the image, with DoomV running apt.
 
     On the host, the network setup (DHCP, DNS, apt sources with universe);
     then a boot with the network card and the host's clock -- apt and HTTPS
-    both check dates -- that logs in and installs a clock that keeps itself
-    right over the network (systemd-timesyncd), the CA certificates, curl,
-    w3m, and NetSurf, a browser light enough to use on an emulated CPU.
+    both check dates -- that logs in, installs, and powers off.
     """
     if emulator_running():
         raise RuntimeError("A DoomV is already running; close it before changing the image.")
     run(["wsl.exe", "-d", "Ubuntu", "-u", "root", "--", "bash",
          wsl_path(ROOT / "tools/linux/ubuntu/mknetwork.sh"), wsl_path(image)])
-    log = BUILD / "logs/ubuntu-browser.log"
+    log = BUILD / "logs/ubuntu-install.log"
     log.parent.mkdir(parents=True, exist_ok=True)
-    script = BUILD / "logs/ubuntu-browser.script"
-    script.write_text(BROWSER_SCRIPT, newline="\n")
+    script = BUILD / "logs/ubuntu-install.script"
+    script.write_text(install_script(packages), newline="\n")
     args = headless(emulator_args)
     if "-net" not in args:
         args.append("-net")
     if not any(a.startswith("-rtc=") for a in args):
         args.append("-rtc=host")
     command = ubuntu_command(image, args, extra=(f"-expect={LOGIN_PROMPT}", f"-input={script}"))
-    print(f"DoomV is installing {BROWSER_PACKAGES}. About 10 minutes; the log is {log}", flush=True)
+    print(f"DoomV is installing {packages}. About 10 minutes; the log is {log}", flush=True)
     started = time.monotonic()
     with log.open("wb") as output:
         proc = subprocess.Popen(command, cwd=ROOT, env=environment(),
@@ -297,9 +304,9 @@ def setup_browser(image: Path, timeout: float, emulator_args=()):
                 text = log.read_text(errors="replace")
                 if "Kernel panic" in text:
                     raise RuntimeError(f"the guest panicked; see {log}")
-                if "DOOMV-BROWSER-FAILED" in text:
+                if "DOOMV-INSTALL-FAILED" in text:
                     result = False
-                elif "DOOMV-BROWSER-OK" in text:
+                elif "DOOMV-INSTALL-OK" in text:
                     result = True
                 elif proc.poll() is not None:
                     raise RuntimeError(f"the emulator exited before the install finished; see {log}")
@@ -315,8 +322,6 @@ def setup_browser(image: Path, timeout: float, emulator_args=()):
             if not result:
                 raise RuntimeError(f"apt in the guest failed; see {log}")
             print(f"PASS: installed in {(time.monotonic() - started) / 60:.0f} minutes.")
-            print("Boot with: python scripts/boot.py ubuntu --net --desktop openbox, then in the "
-                  "terminal: netsurf https://example.com &   (or w3m, in any shell)")
         finally:
             stop(proc, 10)
 
@@ -338,6 +343,7 @@ def desktop_snapshot_command(image: Path, snapshot: Path, args, passthrough):
         raise RuntimeError("--desktop-snapshot restores the machine the snapshot was made on; "
                            "it cannot take --" + ", --".join(changed))
     args.drives, args.shared = "", ""
+    args.sound = False   # the snapshot predates the sound card
     return ubuntu_command(image, boot_args(args, passthrough), dtb="ubuntu-xfce.dtb",
                           extra=[f"-restore={snapshot}"])
 
@@ -358,11 +364,13 @@ def main():
                    help="set the image up for --net (DHCP, DNS), once; images made since need not")
     u.add_argument("--setup-browser", action="store_true",
                    help="install a browser (NetSurf, and w3m for the console), once; includes --setup-network")
+    u.add_argument("--setup-sound", action="store_true",
+                   help="install ALSA's tools (aplay, arecord, speaker-test), once; includes --setup-network")
     add_boot_options(parser)
     t = parser.add_argument_group("test")
     t.add_argument("--login", action="store_true", help="headless: log in, run a command, exit")
     t.add_argument("--timeout", type=float, default=1800, metavar="SECONDS",
-                   help="--login and --setup-browser timeout (default 1800)")
+                   help="--login, --setup-browser and --setup-sound timeout (default 1800)")
     t.add_argument("--install-timeout", type=float, default=16, metavar="HOURS", help="--install-desktops timeout (default 16)")
     add_advanced_options(parser)
     args = parser.parse_args(argv)
@@ -379,8 +387,16 @@ def main():
         if args.install_desktops:
             install_desktops(image, args.install_timeout, boot_args(args, passthrough))
             return 0
-        if args.setup_browser:
-            setup_browser(image, args.timeout, boot_args(args, passthrough))
+        if args.setup_browser or args.setup_sound:
+            packages = " ".join(p for p, on in ((BROWSER_PACKAGES, args.setup_browser),
+                                                 (SOUND_PACKAGES, args.setup_sound)) if on)
+            install_packages(image, packages, args.timeout, boot_args(args, passthrough))
+            if args.setup_browser:
+                print("Browse with: python scripts/boot.py ubuntu --net --desktop openbox, then in its "
+                      "terminal: netsurf https://en.wikipedia.org &   (or w3m <url>, in any shell)")
+            if args.setup_sound:
+                print("Test with: speaker-test -c 2 -t wav -l 1   (play)   "
+                      "arecord -d 5 a.wav && aplay a.wav   (record, then play back)")
             return 0
         if args.setup_network:
             if emulator_running():
