@@ -65,6 +65,7 @@ All ranges below are half-open: base is included, end is excluded. Values come f
 | Region | Base | Size | End | Owner/purpose |
 |---|---|---|---|---|
 | Test / power-off | `0x00100000` | `0x1000` | `0x00101000` | `sifive,test0`: `0x5555` powers off, `0x7777` reboots, `0x3333` fails |
+| Real-time clock | `0x00101000` | `0x1000` | `0x00102000` | `google,goldfish-rtc`; `-rtc=`; APLIC source 14 |
 | CLINT | `0x02000000` | `0x10000` | `0x02010000` | msip and mtimecmp per hart, mtime |
 | APLIC | `0x0C000000` | `0x4000` | `0x0C004000` | Source configuration and MSI forwarding |
 | DOOM input | `0x10000000` | 4 | `0x10000004` | Pop a packed key event |
@@ -277,6 +278,8 @@ The network card offers only `VIRTIO_NET_F_MAC`: no checksum or segmentation off
 A Linux guest gets a second framebuffer: a 1168×1056, 32-bit linear aperture at `0x50000000`, described by a `simple-framebuffer` node. The kernel's simplefb driver trusts the node's width, height, stride and format completely, so [doomv.dts](../tools/linux/dts/doomv.dts) and `Memory::LFB_W`/`LFB_H` must agree, and nothing checks that they do. fbcon draws a 146×66 character console into it. The X desktops use the same aperture through Xorg's fbdev driver.
 
 The `sifive,test0` register at `0x00100000` is how a guest stops the machine. OpenSBI's generic platform implements SBI system reset through it, so a guest `poweroff`, or `echo o > /proc/sysrq-trigger`, ends in a 32-bit store of `0x5555`. Memory records the request; the CPU loop checks it, writes any `-fbdump` image and ends the run. `0x7777` (reboot) and `0x3333` (fail) currently stop the run the same way.
+
+The Goldfish RTC at `0x00101000` ([rtc.cpp](../src/rtc.cpp)) gives Linux the date at boot (`RTC_HCTOSYS`). It reads `epoch + offset + mtime x 2 ns`: `mtime` advances with the instruction stream, `epoch` is fixed before the first instruction (2026-01-01, or what `-rtc=` names -- `host` reads the host's clock once), and `offset` is what the guest set. The host's clock is never read while the machine runs. `-record` logs the epoch as `0 rtc <seconds>`, `-replay` restores it, and snapshots (version 4) keep the whole device. The alarm fires at the input points, which fall on the same instructions every run.
 
 ## DOOM display input and debug output
 

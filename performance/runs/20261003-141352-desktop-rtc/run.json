@@ -1,0 +1,16 @@
+{
+  "time": "20261003-141352",
+  "label": "rtc",
+  "workload": "desktop",
+  "steps": 3000000000,
+  "seconds": 12.062,
+  "restore_seconds": 10.958,
+  "mips": 248.712,
+  "crash_log_sha256": "35c61483d5e347339025c4b3e2817c873db128f67b25b730530f79f52c958898",
+  "exe": "Z:\\Code\\Dev\\DoomV\\riscv_doom.exe",
+  "exe_sha256": "7e80e2a8376cc1a220fabc072fe9e349bad4e1a3ab74f583594511869572a615",
+  "commit": "2be8a7a",
+  "dirty": true,
+  "host": "AMD64 Family 25 Model 97 Stepping 2, AuthenticAMD / Windows 10",
+  "profiled": false
+}

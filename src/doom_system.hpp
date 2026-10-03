@@ -87,6 +87,9 @@ public:
 	// Call after set_input_replay: a replay gets the card but no network,
 	// only the frames the log recorded.
 	bool set_network(std::string &error);
+	// -rtc: where the real-time clock starts, in seconds since 1970. Call
+	// before set_input_replay, whose log names the clock it was made with.
+	void set_rtc_epoch(uint64_t seconds) { memory.get_rtc().set_epoch(seconds); }
 	// -trace: a commit log of every instruction and trap, in Spike's format.
 	// -lockstep: run against a reference's commit log and halt at the first
 	// record that does not match. See lockstep.cpp.
@@ -207,6 +210,12 @@ private:
 	// An input script's `sleep` unit: instructions per millisecond, about
 	// one host millisecond at the interpreter's speed.
 	static constexpr uint64_t SCRIPT_INSTR_PER_MS = 10000;
+	// Between two typed keys (`type`, and pasting): 2,000,000 instructions,
+	// 2 ms of guest time at mtime's 500 MHz, one tick per two steps. It was
+	// 200,000, 0.2 ms -- 5,000 keys a second to the guest, faster than a busy
+	// X server drains /dev/input/event0, so the kernel's evdev buffer
+	// overflowed and dropped keys, a run of them at a time.
+	static constexpr uint64_t TYPE_GAP = 200 * SCRIPT_INSTR_PER_MS;
 
 	void submit_input(const GuestInput &in);           // any thread
 	void service_input(uint64_t now);                  // CPU thread

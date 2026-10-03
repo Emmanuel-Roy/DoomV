@@ -7200,3 +7200,26 @@ no udev and names its input devices in `xorg.conf.d` instead, so nothing
 named the rules and X fell back. `mkdesktop.sh` now sets `XkbRules evdev`
 (with `pc105` and `us`) on the keyboard. An existing image picks it up with
 `mkdesktop.sh --sessions-only`.
+
+<a id="bug174"></a>
+### 174. Scripted typing dropped keys under X
+
+An `-input` script's `type`, and pasting (F8, Ctrl+Alt+V), pressed one key
+every 200,000 instructions. With mtime at 500 MHz and one tick per two
+steps, that is 0.2 ms of guest time: 5,000 keys a second. A text console
+keeps up; an X server that is busy -- starting a program, drawing -- does
+not, the kernel's evdev buffer for `/dev/input/event0` fills, and the events
+that do not fit are dropped, a run of keys at a time. `date; netsurf https:`
+arrived as `dat//`. The gap is now 2,000,000 instructions, 2 ms of guest
+time (`DoomSystem::TYPE_GAP`).
+
+<a id="bug175"></a>
+### 175. The guest had no clock
+
+Nothing told the guest the date. With no RTC, Ubuntu's systemd advanced the
+clock to its own build time, April 2024, and kept it: apt rejected the
+archive's Release files as "not valid yet", and any HTTPS certificate issued
+since would fail the same way. DoomV now has a Goldfish RTC
+([src/rtc.cpp](../src/rtc.cpp)), which the stock kernel already drives. Its
+start date is an input, fixed unless `-rtc` names one, so the trace stays
+the same run to run; the boot scripts pass the host's time.

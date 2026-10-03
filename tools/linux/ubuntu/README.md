@@ -195,10 +195,21 @@ Plain `boot.py ubuntu`, without `--desktop`, is the text console as before.
 systemd-networkd takes an address by DHCP. Images made by `mkrootfs.sh` are
 set up for it; an image made before that needs it once, which
 `mknetwork.sh` does from the host (DHCP on any Ethernet card, networkd
-enabled, `/etc/resolv.conf` naming `10.0.2.3`):
+enabled, `/etc/resolv.conf` naming `10.0.2.3`, apt sources with `universe`
+and the updates and security suites):
 
 ```
 python scripts/boot.py ubuntu --setup-network
+```
+
+**A browser.** `--setup-browser` does the above, then boots the image with the
+network and the host's clock, logs in, and installs `systemd-timesyncd`, the
+CA certificates, `curl`, `w3m` and NetSurf (`netsurf-gtk`), about seven
+minutes:
+
+```
+python scripts/boot.py ubuntu --setup-browser
+python scripts/boot.py ubuntu --net --desktop openbox   # then: netsurf https://en.wikipedia.org &
 ```
 
 **Installing** follows the same split as building the image. On the host,

@@ -241,6 +241,8 @@ uint32_t Memory::read32(uint64_t addr)
 		std::memcpy(&val, &lfb[addr - LFB_BASE], sizeof(val));
 		return val;
 	}
+	// Past RAM, which never reaches it: the clock is read once a boot.
+	if (addr >= RTC_BASE && addr < RTC_BASE + RTC_SIZE) return rtc.read32(addr - RTC_BASE, timer.get_mtime());
 
 	return (uint32_t)read16(addr) | ((uint32_t)read16(addr + 2) << 16);
 }
@@ -386,6 +388,7 @@ void Memory::write32(uint64_t addr, uint32_t val)
 	// MMIO_INPUT/MMIO_TICK ahead of its own RAM fast path.
 	if (addr >= CLINT_BASE && addr < CLINT_BASE + CLINT_SIZE) { timer.write32(addr - CLINT_BASE, val); return; }
 	if (addr >= APLIC_BASE && addr < APLIC_BASE + APLIC_SIZE) { aplic.write32(addr - APLIC_BASE, val); return; }
+	if (addr >= RTC_BASE && addr < RTC_BASE + RTC_SIZE) { rtc.write32(addr - RTC_BASE, val, timer.get_mtime(), aplic); return; }
 	// A virtio register write can start I/O, which needs to read
 	// descriptors out of guest memory and raise an interrupt -- hence the
 	// device taking both back rather than being self-contained.
@@ -534,6 +537,7 @@ bool Memory::is_backed(uint64_t addr, unsigned size) const
 	if (in(UART_BASE, UART_SIZE)) return true;
 	if (in(CLINT_BASE, CLINT_SIZE)) return true;
 	if (in(APLIC_BASE, APLIC_SIZE)) return true;
+	if (in(RTC_BASE, RTC_SIZE)) return true;
 	if (in(IMSIC_M_BASE, imsic_span)) return true;
 	if (in(IMSIC_S_BASE, imsic_span)) return true;
 

@@ -1911,6 +1911,9 @@ bool DoomSystem::set_input_record(const char *path)
 	record_file = std::fopen(path, "w");
 	if (!record_file) return false;
 	std::fprintf(record_file, "doomv-input 1\n# instruction kind a b c d\n");
+	// The clock's start, which -rtc=host took from the host: an input like
+	// any other, so a replay starts the guest's clock where this run did.
+	std::fprintf(record_file, "0 rtc %llu\n", (unsigned long long)memory.get_rtc().epoch_seconds());
 	std::fflush(record_file);
 	return true;
 }
@@ -1928,8 +1931,15 @@ bool DoomSystem::set_input_replay(const char *path)
 		std::string kind;
 		unsigned a = 0, b = 0;
 		int c = 0, dd = 0;
+		// The real-time clock's start: "0 rtc <seconds since 1970>".
+		if (in >> stamp >> kind && kind == "rtc") {
+			unsigned long long seconds = 0;
+			in >> seconds;
+			memory.get_rtc().set_epoch(seconds);
+			continue;
+		}
 		// A network frame: "<instruction> net <hex bytes>".
-		if (in >> stamp >> kind && kind == "net") {
+		if (kind == "net") {
 			std::string hex;
 			in >> hex;
 			std::vector<uint8_t> frame;
@@ -2070,6 +2080,7 @@ void DoomSystem::service_input(uint64_t now)
 			input_waiting.store(false, std::memory_order_relaxed);
 		}
 		service_network(now);
+		memory.get_rtc().poll(memory.get_timer().get_mtime(), memory.get_aplic());
 		memory.pump_input();
 		return;
 	}
@@ -2106,6 +2117,7 @@ void DoomSystem::service_input(uint64_t now)
 	}
 
 	service_network(now);
+	memory.get_rtc().poll(memory.get_timer().get_mtime(), memory.get_aplic());
 	if (record_dirty) {
 		std::fflush(record_file);
 		record_dirty = false;
@@ -2192,7 +2204,7 @@ void DoomSystem::run_paste(uint64_t now)
 	if (script_active) return;
 	while (paste_pos < paste_typing.size() && now >= paste_due) {
 		type_script_char(now, paste_typing[paste_pos++]);
-		paste_due = now + 20 * SCRIPT_INSTR_PER_MS;
+		paste_due = now + TYPE_GAP;
 	}
 	if (paste_pos >= paste_typing.size()) {
 		paste_typing.clear();
@@ -2206,7 +2218,7 @@ void DoomSystem::run_script(uint64_t now)
 	while (script_active && now >= script_due) {
 		if (script_type_pos < script_typing.size()) {
 			type_script_char(now, script_typing[script_type_pos++]);
-			script_due = now + 20 * SCRIPT_INSTR_PER_MS;
+			script_due = now + TYPE_GAP;
 			if (script_type_pos == script_typing.size()) {
 				script_typing.clear();
 				script_type_pos = 0;

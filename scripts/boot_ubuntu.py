@@ -5,6 +5,7 @@
   python scripts/boot.py ubuntu --desktop xfce        # boot into a desktop
   python scripts/boot.py ubuntu --desktop-snapshot    # the booted XFCE desktop, in seconds
   python scripts/boot.py ubuntu --net                 # with a network (once: --setup-network)
+  python scripts/boot.py ubuntu --setup-browser       # once: a browser, and the network for it
   python scripts/boot.py ubuntu --login               # test: log in, run a command, exit
 
 The image is an input: it takes hours to build, so this script never builds
@@ -242,6 +243,84 @@ def install_desktops(image: Path, timeout_hours: float, emulator_args=()):
             stop(proc, 10)
 
 
+# What --setup-browser types once logged in: wait for DHCP and DNS, install,
+# report on the serial console, power off. One line, because the input script
+# types it into the shell as it is.
+BROWSER_PACKAGES = "systemd-timesyncd ca-certificates curl w3m netsurf-gtk"
+BROWSER_SCRIPT = f"""\
+sleep 20000
+type root
+key 28 1
+key 28 0
+sleep 30000
+type doomv
+key 28 1
+key 28 0
+sleep 75000
+type (for i in $(seq 90); do getent hosts ports.ubuntu.com >/dev/null && break; sleep 2; done; export DEBIAN_FRONTEND=noninteractive; apt-get update -q && apt-get install -y -q {BROWSER_PACKAGES}) > /dev/hvc0 2>&1 && echo DOOMV-BROWSER-OK > /dev/hvc0 || echo DOOMV-BROWSER-FAILED > /dev/hvc0; sync; poweroff
+key 28 1
+key 28 0
+"""
+
+
+def setup_browser(image: Path, timeout: float, emulator_args=()):
+    """Make the image able to open websites, with DoomV running apt.
+
+    On the host, the network setup (DHCP, DNS, apt sources with universe);
+    then a boot with the network card and the host's clock -- apt and HTTPS
+    both check dates -- that logs in and installs a clock that keeps itself
+    right over the network (systemd-timesyncd), the CA certificates, curl,
+    w3m, and NetSurf, a browser light enough to use on an emulated CPU.
+    """
+    if emulator_running():
+        raise RuntimeError("A DoomV is already running; close it before changing the image.")
+    run(["wsl.exe", "-d", "Ubuntu", "-u", "root", "--", "bash",
+         wsl_path(ROOT / "tools/linux/ubuntu/mknetwork.sh"), wsl_path(image)])
+    log = BUILD / "logs/ubuntu-browser.log"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    script = BUILD / "logs/ubuntu-browser.script"
+    script.write_text(BROWSER_SCRIPT, newline="\n")
+    args = headless(emulator_args)
+    if "-net" not in args:
+        args.append("-net")
+    if not any(a.startswith("-rtc=") for a in args):
+        args.append("-rtc=host")
+    command = ubuntu_command(image, args, extra=(f"-expect={LOGIN_PROMPT}", f"-input={script}"))
+    print(f"DoomV is installing {BROWSER_PACKAGES}. About 10 minutes; the log is {log}", flush=True)
+    started = time.monotonic()
+    with log.open("wb") as output:
+        proc = subprocess.Popen(command, cwd=ROOT, env=environment(),
+                                stdout=output, stderr=subprocess.STDOUT)
+        try:
+            result = None
+            while time.monotonic() - started < timeout and result is None:
+                text = log.read_text(errors="replace")
+                if "Kernel panic" in text:
+                    raise RuntimeError(f"the guest panicked; see {log}")
+                if "DOOMV-BROWSER-FAILED" in text:
+                    result = False
+                elif "DOOMV-BROWSER-OK" in text:
+                    result = True
+                elif proc.poll() is not None:
+                    raise RuntimeError(f"the emulator exited before the install finished; see {log}")
+                else:
+                    time.sleep(2)
+            if result is None:
+                raise RuntimeError(f"the install did not finish within {timeout:g}s; see {log}")
+            # The marker comes before the guest's sync and poweroff.
+            for _ in range(120):
+                if proc.poll() is not None:
+                    break
+                time.sleep(1)
+            if not result:
+                raise RuntimeError(f"apt in the guest failed; see {log}")
+            print(f"PASS: installed in {(time.monotonic() - started) / 60:.0f} minutes.")
+            print("Boot with: python scripts/boot.py ubuntu --net --desktop openbox, then in the "
+                  "terminal: netsurf https://example.com &   (or w3m, in any shell)")
+        finally:
+            stop(proc, 10)
+
+
 def desktop_snapshot_command(image: Path, snapshot: Path, args, passthrough):
     """The booted XFCE desktop, restored: the exact machine the snapshot was made on.
 
@@ -277,10 +356,13 @@ def main():
                    help="install all three desktops into the image, once (hours)")
     u.add_argument("--setup-network", action="store_true",
                    help="set the image up for --net (DHCP, DNS), once; images made since need not")
+    u.add_argument("--setup-browser", action="store_true",
+                   help="install a browser (NetSurf, and w3m for the console), once; includes --setup-network")
     add_boot_options(parser)
     t = parser.add_argument_group("test")
     t.add_argument("--login", action="store_true", help="headless: log in, run a command, exit")
-    t.add_argument("--timeout", type=float, default=1800, metavar="SECONDS", help="--login timeout (default 1800)")
+    t.add_argument("--timeout", type=float, default=1800, metavar="SECONDS",
+                   help="--login and --setup-browser timeout (default 1800)")
     t.add_argument("--install-timeout", type=float, default=16, metavar="HOURS", help="--install-desktops timeout (default 16)")
     add_advanced_options(parser)
     args = parser.parse_args(argv)
@@ -296,6 +378,9 @@ def main():
             wsl_script("build_linux.sh")
         if args.install_desktops:
             install_desktops(image, args.install_timeout, boot_args(args, passthrough))
+            return 0
+        if args.setup_browser:
+            setup_browser(image, args.timeout, boot_args(args, passthrough))
             return 0
         if args.setup_network:
             if emulator_running():

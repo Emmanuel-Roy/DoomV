@@ -120,6 +120,9 @@ def add_advanced_options(parser, linux=True):
     if linux:
         a.add_argument("--drives", metavar="DIR", help="storage drives folder (default drives/; '' for none)")
         a.add_argument("--shared", metavar="DIR", help="shared folder (default shared/; '' for none)")
+        a.add_argument("--clock", default="host", metavar="WHEN",
+                       help="where the guest's clock starts: host (the default, this computer's time), "
+                            "fixed (the same date every run), or seconds since 1970")
 
 
 def boot_args(args, passthrough=()):
@@ -136,6 +139,11 @@ def boot_args(args, passthrough=()):
         out.append(f"-harts={harts}")
     if getattr(args, "net", False):
         out.append("-net")
+    clock = getattr(args, "clock", "fixed")
+    if clock != "fixed":
+        if clock != "host" and not clock.isdigit():
+            raise RuntimeError("--clock takes host, fixed, or a number of seconds since 1970")
+        out.append(f"-rtc={clock}")
     if args.headless:
         out.append("-ng")
     if args.march:

@@ -327,6 +327,7 @@ src/
   debugger.*             breakpoints, halt conditions, crash/signature dumps
   gui.*                  the SDL window, framebuffer scaling, and the debug dashboard
   uart.*                 8250-compatible serial, which is the SBI console
+  rtc.*                  a Goldfish real-time clock, so the guest knows the date
   virtio/                one file per virtio device, over one shared transport:
     virtio_mmio.*          the MMIO transport and virtqueues every device uses
     virtio_blk.*           the root disk and the storage drives
@@ -519,6 +520,7 @@ riscv_doom.exe -opensbi=<f> -kernel=<f> -dtb=<f> -initrd=<f> [options]   # Linux
 | `-lockstep=<path>` | Run against a reference trace -- Sail's, or an RTL simulation's -- and halt at the first record that does not match. See [Lock-stepping](#lockstep). |
 | `-lockstep-strict` | With `-lockstep`, compare everything, counters, time and interrupt timing included, and take nothing from the reference. How DoomV is held to Sail. |
 | `-net` | A network card, with user-mode NAT behind it: the guest reaches the internet through the host. See [Networking](#networking). |
+| `-rtc=host` or `-rtc=<seconds>` | Where the guest's clock starts: the host's time, read once at start, or seconds since 1970. Without it, 2026-01-01, so a run repeats exactly. The boot scripts pass `host`. See [The clock](#clock). |
 | `-harts=<n>` | A machine of `n` identical harts (default 1), each starting at the entry with `a0` = its hart id. They take turns a step at a time, so a run is as deterministic as with one. See [Several harts](#harts). |
 
 `-ng` is what makes the conformance suites practical. With a window open a
@@ -701,7 +703,15 @@ can connect in.
 python scripts/boot.py linux --net          # then, at the shell: udhcpc -i eth0
 python scripts/boot.py ubuntu --setup-network   # once, for an image made before this
 python scripts/boot.py ubuntu --net         # DHCP at boot; apt works
+python scripts/boot.py ubuntu --setup-browser   # once: NetSurf, w3m, curl, and a self-setting clock
 ```
+
+After `--setup-browser`, boot a desktop with the network
+(`boot.py ubuntu --net --desktop openbox`) and run
+`netsurf https://en.wikipedia.org &` in its terminal, or `w3m <url>` in any
+shell. NetSurf draws ordinary pages in a few seconds; it runs little
+JavaScript, so web applications do not work. Firefox and Chromium are snap
+packages on Ubuntu with no riscv64 build to install.
 
 The network is outside the machine, like a keyboard: what arrives, and when,
 is not repeatable by nature. So incoming frames enter the guest only at the
@@ -710,6 +720,22 @@ same instruction counts typed keys do, `-record` logs every one, and
 replays to the same machine state. Without `-net` the card is not there
 (device id 0) and nothing changes. A snapshot keeps the card and the frames
 in flight, not the connections.
+
+<a id="clock"></a>
+### The clock
+
+The guest has a real-time clock -- a Goldfish RTC, the one QEMU's virt board
+has, which Linux reads at boot to set the date. Without one the guest starts in
+whatever year systemd was built, and apt and HTTPS refuse dates that far off.
+
+Its time is the start date plus the emulated timer, never the host's clock
+while running, so it cannot make a run unrepeatable. The start date is
+2026-01-01 unless `-rtc` names one; `-rtc=host` takes the host's time once,
+at start, as an input: `-record` logs it, `-replay` uses the logged one, and a
+snapshot keeps it. The boot scripts pass `host` (`--clock fixed` for the
+fixed date). The emulated timer runs slower than real time, so a long-running
+guest falls behind; `--setup-browser` installs `systemd-timesyncd`, which
+puts it right over the network.
 
 <a id="drives"></a>
 ### Storage drives

@@ -44,8 +44,9 @@ constexpr char MAGIC[8] = {'D', 'O', 'O', 'M', 'V', 'S', 'N', 'P'};
 // Bumped whenever the layout below changes. A build reads the layout it
 // writes, and the ones before it that it still knows: version 1 is the
 // single-hart layout, from before a machine could have several harts, and
-// reads as a machine of one; version 2 has no network card.
-constexpr uint32_t VERSION = 3;
+// reads as a machine of one; version 2 has no network card, and 3 no
+// real-time clock.
+constexpr uint32_t VERSION = 4;
 
 class Writer {
 public:
@@ -252,6 +253,21 @@ struct SaveState {
 		}
 	}
 
+	// The clock, start included: a restored machine keeps the time it had,
+	// whatever -rtc the restoring run was given. Version 4 on.
+	template <class IO> static void rtc(IO &io, Rtc &r)
+	{
+		io.pod(r.epoch_ns);
+		io.pod(r.offset_ns);
+		io.pod(r.time_high);
+		io.pod(r.set_high);
+		io.pod(r.alarm_high);
+		io.pod(r.alarm_ns);
+		io.pod(r.alarm_running);
+		io.pod(r.irq_enabled);
+		io.pod(r.irq_pending);
+	}
+
 	template <class IO> static void share(IO &io, Virtio9p &s)
 	{
 		io.pod(s.status);
@@ -340,6 +356,7 @@ struct SaveState {
 		for (VirtioBlk &d : m.drives) blk(io, d);
 		share(io, m.share);
 		if (version >= 3) net(io, m.net);
+		if (version >= 4) rtc(io, m.rtc);
 		io.mark(0x44455600);   // "DEV"
 	}
 

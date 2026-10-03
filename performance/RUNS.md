@@ -410,3 +410,14 @@ and nothing else.
 | 20261003-115019 | doom 1000M | virtio split + net | 5529126+ | 302.26 | 3.3 | `3d73dac132f3` |  |
 | 20261003-115022 | desktop 3000M | virtio split + net (reference) | 5529126+ | 248.45 | 12.1 | `35c61483d5e3` |  |
 | 20261003-115046 | desktop 3000M | virtio split + net | 5529126+ | 249.50 | 12.0 | `35c61483d5e3` |  |
+| 20261003-141321 | doom 1000M | rtc (reference) | 2be8a7a+ | 287.34 | 3.5 | `3d73dac132f3` |  |
+| 20261003-141324 | doom 1000M | rtc | 2be8a7a+ | 298.35 | 3.4 | `3d73dac132f3` |  |
+| 20261003-141328 | desktop 3000M | rtc (reference) | 2be8a7a+ | 254.19 | 11.8 | `35c61483d5e3` |  |
+| 20261003-141352 | desktop 3000M | rtc | 2be8a7a+ | 248.71 | 12.1 | `35c61483d5e3` |  |
+| 20261003-141421 | desktop 3000M | rtc (reference) | 2be8a7a+ | 254.63 | 11.8 | `35c61483d5e3` |  |
+| 20261003-141444 | desktop 3000M | rtc | 2be8a7a+ | 248.35 | 12.1 | `35c61483d5e3` |  |
+| 20261003-141508 | linux 300M | rtc-new | 2be8a7a+ | 221.37 | 1.4 | `23886d5785ac` |  |
+| 20261003-141646 | desktop 3000M | rtc (reference) | 2be8a7a+ | 255.11 | 11.8 | `35c61483d5e3` |  |
+| 20261003-141709 | desktop 3000M | rtc | 2be8a7a+ | 255.33 | 11.7 | `35c61483d5e3` |  |
+| 20261003-141732 | desktop 3000M | rtc (reference) | 2be8a7a+ | 256.46 | 11.7 | `35c61483d5e3` |  |
+| 20261003-141755 | desktop 3000M | rtc | 2be8a7a+ | 252.30 | 11.9 | `35c61483d5e3` |  |

@@ -1,5 +1,6 @@
 #include "doom_system.hpp"
 #include "extensions.hpp"
+#include <chrono>
 #include <cstdint>
 #include <iostream>
 #include <cstdio>
@@ -96,6 +97,8 @@ int main(int argc, char *argv[])
 	bool lockstep_strict = false;
 	unsigned harts = 1;
 	bool network = false;
+	bool have_rtc = false;
+	uint64_t rtc_epoch = 0;
 	for (int i = 1; i < argc; i++) {
 		std::string arg = argv[i];
 		if (arg.rfind("-march=", 0) == 0) {
@@ -132,6 +135,23 @@ int main(int argc, char *argv[])
 			// A network card, with user-mode NAT behind it: the guest gets
 			// 10.0.2.15 by DHCP and reaches the outside through host sockets.
 			network = true;
+		} else if (arg.rfind("-rtc=", 0) == 0) {
+			// Where the real-time clock starts: "host" for the host's clock,
+			// read once, now; or seconds since 1970. Without it, a fixed
+			// date, so a run repeats exactly (see Rtc).
+			const std::string v = arg.substr(5);
+			if (v == "host") {
+				rtc_epoch = (uint64_t)std::chrono::duration_cast<std::chrono::seconds>(
+					std::chrono::system_clock::now().time_since_epoch()).count();
+			} else {
+				char *end = nullptr;
+				rtc_epoch = std::strtoull(v.c_str(), &end, 10);
+				if (v.empty() || *end) {
+					std::cout << "-rtc takes host or a number of seconds since 1970\n";
+					return -1;
+				}
+			}
+			have_rtc = true;
 		} else if (arg.rfind("-ram=", 0) == 0) {
 			ram_arg = arg.substr(5);
 		} else if (arg.rfind("-opensbi=", 0) == 0) {
@@ -290,6 +310,8 @@ int main(int argc, char *argv[])
 		}
 		system.set_snapshot(snapshot_at, snapshot_dir);
 	}
+	// Before -replay, which brings back the clock the recorded run had.
+	if (have_rtc) system.set_rtc_epoch(rtc_epoch);
 	if (!replay_path.empty() && !system.set_input_replay(replay_path.c_str())) {
 		std::cout << "cannot read input log: " << replay_path << "\n";
 		return -1;

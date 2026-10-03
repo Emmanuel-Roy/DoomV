@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Network setup for an Ubuntu image that predates it: DHCP on the network
-# card, through systemd-networkd, and DoomV's DNS server.
+# card, through systemd-networkd, DoomV's DNS server, and apt sources that
+# include universe.
 #
 #   wsl -d Ubuntu -u root -- bash tools/linux/ubuntu/mknetwork.sh /mnt/z/.../ubuntu.img
 #
@@ -47,4 +48,13 @@ ln -sf /usr/lib/systemd/system/systemd-networkd.service "$W/etc/systemd/system/m
 rm -f "$W/etc/resolv.conf"
 echo "nameserver 10.0.2.3" > "$W/etc/resolv.conf"
 
-echo "network set up in $IMG: DHCP on e*, DNS 10.0.2.3"
+# What apt fetches from: universe as well as main, and the updates and
+# security suites. debootstrap wrote main alone, and the browsers
+# (boot.py ubuntu --setup-browser) are in universe.
+cat > "$W/etc/apt/sources.list" <<'EOF'
+deb http://ports.ubuntu.com/ubuntu-ports noble main universe
+deb http://ports.ubuntu.com/ubuntu-ports noble-updates main universe
+deb http://ports.ubuntu.com/ubuntu-ports noble-security main universe
+EOF
+
+echo "network set up in $IMG: DHCP on e*, DNS 10.0.2.3, apt from main and universe"

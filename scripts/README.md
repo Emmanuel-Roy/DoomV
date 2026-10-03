@@ -46,6 +46,7 @@ python scripts/boot.py ubuntu --desktop xfce       # boot into a desktop: xfce, 
 python scripts/boot.py ubuntu --desktop-snapshot   # the booted XFCE desktop, in seconds
 python scripts/boot.py ubuntu --install-desktops   # once, before --desktop (hours)
 python scripts/boot.py ubuntu --setup-network      # once, before --net, for an image made before networking
+python scripts/boot.py ubuntu --setup-browser      # once: a browser (NetSurf) and w3m; includes --setup-network
 ```
 
 `--desktop` boots from scratch, about 25 minutes to a usable desktop.
@@ -72,6 +73,7 @@ python scripts/install_hooks.py          # run the gate before every git push
 | `--record FILE` / `--replay FILE` | Log every input, then replay it exactly. |
 | `--march ISA` | Change the extensions, e.g. `rv64imafdc_zicsr`. |
 | `--drives DIR` / `--shared DIR` | Storage drives and shared folder (default `drives/` and `shared/`; `''` for none). |
+| `--clock host\|fixed\|SECONDS` | Where the guest's clock starts (Linux and Ubuntu). Default `host`, this computer's time; `fixed` is the same date every run. |
 | `-- <options>` | Anything after `--` goes to `riscv_doom.exe` unchanged. |
 
 ```powershell
@@ -110,8 +112,9 @@ python scripts/mkdrive.py data 1G    # every *.img in drives/ is attached to Lin
 
 - **Same inputs, same run.** A guest does the same thing every time it is given
   the same inputs. Those include the disk -- a boot writes to it, so boot a
-  copy to repeat a run exactly -- what is in `drives/` and `shared/`, and what
-  you type (`--record` and `--replay` make that repeatable).
+  copy to repeat a run exactly -- what is in `drives/` and `shared/`, what
+  you type, and the date the clock starts at (`--record` and `--replay` make
+  those repeatable; `--clock fixed` the date as well).
 - **Memory is free until used.** `--ram 16G` starts as fast as 1G; only what
   the guest touches is allocated.
 - **One emulator per disk image.** Two DoomVs on one `ubuntu.img` corrupt it;

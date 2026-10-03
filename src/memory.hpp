@@ -4,6 +4,7 @@
 #include "imsic.hpp"
 #include "aplic.hpp"
 #include "uart.hpp"
+#include "rtc.hpp"
 #include "virtio/virtio_blk.hpp"
 #include "virtio/virtio_input.hpp"
 #include "virtio/virtio_9p.hpp"
@@ -125,6 +126,12 @@ public:
 	// control back when it finishes.
 	static constexpr uint64_t TEST_BASE = 0x00100000;
 	static constexpr uint64_t TEST_SIZE = 0x1000;
+
+	// The real-time clock (see Rtc), right after the test device, where
+	// QEMU's virt board has its own; APLIC source 14.
+	static constexpr uint64_t RTC_BASE = 0x00101000;
+	static constexpr uint64_t RTC_SIZE = 0x1000;
+	static constexpr uint32_t RTC_IRQ = 14;
 
 	// RAM_BASE moved from the original 0x10041000 for Stage 3: OpenSBI's
 	// `generic` platform build hardcodes its own load/entry address
@@ -453,6 +460,7 @@ public:
 	Virtio9p &get_share() { return share; }
 	VirtioNet &get_net() { return net; }
 	Aplic &get_aplic() { return aplic; }
+	Rtc &get_rtc() { return rtc; }
 
 private:
 	// RAM and WAD are contiguous (RAM_BASE..RAM_BASE+RAM_SIZE == WAD_BASE),
@@ -513,4 +521,5 @@ private:
 	uint64_t imsic_span = IMSIC_SIZE;   // IMSIC_SIZE * harts(): the decode checks it on every access
 	Aplic aplic;
 	Uart uart;
+	Rtc rtc{RTC_IRQ};
 };

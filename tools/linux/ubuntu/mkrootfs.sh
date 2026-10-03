@@ -221,6 +221,12 @@ DHCP=ipv4
 	systemctl enable systemd-networkd.service 2>/dev/null || true
 	rm -f /etc/resolv.conf
 	echo "nameserver 10.0.2.3" > /etc/resolv.conf
+	# universe as well as main, and the updates and security suites:
+	# debootstrap names only main, and the browsers are in universe.
+	printf 'deb http://ports.ubuntu.com/ubuntu-ports noble main universe
+deb http://ports.ubuntu.com/ubuntu-ports noble-updates main universe
+deb http://ports.ubuntu.com/ubuntu-ports noble-security main universe
+' > /etc/apt/sources.list
 	# A login prompt on the framebuffer, which is the whole point of having
 	# one. getty-static.service covers tty2-tty6 "if dbus and logind are not
 	# available" -- tty1 is normally logind's job through autovt, and there
