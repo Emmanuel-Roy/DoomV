@@ -1,107 +1,114 @@
 # DoomV scripts
 
-Run these from the repository root in PowerShell. Build artifacts live under
-`build/`, and the scripts never stop an emulator started by another process.
+Run everything from the repository root. Builds go to `build/`.
+
+## First time
 
 ```powershell
-# Native host prerequisites (MSYS2, Make, GCC, SDL2, Python)
-powershell -ExecutionPolicy Bypass -File scripts/install_dependencies.ps1
-
-# Ubuntu WSL packages, the RISC-V newlib compiler, and optional Sail/ACT tools
-powershell -ExecutionPolicy Bypass -File scripts/toolchain.ps1
-
-# Build only DoomV; build Linux; or build both. The first build that has a
-# guest to train on also trains a PGO profile (a few minutes), which is kept
-# in build/pgo/ and which every later `make` then builds with -- PGO on top of
-# ThinLTO is ~1.4x over an unprofiled build. --no-pgo stops at the plain one.
-python scripts/build.py doom
-python scripts/build.py linux
-python scripts/build.py all
-python scripts/build.py all --no-pgo
-
-# Retrain the profile after changing the hot path; stale costs speed, never
-# correctness. `make PROFILE=` builds without one.
-python performance/pgo.py
-
-# Boot a guest. Linux --smoke exits after BusyBox proves userspace runs;
-# Ubuntu --login logs in through the emulated keyboard and exits.
-python scripts/boot.py doom
-python scripts/boot.py linux
-python scripts/boot.py linux --smoke
-python scripts/boot.py ubuntu                 # window; logs in as root once getty asks
-python scripts/boot.py ubuntu --no-autologin  # window; stops at the login prompt
-python scripts/boot.py ubuntu --login
-
-# Desktops: install all three once (DoomV runs the install, for hours), then
-# pick one per boot.
-python scripts/boot.py ubuntu --install-desktops
-python scripts/boot.py ubuntu --desktop openbox    # or xfce, or x
-
-# More memory, for any of the three. Becomes the emulator's -ram=, and the
-# device tree's memory node is rewritten to match, so the guest is told what
-# it actually got. Bytes or a K/M/G/T suffix, any value.
-python scripts/boot.py linux --ram 4G
-python scripts/boot.py ubuntu --ram 8G
-python scripts/boot.py doom --ram 2G               # DOOM is capped near 2G, see below
-
-# What each guest takes is not the same set; ask it.
-python scripts/boot.py ubuntu --help
-
-# Make a storage drive; every *.img in drives/ is attached to Linux at boot.
-python scripts/mkdrive.py data 1G
-# shared/ needs no setup: it is served to Linux live. In the guest:
-#   mount -t 9p -o trans=virtio,version=9p2000.L shared /mnt/shared
-
-# Run every regression suite, or name the suites to run.
-python scripts/verify.py
-python scripts/verify.py --quick
-python scripts/verify.py differential archtest
+powershell -ExecutionPolicy Bypass -File scripts/install_dependencies.ps1   # host tools: make, compiler, SDL2
+wsl --install -d Ubuntu                                                      # once; reboot if asked
+powershell -ExecutionPolicy Bypass -File scripts/toolchain.ps1               # RISC-V tools in WSL
+python scripts/get_clang.py                                                  # optional: a faster build
 ```
 
-`boot.py ubuntu` is the one boot script that cannot build its guest. The
-other two produce a userland in minutes from a cross-compiler; the Ubuntu
-image is built in two stages, the second of which is DoomV running Ubuntu's
-own `dpkg` for about four hours. So the image is an input, and the script
-says how to make one rather than starting that on your behalf --
-`tools/linux/ubuntu/README.md` has the two commands.
+## Boot a guest
 
-`--ram` is capped near 2G for DOOM and unlimited for the other two. DOOM's WAD
-sits directly above RAM and the guest reads its address from a 32-bit MMIO
-register, so RAM has to end below 4GB; nothing but DOOM reads the WAD. More
-RAM costs nothing to give: the allocation is lazy, so pages the guest never
-touches are never faulted in, and a 16G guest starts in 0.39s against 0.03s
-for 1G. What costs is the guest *using* it -- past the host's own RAM the host
-swaps and nothing else matters. See `performance/README.md`.
+```powershell
+python scripts/boot.py doom          # DOOM
+python scripts/boot.py linux         # Linux with a BusyBox shell
+python scripts/boot.py ubuntu        # Ubuntu 24.04, logs in as root
+```
 
-## Determinism
+Each one builds what it needs first; `--no-build` skips that. Close the window
+to exit. `python scripts/boot.py <guest> --help` lists everything a guest takes.
 
-A guest is deterministic given the same inputs, and the inputs are more than
-the command line. Two runs of one configuration produce byte-identical machine
-state, which is what `performance/bench.py` checks by hashing `crash.log` and
-what the lock-step harness depends on.
+### Options every guest takes
 
-What counts as an input, and therefore what has to be equal for that to hold:
+| Option | |
+|---|---|
+| `--ram 4G` | Guest memory (default 1G). DOOM is capped near 2G. |
+| `--harts 4` | CPUs, 1 to 4095 (Linux and Ubuntu). The device tree is made to match. |
+| `--headless` | No window; output goes to the console. |
+| `--no-build` | Use what is already built. |
 
-* **The disk, including what the last run wrote to it.** A root disk is opened
-  read-write and a systemd boot writes to it -- the journal, the random seed --
-  so booting the same image twice does *not* repeat: measured here, the same
-  `ubuntu.img` booted twice gave `367365fc8236` and then `28a5cd93af8e`. It is
-  not that the emulator is nondeterministic; it is that the second boot started
-  from a different disk. Copy the image first and the hashes match exactly,
-  which is what `bench.py`'s ubuntu workload does.
-* **`drives/` and `shared/`**, which are attached from the working directory by
-  default. Their contents are guest-visible, so a file appearing in `shared/`
-  changes the machine. `-drives=` and `-shared=` detach them; the benchmark
-  passes both.
-* **Input.** Typing into the window is live and is not repeatable by nature.
-  `-record` captures a session and `-replay` reproduces it exactly, committing
-  each event on an instruction count rather than a wall-clock time.
+More than 64 harts boot slowly -- see [Several harts](../README.md#harts).
 
-Nothing else varies: no host clock, no thread interleaving and no address-space
-layout reaches the guest. Host timing changes how fast a run goes, never what
-it computes.
+### Ubuntu
 
-`toolchain.ps1` deliberately does not install WSL itself. Install Ubuntu once
-with `wsl --install -d Ubuntu`, reboot if Windows requests it, and run the
-toolchain script afterwards. `verify.py` uses suite exit status and requires a
-complete nonempty signature; a missing suite or truncated output is a failure.
+Ubuntu needs `ubuntu.img` in the repository root. It takes hours to build, so
+the script never builds it; [tools/linux/ubuntu](../tools/linux/ubuntu/README.md)
+has the steps.
+
+```powershell
+python scripts/boot.py ubuntu --no-autologin       # stop at the login prompt (root / doomv)
+python scripts/boot.py ubuntu --desktop xfce       # boot into a desktop: xfce, openbox or x
+python scripts/boot.py ubuntu --desktop-snapshot   # the booted XFCE desktop, in seconds
+python scripts/boot.py ubuntu --install-desktops   # once, before --desktop (hours)
+```
+
+`--desktop` boots from scratch, about 25 minutes to a usable desktop.
+`--desktop-snapshot` restores one that was booted already; make it once with
+`python performance/make_desktop_snapshot.py` (about 25 minutes).
+
+### Tests
+
+```powershell
+python scripts/boot.py linux --smoke     # BusyBox runs, then exit
+python scripts/boot.py ubuntu --login    # log in through the emulated keyboard, then exit
+python scripts/verify.py                 # every regression suite (or name some)
+python scripts/ci.py                     # the gate: build, lock-step against Sail, every suite
+python scripts/install_hooks.py          # run the gate before every git push
+```
+
+### Advanced
+
+| Option | |
+|---|---|
+| `--snapshot DIR --snapshot-at STEP` | Save the whole machine at an instruction, and carry on. |
+| `--restore DIR` | Start from a snapshot. Use the same options it was made with. |
+| `--stop-at STEP` | Stop after exactly STEP instructions and write the state to `crash.log`. |
+| `--record FILE` / `--replay FILE` | Log every input, then replay it exactly. |
+| `--march ISA` | Change the extensions, e.g. `rv64imafdc_zicsr`. |
+| `--drives DIR` / `--shared DIR` | Storage drives and shared folder (default `drives/` and `shared/`; `''` for none). |
+| `-- <options>` | Anything after `--` goes to `riscv_doom.exe` unchanged. |
+
+```powershell
+python scripts/boot.py ubuntu --snapshot snap/booted --snapshot-at 3000000000
+python scripts/boot.py ubuntu --restore snap/booted
+python scripts/boot.py linux --headless --stop-at 300000000 -- -trace=trace.log
+```
+
+The emulator's own options are listed in the
+[README](../README.md#command-line-options).
+
+## Build without booting
+
+```powershell
+python scripts/build.py doom | linux | all     # all is the default
+python performance/pgo.py                      # retrain the speed profile after changing the hot path
+```
+
+The first build also trains a profile-guided build (a few minutes); `--no-pgo`
+skips it.
+
+## Disks and the shared folder
+
+```powershell
+python scripts/mkdrive.py data 1G    # every *.img in drives/ is attached to Linux and Ubuntu
+```
+
+`shared/` is served live to the guest. Inside it:
+`mount -t 9p -o trans=virtio,version=9p2000.L shared /mnt/shared`.
+
+## Good to know
+
+- **Same inputs, same run.** A guest does the same thing every time it is given
+  the same inputs. Those include the disk -- a boot writes to it, so boot a
+  copy to repeat a run exactly -- what is in `drives/` and `shared/`, and what
+  you type (`--record` and `--replay` make that repeatable).
+- **Memory is free until used.** `--ram 16G` starts as fast as 1G; only what
+  the guest touches is allocated.
+- **One emulator per disk image.** Two DoomVs on one `ubuntu.img` corrupt it;
+  the scripts refuse to start a second.
+- **One script at a time.** Scripts take a lock on the checkout
+  (`.scripts.lock`). After a crash, delete that empty folder.

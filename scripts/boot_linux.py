@@ -1,30 +1,35 @@
 #!/usr/bin/env python3
-"""Build and boot Linux, or prove BusyBox userspace executes with --smoke."""
+"""Build and boot Linux with a BusyBox shell.
+
+  python scripts/boot.py linux                  # window; type at the shell
+  python scripts/boot.py linux --harts 4        # four CPUs
+  python scripts/boot.py linux --smoke          # test: BusyBox runs, then exit
+"""
 import argparse
 from pathlib import Path
 import subprocess
 import sys
 import time
 
-from common import ROOT, BUILD, add_ram_option, build_emulator, checkout_lock, entrypoint, environment, ram_args, require_files, run, wsl_script
+from common import (ROOT, BUILD, add_advanced_options, add_boot_options, boot_args, build_emulator, checkout_lock, entrypoint,
+                    environment, hart_dtb, require_files, run, split_passthrough, wsl_script)
 
 SMOKE_MARKER = "DOOMV_USERSPACE_OK"
 
 
-def linux_command(smoke=False, ram=None):
+def linux_command(smoke=False, emulator_args=(), harts=1):
+    """The emulator command line for the BusyBox boot, or its smoke-test variant."""
     images = BUILD / "linux"
-    paths = [images / "fw_jump.elf", images / "Image",
-             images / ("smoke.dtb" if smoke else "doomv.dtb"),
+    dtb = hart_dtb(images / ("smoke.dtb" if smoke else "doomv.dtb"), harts)
+    paths = [images / "fw_jump.elf", images / "Image", dtb,
              images / ("smoke.cpio" if smoke else "initramfs.cpio")]
     require_files(ROOT / "riscv_doom.exe", *paths)
-    # The device tree names a size too, and the emulator rewrites it in the
-    # loaded blob to match -ram=, so the guest is told what was allocated.
-    return [str(ROOT / "riscv_doom.exe")] + ram_args(ram) + [
+    return [str(ROOT / "riscv_doom.exe"), *emulator_args] + [
         f"-{name}={path}" for name, path in zip(("opensbi", "kernel", "dtb", "initrd"), paths)]
 
 
 def smoke_test(command, log: Path, timeout: float):
-    """Only stop our own child. A kernel 'Run /bin/sh' line is not a pass."""
+    """Pass when the guest prints the marker. Only stops our own child."""
     log.parent.mkdir(parents=True, exist_ok=True)
     with log.open("wb") as output:
         proc = subprocess.Popen(command, cwd=ROOT, env=environment(), stdout=output, stderr=subprocess.STDOUT)
@@ -34,14 +39,8 @@ def smoke_test(command, log: Path, timeout: float):
                 text = log.read_text(errors="replace")
                 if "Kernel panic" in text:
                     raise RuntimeError(f"Linux panicked; see {log}")
-                # Compared stripped, not for equality. The marker reaches
-                # this log through an emulated serial console, and what
-                # arrives is not always the bare word: a run that otherwise
-                # passed has been seen printing " DOOMV_USERSPACE_OK",
-                # with a leading space, and an exact match then misses it and
-                # waits out the whole timeout. That failure looks like a
-                # broken guest and is not one -- the guest had already
-                # printed it -- so it is worth not being fragile about.
+                # Stripped, not equal: the marker arrives through an emulated
+                # console and has been seen with a leading space.
                 if any(line.strip() == SMOKE_MARKER for line in text.splitlines()):
                     print(f"PASS: BusyBox executed the userspace smoke script. Log: {log}")
                     return
@@ -60,12 +59,15 @@ def smoke_test(command, log: Path, timeout: float):
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--no-build", action="store_true", help="use images already in build/linux")
-    parser.add_argument("--smoke", action="store_true", help="exit after BusyBox executes a self-check")
-    parser.add_argument("--timeout", type=float, default=180, help="smoke timeout in seconds")
-    add_ram_option(parser)
-    args = parser.parse_args()
+    argv, passthrough = split_passthrough(sys.argv[1:])
+    parser = argparse.ArgumentParser(prog="boot.py linux", description=__doc__,
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
+    add_boot_options(parser)
+    t = parser.add_argument_group("test")
+    t.add_argument("--smoke", action="store_true", help="exit once BusyBox runs a self-check")
+    t.add_argument("--timeout", type=float, default=180, metavar="SECONDS", help="--smoke timeout (default 180)")
+    add_advanced_options(parser)
+    args = parser.parse_args(argv)
     if args.timeout <= 0:
         parser.error("--timeout must be positive")
     with checkout_lock():
@@ -73,10 +75,12 @@ def main():
             build_emulator()
             wsl_script("build_linux.sh")
         if args.smoke:
-            smoke_test(linux_command(True, args.ram), BUILD / "logs/linux-smoke.log", args.timeout)
+            smoke_test(linux_command(True, boot_args(args, passthrough), args.harts),
+                       BUILD / "logs/linux-smoke.log", args.timeout)
         else:
-            print("Linux opens in the emulator window. Type there for the shell; close it to exit.")
-            run(linux_command(ram=args.ram))
+            if not args.headless:
+                print("Linux opens in the emulator window. Type there for the shell; close it to exit.")
+            run(linux_command(False, boot_args(args, passthrough), args.harts))
     return 0
 
 

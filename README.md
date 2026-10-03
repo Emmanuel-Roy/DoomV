@@ -525,55 +525,25 @@ hypervisor suite about 10.
 <a id="ubuntu"></a>
 ### Running Ubuntu, with or without a desktop
 
-Ubuntu is the one guest `boot.py` cannot build for you. DOOM and the BusyBox
-Linux are cross-compiled in minutes; the Ubuntu image is built in two stages,
-the second of which is DoomV running Ubuntu's own `dpkg` for about four hours.
-So `ubuntu.img` is an *input* here — [tools/linux/ubuntu/](tools/linux/ubuntu/README.md)
-is how one is made. Everything below assumes it exists in the repo root.
-
-The kernel is built for you; the image is not.
-
-Any of these takes `--ram` to change how much memory the guest gets, e.g.
-`--ram 8G`; it becomes the emulator's `-ram=` and the device tree is rewritten
-to match. Ubuntu in particular has more room to breathe with more than the
-default 1G.
+Ubuntu boots from `ubuntu.img` in the repository root. Building that image
+takes hours -- the second stage is DoomV running Ubuntu's own `dpkg` -- so it
+is an input the scripts never build; [tools/linux/ubuntu](tools/linux/ubuntu/README.md)
+has the steps.
 
 ```
-python scripts/boot.py ubuntu                 # window, logs in as root by itself
-python scripts/boot.py ubuntu --no-autologin  # window, stop at the login prompt
-python scripts/boot.py ubuntu --headless      # no window; kernel log to this console
-python scripts/boot.py ubuntu --login         # headless, prove login works, then exit
-python scripts/boot.py ubuntu --no-build      # skip the kernel build, boot what is there
+python scripts/boot.py ubuntu                       # window; logs in as root by itself
+python scripts/boot.py ubuntu --install-desktops    # once: DoomV installs the desktops (hours)
+python scripts/boot.py ubuntu --desktop xfce        # boot into XFCE, Openbox (openbox) or bare X (x)
+python scripts/boot.py ubuntu --desktop-snapshot    # the booted XFCE desktop, in seconds
 ```
 
-A systemd boot here takes minutes, not seconds — it is a full distribution on
-an emulated hart. The window is black for a while before the framebuffer
-console appears; that is normal.
-
-**The desktops.** Openbox, XFCE and bare X can all run, and like the base
-system they are installed by DoomV running the guest's own `apt`. That is one
-long step, done once:
-
-```
-python scripts/boot.py ubuntu --install-desktops      # hours; DoomV does the installing
-```
-
-It copies the image aside first, because it rewrites it and takes hours.
-Afterwards, pick one per boot — each gets its own device tree, so the choice
-is made at boot rather than inside the guest:
-
-```
-python scripts/boot.py ubuntu --desktop openbox       # Xorg + Openbox + xterm
-python scripts/boot.py ubuntu --desktop xfce          # the full XFCE desktop
-python scripts/boot.py ubuntu --desktop x             # bare X, xterm windows only
-```
-
-A desktop session starts as root on its own, so `--no-autologin` does not
-apply to it. Use the mouse and keyboard in the window as you would expect —
-input is a virtio-input device, see [Input](#input). `--desktop` also takes
-`--headless`, which sounds contradictory but is how the screenshots above were
-captured: the session runs with no host window and `-fbdump` writes the
-guest's framebuffer out as a PPM. See [The display](#the-display).
+A boot takes a few minutes before the login prompt, and a desktop about 25
+minutes; the window stays black for a while first, which is normal.
+`--desktop-snapshot` skips all of that by restoring a desktop that was booted
+already (see [Loading the booted XFCE desktop](#loading-the-booted-xfce-desktop)).
+The mouse and keyboard work as you would expect; Ctrl+Alt+G grabs the mouse
+and Ctrl+Alt+F gives the guest the whole window. Every option is in
+[scripts/README.md](scripts/README.md).
 
 ### Driving a guest from a pipe
 
@@ -796,46 +766,27 @@ exactly that, on any `bench.py` workload.
 #### Loading the booted XFCE desktop
 
 The quickest way to a desktop is a snapshot of one. Make it once -- about 25
-minutes, and 4.4 GB in `build/desktop/xfce-100G`, most of it the disk image:
+minutes, and 4.4 GB in `build/desktop/xfce-100G`, most of it the disk image.
+It needs an `ubuntu.img` with the desktops installed.
 
 ```
 python performance/make_desktop_snapshot.py
-```
-
-It boots `ubuntu.img` on the XFCE device tree to instruction 100,000,000,000,
-where the desktop is up, and saves the machine there. It needs an `ubuntu.img`
-with the desktops installed (`python scripts/boot.py ubuntu --install-desktops`,
-above). Then, from the repository root, open it in a window:
-
-```
-riscv_doom.exe -opensbi=build/linux/fw_jump.elf -kernel=build/linux/Image -dtb=build/linux/ubuntu-xfce.dtb -disk=ubuntu.img -drives= -shared= -restore=build/desktop/xfce-100G
+python scripts/boot.py ubuntu --desktop-snapshot
 ```
 
 After about 15 seconds -- copying the disk image -- the window shows the XFCE
-desktop, logged in as root, and it is yours: mouse and keyboard as usual,
-Ctrl+Alt+G to grab the mouse. Add `-ng` for no window.
+desktop, logged in as root, and it is yours.
 
-- **Every argument matters.** The snapshot was taken on exactly that machine:
-  default RAM and `-march`, the XFCE device tree, one disk, no storage drives
-  (`-drives=`) and no shared folder (`-shared=`). Leave out `-shared=` and the
-  shared folder is attached by default, and the restore refuses with
-  `Different: shared folder`. `scripts/boot.py ubuntu --desktop xfce` attaches
-  both, so it cannot load this snapshot.
-- **`ubuntu.img` is not used.** `-disk=` has to name an image so that the
-  machine has a disk, but the restore moves the disk to
-  `build/desktop/xfce-100G/disk.work.img` straight away and never writes to
-  the one named.
-- **Each restore starts clean.** What you do in the session is written to
-  `disk.work.img`, and the next restore replaces that with a fresh copy of the
-  snapshot's image. To keep a session, snapshot it: add
-  `-snapshotat=<n> -snapshot=<dir>` with a step past the snapshot's
-  100,000,000,000 (the restore prints the step it starts at), and restore that
-  folder next time with the same command line. 1,000,000,000 steps is a
-  second of a busy guest's time (an idle one's clock runs ahead while it
-  waits), and a few seconds of yours on the desktop.
-- **Same build.** A snapshot is read only by a build with the same snapshot
-  layout; after an update that changes it, the restore says so, and
-  `make_desktop_snapshot.py` makes a new one.
+- **Each restore starts clean.** The session runs on a copy of the snapshot's
+  disk, replaced at every restore, so neither the snapshot nor `ubuntu.img`
+  changes. To keep a session, snapshot it: add `--snapshot DIR --snapshot-at
+  STEP` with a step past 100,000,000,000, and next time `--restore DIR` with the
+  same options. 1,000,000,000 steps is a few seconds of yours.
+- **The machine is fixed.** The snapshot was made with default memory, one
+  hart, no storage drives and no shared folder, and a restore checks that, so
+  `--desktop-snapshot` takes none of those options.
+- **Same build.** After an update that changes the snapshot layout, the
+  restore says so; make a new one.
 
 The same snapshot is the starting point of `bench.py`'s `desktop` workload.
 
@@ -991,56 +942,19 @@ shim) that talks to DoomV's MMIO instead of a real OS.
 
 ## Scripts
 
-The supported entry points are collected in `scripts/`:
+Everything is driven from `scripts/`; [scripts/README.md](scripts/README.md)
+is the guide. The short version:
 
 ```powershell
-# Native host tools, then WSL/RISC-V tools separately.
-powershell -ExecutionPolicy Bypass -File scripts/install_dependencies.ps1
-powershell -ExecutionPolicy Bypass -File scripts/toolchain.ps1
+powershell -ExecutionPolicy Bypass -File scripts/install_dependencies.ps1   # host tools
+powershell -ExecutionPolicy Bypass -File scripts/toolchain.ps1               # RISC-V tools in WSL
 
-# Optional: build with Clang instead of GCC (faster; see Which compiler).
-python scripts/get_clang.py
-
-# Refuse any push whose commits have not passed the whole gate.
-python scripts/install_hooks.py
-
-# All suites by default, or selected suites by name.
-python scripts/ci.py
-
-# Build DoomV, Linux, or both.
-python scripts/build.py doom
-python scripts/build.py linux
-python scripts/build.py all
-
-# Boot a guest. --smoke proves Linux reaches BusyBox userspace; --login
-# proves Ubuntu logs in through the emulated keyboard.
-python scripts/boot.py doom
-python scripts/boot.py linux
-python scripts/boot.py linux --smoke
-python scripts/boot.py ubuntu                 # the window logs in as root by itself
-python scripts/boot.py ubuntu --login
-
-# More RAM for any guest. Passed through to -ram=, so the device tree is
-# rewritten to match and the guest is told what it actually got.
-python scripts/boot.py linux --ram 4G
-python scripts/boot.py ubuntu --ram 8G
-
-# Ubuntu desktops: install all three once (hours), then pick one per boot.
-# See "Running Ubuntu, with or without a desktop" above.
-python scripts/boot.py ubuntu --install-desktops
-python scripts/boot.py ubuntu --desktop openbox    # or xfce, or x
-
-# A storage drive for Linux. shared/ needs no setup.
-python scripts/mkdrive.py data 1G
-
-# All suites by default, or selected suites by name.
-python scripts/verify.py
-python scripts/verify.py differential archtest
+python scripts/boot.py doom | linux | ubuntu    # build and boot a guest
+python scripts/boot.py linux --harts 4 --ram 4G # options every guest takes
+python scripts/boot.py ubuntu --help            # everything a guest takes
+python scripts/verify.py                        # the regression suites
+python scripts/install_hooks.py                 # the gate before every push
 ```
-
-Install Ubuntu first when needed with `wsl --install -d Ubuntu`;
-`toolchain.ps1` intentionally does not install or modify WSL itself. Full
-options and dependency separation are in [`scripts/README.md`](scripts/README.md).
 
 ## Design notes
 
@@ -1146,85 +1060,40 @@ It found six differences on its first run that every conformance suite had
 passed over -- see [Part XIII of the bug history](docs/BUGS.md#part-xiii).
 
 <a id="harts"></a>
-**Several harts.** `-harts=N` builds a machine of N identical harts over one
-memory and one clock. Each has its own registers, CSRs (`mhartid` is its
-number), reservation, TLB and caches, its own `msip` and `mtimecmp` in the
-CLINT, and its own M and S IMSIC files, hart h's at `0x24000000`/`0x28000000`
-`+ h × 0x1000`; the APLIC sends each source to the S file of the hart its
-target register names.
+**Several harts.** `-harts=N` (or `boot.py linux --harts N`) makes a machine
+of N identical harts, up to 4095, sharing one memory and one clock. Each has
+its own registers, TLB and caches, its own `msip` and `mtimecmp` in the CLINT,
+and its own IMSIC files (hart h's at `0x24000000`/`0x28000000 + h × 0x1000`).
 
-The harts take turns: one step each per round, hart 0 first. That order is
-the machine's and never the host's, so a run with several harts gives the
-same trace every time, as one hart does. The clock keeps Sail's rate, counted
-in rounds: mtime moves once every second round in which some hart completed a
-step, and every round in which all of them are waiting. A `wfi` or `wrs` waits
-a round at a time while the others run, for up to ten rounds, and ends early
-on an interrupt -- or, for `wrs`, when another hart's store ends its
-reservation. A store by one hart ends any other hart's LR reservation on the
-same 8-byte reservation set; its own stores leave its reservation alone, as
-the configuration says.
+The harts take turns, one step each per round, hart 0 first. The order never
+depends on the host, so a multi-hart run repeats exactly, as a single-hart one
+does. `mtime` advances per round at Sail's rate, and a `wfi` or `wrs` waits a
+round at a time while the others run.
 
-Sail models one hart, so there is no multi-hart Sail to compare with as it
-stands. `tools/verification/simulators/sail/multihart` builds one:
-`sail_riscv_mh` runs N copies of the Sail model over Sail's one memory, in
-the same order and on the same clock, with a small patch to Sail's CLINT so
-that a hart can reach another's `msip` and `mtimecmp` -- the instruction set
-model itself is untouched. Its trace marks each hart's records with a line
-`hart <i>`, which `-lockstep` follows, and so does `-trace`.
-`lockstep_sail.py` builds the multi-hart tests in
-`tools/verification/tests/lockstep/multihart` once per hart count and
-lock-steps them, strictly:
+**Checked against Sail.** Sail models one hart, so
+`tools/verification/simulators/sail/multihart` builds `sail_riscv_mh`: N copies
+of the unchanged Sail model over one memory, in the same order, with a small
+patch so one hart can reach another's CLINT registers. The multi-hart tests --
+contended AMOs and LR/SC, interrupts between harts, per-hart timers, waits
+woken by another hart -- lock-step strictly against it, on 2 to 256 harts:
 
 ```sh
-python tools/verification/lockstep_sail.py --multihart            # 2 and 4 harts
-python tools/verification/lockstep_sail.py --multihart --harts 3,8
+python tools/verification/lockstep_sail.py --multihart              # 2 and 4 harts
+python tools/verification/lockstep_sail.py --multihart --harts 16,64
 ```
 
-They cover AMOs and LR/SC loops contending for the same words, interrupts
-from one hart to another and to itself through the CLINT, another hart's
-`mtimecmp` read and written, each hart's own timer, `wfi` timing out and
-waking, `wrs` woken by another hart's store, and `mtime` written by one hart
-and read by all.
+**Linux.** `boot.py linux --harts N` makes the matching device tree
+(`tools/linux/dts/smp.py`) and boots it. Linux has come up with every CPU on
+8, 16, 32, 64 and 128 harts: 95 s, 4 minutes, 14 minutes, 37 minutes and
+about two and a half hours. The kernel and OpenSBI are built for 4096 (see
+[bug 172](docs/BUGS.md#bug172)), but past 64 the boot gets slow: until
+OpenSBI is done, hart 0 gets one step in N while its device-tree work grows
+with the cube of N.
 
-Linux boots on several harts with a device tree that describes them.
-`tools/linux/dts/smp.py` writes one from any of the single-hart trees -- cpu0
-repeated, the CLINT and both IMSIC nodes widened to every hart -- and compiles
-it:
-
-```sh
-python tools/linux/dts/smp.py build/linux/doomv.dts 4         # -> build/linux/doomv-h4.dtb
-riscv_doom.exe -harts=4 -opensbi=build/linux/fw_jump.elf -kernel=build/linux/Image     -dtb=build/linux/doomv-h4.dtb -initrd=build/linux/initramfs.cpio
-```
-
-OpenSBI starts the other harts and sends its IPIs through the IMSIC, and the
-kernel reports `smp: Brought up 1 node, 4 CPUs`; every CPU takes its own
-timer interrupts and IPIs, and four shell loops run one on each. Such a boot
-is as deterministic as any other -- two runs to the same step leave the same
-`crash.log` -- and a snapshot of one restores to the same run.
-
-How far it goes: the multi-hart lock-step tests pass strictly against Sail
-on 2 to 256 harts (a 256-hart AMO test is six million matching records).
-Linux comes up with every CPU on 8, 16, 32, 64 and 128 harts, in 95 s,
-230 s, 816 s, 37 minutes and two and a half hours (the last over two runs
-joined by a snapshot). The kernel is built for 4096 CPUs, past the 512 RISC-V's
-Kconfig allows (it was 64 while the console used the legacy SBI calls; see
-[bug 172](docs/BUGS.md#bug172)). OpenSBI is built for 4096 harts, as many as `-harts` can make (v1.3's
-default of 128 faulted at 256, in `imsic_map_hartid_to_data`), with the
-kernel at 128 MiB to leave room for its ~18 KiB per hart. Past 64 the boot is
-long rather than broken: until it is done, hart 0 parses OpenSBI's device
-tree in time that grows with the cube of the hart count, and the others spin
-waiting for it, so it gets one step in N.
-
-A hart waiting in WFI that cannot have been woken -- no event since it last
-looked, no timer of its own come due -- spends its turn without being
-switched to, which is most of a large machine's turns once OpenSBI is done;
-`DOOMV_WAITSKIP=0` turns that off, for checking that a run is the same either
-way (a 64-hart boot is, at 1.7 times the speed).
-
-Not there yet: the harts are interpreted one step at a time, with no fast
-loop, so a machine of several harts runs several times slower per
-instruction than one. With several harts, `crash.log` from `-stopat` ends
-with each hart's pc, privilege and step count.
+Good to know: the fast loop is single-hart only, so several harts run a few
+times slower per instruction; `crash.log` from `-stopat` lists every hart's pc;
+and `DOOMV_WAITSKIP=0` turns off a shortcut for waiting harts, to check that a
+run is the same without it.
 
 The core dispatches on a plain switch statement rather than a table of
 function pointers. I went in assuming function pointers would be the

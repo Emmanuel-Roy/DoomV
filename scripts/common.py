@@ -82,18 +82,95 @@ def build_emulator():
     require_files(ROOT / "riscv_doom.exe")
 
 
-def add_ram_option(parser):
-    """--ram, defined once so the three boot scripts cannot describe it differently."""
-    parser.add_argument("--ram", metavar="SIZE",
-                        help="guest RAM, e.g. 4G. Bytes or a K/M/G/T suffix; any value, not "
-                             "just round ones. Default is the emulator's own 1G. A DOOM run "
-                             "is capped near 2G -- the WAD sits above RAM and the guest reads "
-                             "its address from a 32-bit register; Linux has no such limit.")
+def split_passthrough(argv):
+    """Split argv at `--`: what follows goes to riscv_doom.exe unchanged."""
+    if "--" in argv:
+        i = argv.index("--")
+        return argv[:i], argv[i + 1:]
+    return argv, []
 
 
-def ram_args(ram):
-    """The emulator flag for --ram, or nothing when it was not given."""
-    return [f"-ram={ram}"] if ram else []
+def add_boot_options(parser, linux=True):
+    """The machine options every boot script takes, defined once so they read
+    the same. `linux` adds what only a Linux guest has: several harts, and (in
+    add_advanced_options) storage drives and the shared folder."""
+    g = parser.add_argument_group("machine")
+    g.add_argument("--ram", metavar="SIZE",
+                   help="guest memory, e.g. 4G (default 1G)" +
+                        ("" if linux else "; DOOM is capped near 2G"))
+    if linux:
+        g.add_argument("--harts", type=int, default=1, metavar="N",
+                       help="CPUs, 1 to 4095 (default 1); the device tree is made to match")
+    g.add_argument("--headless", action="store_true", help="no window; output goes to this console")
+    g.add_argument("--no-build", action="store_true", help="skip the build; use what is already built")
+
+
+def add_advanced_options(parser, linux=True):
+    """The rarer emulator options, as a group of their own at the end of --help."""
+    a = parser.add_argument_group("advanced", "Anything after `--` is passed to riscv_doom.exe as it is.")
+    a.add_argument("--snapshot", metavar="DIR", help="save the machine to DIR at --snapshot-at, and carry on")
+    a.add_argument("--snapshot-at", type=int, metavar="STEP", help="the instruction to snapshot at")
+    a.add_argument("--restore", metavar="DIR", help="start from a snapshot (same options as when it was made)")
+    a.add_argument("--stop-at", type=int, metavar="STEP", help="stop after STEP instructions; state in crash.log")
+    a.add_argument("--record", metavar="FILE", help="log every input with the instruction it arrived at")
+    a.add_argument("--replay", metavar="FILE", help="replay a --record log exactly")
+    a.add_argument("--march", metavar="ISA", help="override the extensions, e.g. rv64imafdc_zicsr")
+    if linux:
+        a.add_argument("--drives", metavar="DIR", help="storage drives folder (default drives/; '' for none)")
+        a.add_argument("--shared", metavar="DIR", help="shared folder (default shared/; '' for none)")
+
+
+def boot_args(args, passthrough=()):
+    """The emulator flags for add_boot_options' options, in a fixed order."""
+    if (args.snapshot is None) != (args.snapshot_at is None):
+        raise RuntimeError("--snapshot and --snapshot-at go together")
+    harts = getattr(args, "harts", 1)
+    if not 1 <= harts <= 4095:
+        raise RuntimeError("--harts must be 1 to 4095")
+    out = []
+    if args.ram:
+        out.append(f"-ram={args.ram}")
+    if harts > 1:
+        out.append(f"-harts={harts}")
+    if args.headless:
+        out.append("-ng")
+    if args.march:
+        out.append(f"-march={args.march}")
+    if args.snapshot:
+        out += [f"-snapshotat={args.snapshot_at}", f"-snapshot={args.snapshot}"]
+    if args.restore:
+        out.append(f"-restore={args.restore}")
+    if args.stop_at:
+        out.append(f"-stopat={args.stop_at}")
+    if args.record:
+        out.append(f"-record={args.record}")
+    if args.replay:
+        out.append(f"-replay={args.replay}")
+    for name in ("drives", "shared"):
+        value = getattr(args, name, None)
+        if value is not None:
+            out.append(f"-{name}={value}")
+    return out + list(passthrough)
+
+
+def hart_dtb(dtb: Path, harts: int) -> Path:
+    """The device tree for `harts` harts: dtb itself for one, else made from its source.
+
+    tools/linux/dts/smp.py repeats cpu0 and widens the CLINT and IMSIC nodes;
+    the result is kept beside the source and made again when the source is newer.
+    """
+    if harts <= 1:
+        return dtb
+    source = dtb.with_suffix(".dts")
+    out = dtb.with_name(f"{dtb.stem}-h{harts}.dtb")
+    require_files(source)
+    if not out.is_file() or out.stat().st_mtime < source.stat().st_mtime:
+        run([sys.executable, str(ROOT / "tools/linux/dts/smp.py"), str(source), str(harts)])
+    if harts > 64:
+        print(f"Note: {harts} harts boot slowly. Until OpenSBI is done, hart 0 gets one step in "
+              f"{harts} while its setup grows with the cube of the count: 64 harts take about "
+              "40 minutes, 128 about two and a half hours.", flush=True)
+    return out
 
 
 def ensure_host_tools():
