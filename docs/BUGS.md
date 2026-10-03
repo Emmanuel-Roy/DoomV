@@ -7183,3 +7183,20 @@ than called. `RISCV_SBI_V01` is off, and `NR_CPUS` is 4096 -- every hart
 DoomV's CLINT serves -- in a copy of `arch/riscv/Kconfig` widened from its
 512; the generic kernel goes to 8192.
 
+
+<a id="bug173"></a>
+### 173. Up arrow in the Openbox session ran a screenshot
+
+Pressing Up in the desktops' xterm put up an Openbox dialog -- "Failed to
+execute child process "scrot"" -- instead of recalling a command. The
+keyboard was right: DoomV sends evdev's `KEY_UP`, which X numbers 111. But
+X was reading it with the "base" XKB rules, whose keycodes are the old
+xfree86 ones, and there 111 is Print -- bound to `scrot` in Openbox's
+default configuration. Down, Left and the rest of the block were wrong the
+same way.
+
+The evdev rules normally arrive with the device, from udev. This image has
+no udev and names its input devices in `xorg.conf.d` instead, so nothing
+named the rules and X fell back. `mkdesktop.sh` now sets `XkbRules evdev`
+(with `pc105` and `us`) on the keyboard. An existing image picks it up with
+`mkdesktop.sh --sessions-only`.

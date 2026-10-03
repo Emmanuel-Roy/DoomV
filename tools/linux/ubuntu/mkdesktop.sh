@@ -135,6 +135,14 @@ Section "InputDevice"
 	Identifier "DoomV keyboard"
 	Driver "libinput"
 	Option "Device" "/dev/input/event0"
+	# The evdev keycode rules, named because nothing else names them: they
+	# normally come with the device from udev, and without them X falls back
+	# to the "base" rules and the old xfree86 keycodes, where evdev's arrow
+	# keys land on Print, Pause and the rest -- Up opened Openbox's
+	# screenshot binding instead of recalling a command.
+	Option "XkbRules" "evdev"
+	Option "XkbModel" "pc105"
+	Option "XkbLayout" "us"
 EndSection
 
 Section "InputDevice"
