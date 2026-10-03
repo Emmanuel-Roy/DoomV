@@ -45,9 +45,9 @@ constexpr char MAGIC[8] = {'D', 'O', 'O', 'M', 'V', 'S', 'N', 'P'};
 // writes, and the ones before it that it still knows: version 1 is the
 // single-hart layout, from before a machine could have several harts, and
 // reads as a machine of one; version 2 has no network card, 3 no
-// real-time clock, and 4 no sound card, with two queues to a virtio device
-// where there are now four.
-constexpr uint32_t VERSION = 5;
+// real-time clock, 4 no sound card, with two queues to a virtio device
+// where there are now four, and 5 no GPU.
+constexpr uint32_t VERSION = 6;
 
 class Writer {
 public:
@@ -309,6 +309,50 @@ struct SaveState {
 		}
 	}
 
+	// The GPU: its resources, host copies included, and the scanout.
+	// Version 6 on.
+	template <class IO> static void gpu(IO &io, VirtioGpu &g)
+	{
+		io.pod(g.status);
+		io.pod(g.device_feat_sel);
+		io.pod(g.driver_feat_sel);
+		io.pod(g.driver_feat);
+		io.pod(g.queue_sel);
+		io.pod(g.interrupt_status);
+		io.pod(g.queues);
+		io.pod(g.scanout_resource);
+		io.pod(g.scanout_x);
+		io.pod(g.scanout_y);
+		uint64_t count = g.resources.size();
+		io.pod(count);
+		if constexpr (std::is_same_v<IO, Writer>) {
+			for (auto &[id, r] : g.resources) {
+				io.pod(id);
+				resource(io, r);
+			}
+		} else {
+			g.resources.clear();
+			for (uint64_t i = 0; i < count && io.ok(); i++) {
+				const uint32_t id = io.template get<uint32_t>();
+				resource(io, g.resources[id]);
+			}
+		}
+	}
+	template <class IO> static void resource(IO &io, VirtioGpu::Resource &r)
+	{
+		io.pod(r.format);
+		io.pod(r.w);
+		io.pod(r.h);
+		uint64_t bytes = r.pixels.size(), entries = r.backing.size();
+		io.pod(bytes);
+		io.pod(entries);
+		if (bytes > VirtioGpu::MEMORY_LIMIT || entries > (1u << 24)) { io.fail(); return; }
+		r.pixels.resize(bytes);
+		r.backing.resize(entries);
+		io.bytes(r.pixels.data(), bytes);
+		for (auto &e : r.backing) { io.pod(e.first); io.pod(e.second); }
+	}
+
 	template <class IO> static void share(IO &io, Virtio9p &s)
 	{
 		io.pod(s.status);
@@ -399,6 +443,7 @@ struct SaveState {
 		if (version >= 3) net(io, m.net, version);
 		if (version >= 4) rtc(io, m.rtc);
 		if (version >= 5) snd(io, m.snd);
+		if (version >= 6) gpu(io, m.gpu);
 		io.mark(0x44455600);   // "DEV"
 	}
 
@@ -503,6 +548,8 @@ bool SaveState::save(DoomSystem &s, const std::string &dir)
 	w.pod(net);
 	const uint8_t snd = memory.snd.is_enabled();
 	w.pod(snd);
+	const uint8_t gpu = memory.gpu.is_enabled();
+	w.pod(gpu);
 	// The extensions are each hart's, and the current hart's are live in
 	// Extensions rather than in its Hart.
 	s.cur->ext = Extensions;
@@ -543,6 +590,8 @@ bool SaveState::restore(DoomSystem &s, const std::string &dir)
 	if (net != (uint8_t)memory.net.is_connected()) differ += " -net";
 	const uint8_t snd = version >= 5 ? r.get<uint8_t>() : 0;
 	if (snd != (uint8_t)memory.snd.is_enabled()) differ += " -snd";
+	const uint8_t gpu = version >= 6 ? r.get<uint8_t>() : 0;
+	if (gpu != (uint8_t)memory.gpu.is_enabled()) differ += " -gpu";
 	if (!differ.empty()) {
 		std::cout << "restore: this machine is not the one the snapshot was taken on -- start it with "
 		             "the same -ram, -march, boot files, disks and shared folder. Different:" << differ << "\n";

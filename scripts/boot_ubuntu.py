@@ -338,7 +338,7 @@ def desktop_snapshot_command(image: Path, snapshot: Path, args, passthrough):
                            "    python performance/make_desktop_snapshot.py")
     changed = [name for name in ("ram", "march", "restore", "drives", "shared")
                if getattr(args, name) not in (None, "")] + (["harts"] if args.harts != 1 else []) \
-              + (["net"] if args.net else [])
+              + (["net"] if args.net else []) + (["gpu"] if args.gpu else [])
     if changed:
         raise RuntimeError("--desktop-snapshot restores the machine the snapshot was made on; "
                            "it cannot take --" + ", --".join(changed))

@@ -98,3 +98,54 @@ bool fdt_set_memory_size(uint8_t *blob, size_t len, uint64_t base, uint64_t size
 	}
 	return false;
 }
+
+bool fdt_remove_node(uint8_t *blob, size_t len, const char *name)
+{
+	if (len < 40 || be32(blob) != FDT_MAGIC) return false;
+	const uint32_t total    = be32(blob + 4);
+	const uint32_t off_stru = be32(blob + 8);
+	const uint32_t len_stru = be32(blob + 36);
+	if (total > len || off_stru + len_stru > total) return false;
+
+	uint8_t *p = blob + off_stru;
+	uint8_t *end = blob + off_stru + len_stru;
+	int depth = 0;
+	uint8_t *start = nullptr;   // the node's BEGIN_NODE, once found
+	int node_depth = -1;
+
+	while (p + 4 <= end) {
+		uint8_t *const token_at = p;
+		const uint32_t token = be32(p);
+		p += 4;
+		if (token == FDT_BEGIN_NODE) {
+			const char *node = (const char *)p;
+			p += (std::strlen(node) + 4) & ~3u;
+			depth++;
+			if (!start && depth == 2 && std::strcmp(node, name) == 0) {
+				start = token_at;
+				node_depth = depth;
+			}
+		} else if (token == FDT_END_NODE) {
+			if (start && depth == node_depth) {
+				// Every word from BEGIN_NODE to here, inclusive, becomes a
+				// NOP: a parser skips them, and nothing after has to move.
+				for (uint8_t *w = start; w < p; w += 4) {
+					w[0] = 0; w[1] = 0; w[2] = 0; w[3] = (uint8_t)FDT_NOP;
+				}
+				return true;
+			}
+			depth--;
+		} else if (token == FDT_PROP) {
+			if (p + 8 > end) return false;
+			const uint32_t plen = be32(p);
+			p += 8 + ((plen + 3) & ~3u);
+		} else if (token == FDT_NOP) {
+			continue;
+		} else if (token == FDT_END) {
+			break;
+		} else {
+			return false;
+		}
+	}
+	return false;
+}

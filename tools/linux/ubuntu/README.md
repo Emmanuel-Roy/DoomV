@@ -202,6 +202,10 @@ and the updates and security suites):
 python scripts/boot.py ubuntu --setup-network
 ```
 
+**GPU.** `--gpu` runs the display through a virtio-gpu instead of the simple
+framebuffer; X's configuration needs no change, since the GPU's DRM driver
+provides `/dev/fb0` too.
+
 **Sound.** Ubuntu boots with a sound card unless given `--no-sound`. The
 image has no ALSA tools; `--setup-sound` installs them (the same way as the
 browser, below):

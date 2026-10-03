@@ -8,7 +8,7 @@ decoder, a register file, a memory bus, and the RVA23S64 profile (RV64GCV
 plus the extensions below, and H), with the handful of devices a
 distribution needs on top: AIA interrupt controllers, a framebuffer, a
 real-time clock, and virtio disks, keyboard and mouse, network card, sound
-card, and a 9P folder shared with Windows.
+card, GPU (2D), and a 9P folder shared with Windows.
 
 <img width="1920" height="1080" alt="DOOM E1M1 running on DoomV, with the register file and trace log beside it" src="docs/images/doomv-hero.png" />
 
@@ -336,6 +336,7 @@ src/
     virtio_9p.*            a 9P2000.L file server for the shared folder
     virtio_net.*           the network card
     virtio_snd.*           the sound card
+    virtio_gpu.*           the GPU, 2D: the display through Linux's DRM driver
   net/usernet.*          user-mode NAT behind the network card
   audio/host_audio.*     the host's default speakers and microphone, behind the sound card
   timer.* aplic.* imsic.*  CLINT timer and the AIA interrupt controllers
@@ -523,6 +524,7 @@ riscv_doom.exe -opensbi=<f> -kernel=<f> -dtb=<f> -initrd=<f> [options]   # Linux
 | `-lockstep=<path>` | Run against a reference trace -- Sail's, or an RTL simulation's -- and halt at the first record that does not match. See [Lock-stepping](#lockstep). |
 | `-lockstep-strict` | With `-lockstep`, compare everything, counters, time and interrupt timing included, and take nothing from the reference. How DoomV is held to Sail. |
 | `-net` | A network card, with user-mode NAT behind it: the guest reaches the internet through the host. See [Networking](#networking). |
+| `-gpu` | A virtio-gpu (2D) for a Linux guest's display, in place of the simple framebuffer. See [GPU](#gpu). |
 | `-snd` | A sound card, playing through the host's default output and recording from its default input. See [Sound](#sound). |
 | `-rtc=host` or `-rtc=<seconds>` | Where the guest's clock starts: the host's time, read once at start, or seconds since 1970. Without it, 2026-01-01, so a run repeats exactly. The boot scripts pass `host`. See [The clock](#clock). |
 | `-harts=<n>` | A machine of `n` identical harts (default 1), each starting at the entry with `a0` = its hart id. They take turns a step at a time, so a run is as deterministic as with one. See [Several harts](#harts). |
@@ -724,6 +726,19 @@ same instruction counts typed keys do, `-record` logs every one, and
 replays to the same machine state. Without `-net` the card is not there
 (device id 0) and nothing changes. A snapshot keeps the card and the frames
 in flight, not the connections.
+
+<a id="gpu"></a>
+### GPU
+
+`-gpu` (`boot.py linux --gpu`, `boot.py ubuntu --gpu`) gives a Linux guest a
+virtio-gpu, and its DRM driver runs the display: the console and X draw into
+resources in guest memory and flush them to the screen, rather than into a
+fixed aperture. DoomV takes the simple-framebuffer out of the device tree it
+loads, so the GPU is the only display; the guest sees `virtio_gpudrmfb` as
+`/dev/fb0`, and the desktops' X configuration works unchanged. Every command
+completes inside the notify that sent it, so a run is as repeatable as
+without. It is 2D: one scanout the size of the window, no 3D (virgl), no blob
+resources.
 
 <a id="sound"></a>
 ### Sound

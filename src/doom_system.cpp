@@ -440,6 +440,13 @@ bool DoomSystem::init_linux_boot(const char *sbi_path, const char *kernel_path, 
 			std::cerr << "warning: could not set the memory size in " << dtb_path
 			          << "; the guest will use the size the file was built with\n";
 		}
+		// With a GPU, it is the display: the simple-framebuffer goes, or
+		// Linux would bind both and put the console on the one that is not
+		// shown.
+		if (memory.get_gpu().is_enabled() && !fdt_remove_node(dtb, room, "framebuffer@50000000")) {
+			std::cerr << "warning: no framebuffer@50000000 in " << dtb_path
+			          << " to take out; with -gpu the guest may draw to both\n";
+		}
 	}
 	// Optional now: with a virtio disk attached the kernel mounts a real
 	// root filesystem instead, and there is no initramfs to place.

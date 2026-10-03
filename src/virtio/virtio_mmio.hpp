@@ -47,6 +47,11 @@ public:
 		REG_QUEUE_AVAIL_HI  = 0x094,
 		REG_QUEUE_USED_LO   = 0x0a0,
 		REG_QUEUE_USED_HI   = 0x0a4,
+		REG_SHM_SEL         = 0x0ac,
+		REG_SHM_LEN_LO      = 0x0b0,
+		REG_SHM_LEN_HI      = 0x0b4,
+		REG_SHM_BASE_LO     = 0x0b8,
+		REG_SHM_BASE_HI     = 0x0bc,
 		REG_CONFIG_GEN      = 0x0fc,
 		REG_CONFIG          = 0x100,
 	};

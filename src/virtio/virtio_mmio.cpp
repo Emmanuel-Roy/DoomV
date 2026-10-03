@@ -22,6 +22,12 @@ uint32_t VirtioMmio::read32(uint64_t offset) const
 	case REG_INTERRUPT_STAT: return interrupt_status;
 	case REG_STATUS:         return status;
 	case REG_CONFIG_GEN:     return 0;
+	// No device here has shared memory regions. "None" is a length of all
+	// ones; zero would be a region of no size at address 0, and the GPU
+	// driver fails its probe trying to reserve it.
+	case REG_SHM_LEN_LO: case REG_SHM_LEN_HI:
+	case REG_SHM_BASE_LO: case REG_SHM_BASE_HI:
+		return 0xFFFFFFFFu;
 	default:
 		if (offset >= REG_CONFIG) {
 			uint32_t v = 0;

@@ -4,6 +4,7 @@
   python scripts/boot.py linux                  # window; type at the shell
   python scripts/boot.py linux --harts 4        # four CPUs
   python scripts/boot.py linux --net            # a network card; `udhcpc -i eth0` in the guest
+  python scripts/boot.py linux --gpu            # the display through a virtio-gpu
   python scripts/boot.py linux --smoke          # test: BusyBox runs, then exit
 """
 import argparse

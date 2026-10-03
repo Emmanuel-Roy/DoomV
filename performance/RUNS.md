@@ -427,3 +427,6 @@ and nothing else.
 | 20261003-160229 | desktop 3000M | virtio-snd | 5fecfe4+ | 252.81 | 11.9 | `35c61483d5e3` |  |
 | 20261003-160253 | desktop 3000M | virtio-snd (reference) | 5fecfe4+ | 243.97 | 12.3 | `35c61483d5e3` |  |
 | 20261003-160317 | desktop 3000M | virtio-snd | 5fecfe4+ | 249.83 | 12.0 | `35c61483d5e3` |  |
+| 20261003-183919 | doom 1000M | virtio-gpu | a9cca10+ | 292.84 | 3.4 | `3d73dac132f3` |  |
+| 20261003-183923 | desktop 3000M | virtio-gpu | a9cca10+ | 249.91 | 12.0 | `35c61483d5e3` |  |
+| 20261003-183949 | desktop 3000M | virtio-gpu | a9cca10+ | 251.50 | 11.9 | `35c61483d5e3` |  |

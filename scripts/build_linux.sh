@@ -89,7 +89,7 @@ grep -qP '^	range 2 4096 if !RISCV_SBI_V01$' "$KERNEL/arch/riscv/Kconfig"     ||
 "$KERNEL/scripts/config" --file "$KERNEL/.config" --disable RISCV_SBI_V01 \
     --enable NONPORTABLE --enable HVC_RISCV_SBI --enable BLK_DEV_INITRD --enable BINFMT_SCRIPT \
     --enable FB --enable FB_SIMPLE --enable FRAMEBUFFER_CONSOLE \
-    --enable MAGIC_SYSRQ --enable VIRTIO_INPUT --enable INPUT_EVDEV --enable SND_VIRTIO \
+    --enable MAGIC_SYSRQ --enable VIRTIO_INPUT --enable INPUT_EVDEV --enable SND_VIRTIO --enable DRM --enable DRM_VIRTIO_GPU \
     --set-val NR_CPUS 4096
 make -C "$KERNEL" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- olddefconfig
 make -C "$KERNEL" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- Image -j"$JOBS"

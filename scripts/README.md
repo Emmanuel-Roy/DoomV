@@ -29,6 +29,7 @@ to exit. `python scripts/boot.py <guest> --help` lists everything a guest takes.
 | `--ram 4G` | Guest memory (default 1G). DOOM is capped near 2G. |
 | `--harts 4` | CPUs, 1 to 4095 (Linux and Ubuntu). The device tree is made to match. |
 | `--net` | A network card (Linux and Ubuntu); the guest reaches the internet through the host. |
+| `--gpu` | The display through a virtio-gpu (Linux and Ubuntu), in place of the simple framebuffer. |
 | `--no-sound` | No sound card. By default Linux and Ubuntu play and record through this computer's default devices. |
 | `--headless` | No window; output goes to the console. |
 | `--no-build` | Use what is already built. |

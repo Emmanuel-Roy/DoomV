@@ -92,6 +92,9 @@ public:
 	// default devices. Call after set_input_replay, as set_network: a replay
 	// has the card and the log's periods, and no host audio.
 	void set_sound();
+	// -gpu: a virtio-gpu in place of the simple-framebuffer. Before
+	// init_linux_boot, which takes the framebuffer out of the device tree.
+	void set_gpu() { memory.get_gpu().set_enabled(true); }
 	// -rtc: where the real-time clock starts, in seconds since 1970. Call
 	// before set_input_replay, whose log names the clock it was made with.
 	void set_rtc_epoch(uint64_t seconds) { memory.get_rtc().set_epoch(seconds); }

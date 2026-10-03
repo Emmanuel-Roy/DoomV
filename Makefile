@@ -91,7 +91,7 @@ LIBS = -Lsrc/lib -lmingw32 -lSDL2main -lSDL2 -lws2_32 -liphlpapi
 
 # Source files
 SRCS = src/main.cpp src/doom_system.cpp src/memory.cpp src/guest_ram.cpp src/fdt_patch.cpp src/registers.cpp \
-       src/riscv_decoder.cpp src/mmu.cpp src/pmp.cpp src/timer.cpp src/imsic.cpp src/aplic.cpp src/uart.cpp src/rtc.cpp src/virtio/virtio_mmio.cpp src/virtio/virtio_blk.cpp src/virtio/virtio_input.cpp src/virtio/virtio_9p.cpp src/virtio/virtio_net.cpp src/virtio/virtio_snd.cpp src/audio/host_audio.cpp src/net/usernet.cpp src/lockstep.cpp src/savestate.cpp \
+       src/riscv_decoder.cpp src/mmu.cpp src/pmp.cpp src/timer.cpp src/imsic.cpp src/aplic.cpp src/uart.cpp src/rtc.cpp src/virtio/virtio_mmio.cpp src/virtio/virtio_blk.cpp src/virtio/virtio_input.cpp src/virtio/virtio_9p.cpp src/virtio/virtio_net.cpp src/virtio/virtio_snd.cpp src/virtio/virtio_gpu.cpp src/audio/host_audio.cpp src/net/usernet.cpp src/lockstep.cpp src/savestate.cpp \
        src/debugger.cpp src/gui.cpp \
        src/controls.cpp src/extensions.cpp \
        src/extensions/ext_i.cpp src/extensions/ext_m.cpp src/extensions/ext_a.cpp \

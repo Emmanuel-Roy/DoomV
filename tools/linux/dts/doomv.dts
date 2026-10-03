@@ -433,6 +433,16 @@
 			interrupts = <15 4>;
 		};
 
+		// The GPU, virtio-gpu (src/virtio/virtio_gpu.cpp), 2D. Device id 0
+		// without -gpu; with it, DoomV also takes the simple-framebuffer
+		// node out of the tree it loads, and this is the display.
+		virtio_mmio@1010d000 {
+			compatible = "virtio,mmio";
+			reg = <0x0 0x1010d000 0x0 0x1000>;
+			interrupt-parent = <&aplic>;
+			interrupts = <16 4>;
+		};
+
 		// The real-time clock (src/rtc.cpp), a Goldfish RTC where QEMU's
 		// virt board has one. The riscv defconfig builds its driver in, and
 		// RTC_HCTOSYS sets the system time from it at boot. It starts at a

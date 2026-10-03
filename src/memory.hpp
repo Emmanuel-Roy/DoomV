@@ -10,6 +10,7 @@
 #include "virtio/virtio_9p.hpp"
 #include "virtio/virtio_net.hpp"
 #include "virtio/virtio_snd.hpp"
+#include "virtio/virtio_gpu.hpp"
 #include <cstdint>
 #include <mutex>
 #include <vector>
@@ -240,10 +241,14 @@ public:
 	// (14 is the real-time clock). Without -snd it answers device id 0.
 	static constexpr uint64_t VIRTIO_SND_BASE = VIRTIO_NET_BASE + VIRTIO_SIZE;
 	static constexpr uint32_t SND_IRQ = 15;
+	// The GPU: virtio-gpu, after the sound card, APLIC source 16. Without
+	// -gpu it answers device id 0, and the simple-framebuffer is the display.
+	static constexpr uint64_t VIRTIO_GPU_BASE = VIRTIO_SND_BASE + VIRTIO_SIZE;
+	static constexpr uint32_t GPU_IRQ = 16;
 	// Every slot from the keyboard on is a virtio device, in this order:
 	// keyboard, mouse, eight drives, the shared folder, the network card,
-	// the sound card.
-	static constexpr uint64_t VIRTIO_SLOTS_END = VIRTIO_SND_BASE + VIRTIO_SIZE;
+	// the sound card, the GPU.
+	static constexpr uint64_t VIRTIO_SLOTS_END = VIRTIO_GPU_BASE + VIRTIO_SIZE;
 	static_assert(VIRTIO_MOUSE_BASE == VIRTIO_KBD_BASE + VIRTIO_SIZE
 	              && VIRTIO_DRIVE_BASE == VIRTIO_MOUSE_BASE + VIRTIO_SIZE,
 	              "Memory::virtio_at finds a device by its slot number");
@@ -409,6 +414,10 @@ public:
 		}
 	}
 	const uint8_t *linux_framebuffer() const { return lfb.data(); }
+	// For the GPU, which shows its scanout here: write, then say so, and the
+	// window and -fbdump pick it up as they do a guest store.
+	uint8_t *linux_framebuffer_mut() { return lfb.data(); }
+	void linux_framebuffer_touched() { lfb_gen.store(lfb_gen.load(std::memory_order_relaxed) + 1, std::memory_order_relaxed); }
 	// Bumped on every store into the matching framebuffer. The display
 	// thread reads them to tell a frame the guest is still drawing from one
 	// it has finished -- see DoomSystem::display_loop. Only the CPU thread
@@ -466,6 +475,7 @@ public:
 	Virtio9p &get_share() { return share; }
 	VirtioNet &get_net() { return net; }
 	VirtioSnd &get_snd() { return snd; }
+	VirtioGpu &get_gpu() { return gpu; }
 	Aplic &get_aplic() { return aplic; }
 	Rtc &get_rtc() { return rtc; }
 
@@ -515,6 +525,7 @@ private:
 	Virtio9p share;
 	VirtioNet net{NET_IRQ};
 	VirtioSnd snd{SND_IRQ};
+	VirtioGpu gpu{GPU_IRQ, LFB_W, LFB_H};
 	// The virtio device whose window holds addr, and the offset into it.
 	VirtioMmio *virtio_at(uint64_t addr, uint64_t &offset);
 

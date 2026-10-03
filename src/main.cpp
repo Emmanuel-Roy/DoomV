@@ -99,6 +99,7 @@ int main(int argc, char *argv[])
 	bool network = false;
 	bool have_rtc = false;
 	bool sound = false;
+	bool gpu = false;
 	uint64_t rtc_epoch = 0;
 	for (int i = 1; i < argc; i++) {
 		std::string arg = argv[i];
@@ -136,6 +137,10 @@ int main(int argc, char *argv[])
 			// A network card, with user-mode NAT behind it: the guest gets
 			// 10.0.2.15 by DHCP and reaches the outside through host sockets.
 			network = true;
+		} else if (arg == "-gpu") {
+			// A virtio-gpu in place of the simple-framebuffer: Linux draws
+			// through its DRM driver, and the window shows the scanout.
+			gpu = true;
 		} else if (arg == "-snd") {
 			// A sound card, playing through and recording from the host's
 			// default audio devices.
@@ -286,6 +291,7 @@ int main(int argc, char *argv[])
 		std::cout << "cannot open disk image: " << disk_path << "\n";
 		return -1;
 	}
+	if (gpu) system.set_gpu();
 	if (linux_boot) {
 		if (!system.init_linux_boot(opensbi_path.c_str(), kernel_path.c_str(), dtb_path.c_str(), initrd_path.c_str())) {
 			return -1;
