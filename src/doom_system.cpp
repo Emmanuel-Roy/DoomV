@@ -1189,7 +1189,7 @@ void DoomSystem::dump_framebuffer()
 	if (fb_dump_path.empty()) return;
 	// After the guest output that came before it, not interleaved with it.
 	console_drain();
-	write_framebuffer_dump(reinterpret_cast<const uint32_t *>(memory.linux_framebuffer()));
+	write_framebuffer_dump(reinterpret_cast<const uint32_t *>(linux_screen()));
 }
 
 // The periodic refresh used to be every 200th snapshot publish, on the CPU
@@ -1207,7 +1207,7 @@ void DoomSystem::fbdump_loop()
 		std::this_thread::sleep_for(std::chrono::milliseconds(50));
 		if (clock::now() < next) continue;
 		next = clock::now() + std::chrono::seconds(5);
-		std::memcpy(copy.data(), memory.linux_framebuffer(), copy.size() * sizeof(uint32_t));
+		std::memcpy(copy.data(), linux_screen(), copy.size() * sizeof(uint32_t));
 		write_framebuffer_dump(copy.data());
 	}
 }
@@ -1314,8 +1314,12 @@ void DoomSystem::display_loop()
 	const bool lfb = linux_mode;
 	const size_t pixels = lfb ? (size_t)Memory::LFB_W * Memory::LFB_H
 	                          : (size_t)Memory::FB_W * Memory::FB_H;
-	const uint8_t *src = lfb ? memory.linux_framebuffer() : memory.framebuffer();
-	const auto generation = [&] { return lfb ? memory.lfb_generation() : memory.fb_generation(); };
+	const uint8_t *src = lfb ? linux_screen() : memory.framebuffer();
+	const bool gpu_screen = lfb && memory.get_gpu().is_virgl();
+	const auto generation = [&] {
+		return gpu_screen ? memory.get_gpu().screen_generation()
+		                  : lfb ? memory.lfb_generation() : memory.fb_generation();
+	};
 
 	std::vector<uint32_t> buf(pixels);
 	uint64_t seen = generation();
@@ -1964,6 +1968,26 @@ bool DoomSystem::set_input_replay(const char *path)
 			memory.get_rtc().set_epoch(seconds);
 			continue;
 		}
+		// A 3D GPU result: "<instruction> gpu <hex response> [<hex address>:<hex bytes>]...".
+		if (kind == "gpu") {
+			GpuEvent e{(uint64_t)stamp, {}, {}};
+			const auto bytes = [](const std::string &hex) {
+				std::vector<uint8_t> out;
+				for (size_t i = 0; i + 1 < hex.size(); i += 2)
+					out.push_back((uint8_t)std::stoul(hex.substr(i, 2), nullptr, 16));
+				return out;
+			};
+			std::string word;
+			in >> word;
+			e.response = bytes(word);
+			while (in >> word) {
+				const size_t colon = word.find(':');
+				if (colon == std::string::npos) continue;
+				e.writes.push_back({std::stoull(word.substr(0, colon), nullptr, 16), bytes(word.substr(colon + 1))});
+			}
+			replay_gpu.push_back(std::move(e));
+			continue;
+		}
 		// A sound period: "<instruction> snd tx" (played), or
 		// "<instruction> snd rx <hex samples>" (recorded).
 		if (kind == "snd") {
@@ -2192,6 +2216,36 @@ void DoomSystem::record_frame(uint64_t now, const std::vector<uint8_t> &frame)
 	for (uint8_t b : frame) std::fprintf(record_file, "%02x", b);
 	std::fputc('\n', record_file);
 	record_dirty = true;
+}
+
+void DoomSystem::wire_gpu_log()
+{
+	VirtioGpu &gpu = memory.get_gpu();
+	if (!gpu.is_virgl()) return;
+	if (replaying) {
+		gpu.replay_result = [this](std::vector<uint8_t> &response, VirtioGpu::Writes &writes) {
+			if (replay_gpu_pos >= replay_gpu.size()) return false;
+			GpuEvent &e = replay_gpu[replay_gpu_pos++];
+			if (e.at != memory.instruction_count())
+				std::cout << "replay: a GPU result logged at instruction " << e.at << " is wanted at "
+				          << memory.instruction_count() << " -- this is not the run that was recorded" << std::endl;
+			response = std::move(e.response);
+			writes = std::move(e.writes);
+			return true;
+		};
+		return;
+	}
+	gpu.on_result = [this](const std::vector<uint8_t> &response, const VirtioGpu::Writes &writes) {
+		if (!record_file) return;
+		std::fprintf(record_file, "%llu gpu ", (unsigned long long)memory.instruction_count());
+		for (uint8_t b : response) std::fprintf(record_file, "%02x", b);
+		for (const auto &[addr, bytes] : writes) {
+			std::fprintf(record_file, " %llx:", (unsigned long long)addr);
+			for (uint8_t b : bytes) std::fprintf(record_file, "%02x", b);
+		}
+		std::fputc('\n', record_file);
+		record_dirty = true;
+	};
 }
 
 void DoomSystem::set_sound()

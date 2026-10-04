@@ -476,6 +476,7 @@ public:
 	VirtioNet &get_net() { return net; }
 	VirtioSnd &get_snd() { return snd; }
 	VirtioGpu &get_gpu() { return gpu; }
+	const VirtioGpu &get_gpu() const { return gpu; }
 	Aplic &get_aplic() { return aplic; }
 	Rtc &get_rtc() { return rtc; }
 

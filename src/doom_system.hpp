@@ -94,7 +94,20 @@ public:
 	void set_sound();
 	// -gpu: a virtio-gpu in place of the simple-framebuffer. Before
 	// init_linux_boot, which takes the framebuffer out of the device tree.
-	void set_gpu() { memory.get_gpu().set_enabled(true); }
+	void set_gpu(bool virgl)
+	{
+		memory.get_gpu().set_enabled(true);
+		memory.get_gpu().set_virgl(virgl);
+	}
+	// In 3D mode, the GPU's results are inputs: logged by -record, supplied
+	// by -replay. After both are set up.
+	void wire_gpu_log();
+	// What a Linux guest's window shows: the framebuffer, or with a 3D GPU
+	// the host-only picture it reads back (see VirtioGpu::screen).
+	const uint8_t *linux_screen() const
+	{
+		return memory.get_gpu().is_virgl() ? memory.get_gpu().screen() : memory.linux_framebuffer();
+	}
 	// -rtc: where the real-time clock starts, in seconds since 1970. Call
 	// before set_input_replay, whose log names the clock it was made with.
 	void set_rtc_epoch(uint64_t seconds) { memory.get_rtc().set_epoch(seconds); }
@@ -252,6 +265,10 @@ private:
 	// at the input points, recorded; from the log on a replay. A recorded
 	// period carries its samples; a played one only its moment.
 	struct SoundEvent { uint64_t at; bool rx; std::vector<uint8_t> data; };
+	// The 3D GPU's results, from a -replay log, in order.
+	struct GpuEvent { uint64_t at; std::vector<uint8_t> response; VirtioGpu::Writes writes; };
+	std::vector<GpuEvent> replay_gpu;
+	size_t replay_gpu_pos = 0;
 	std::unique_ptr<HostAudio> host_audio;
 	std::vector<SoundEvent> replay_snd;
 	size_t replay_snd_pos = 0;

@@ -1,4 +1,5 @@
 #include "virtio_gpu.hpp"
+#include "virgl_backend.hpp"
 #include "memory.hpp"
 #include <algorithm>
 #include <cstring>
@@ -53,6 +54,12 @@ const uint8_t *swizzle(uint32_t format)
 
 } // namespace
 
+VirtioGpu::VirtioGpu(uint32_t irq, uint32_t width, uint32_t height)
+	: VirtioMmio(DEVICE_ID, VENDOR_DOOM, irq, 2), width(width), height(height),
+	  screen_buf((size_t)width * height * 4, 0) {}
+
+VirtioGpu::~VirtioGpu() = default;
+
 void VirtioGpu::notify(unsigned q, Memory &mem, Aplic &aplic)
 {
 	if (q == CONTROLQ) control(mem, aplic);
@@ -61,6 +68,16 @@ void VirtioGpu::notify(unsigned q, Memory &mem, Aplic &aplic)
 
 void VirtioGpu::reset()
 {
+	if (backend) {
+		for (uint32_t id : virgl_resources) {
+			struct iovec *iov = nullptr;
+			int n = 0;
+			backend->resource_detach_iov((int)id, &iov, &n);
+			backend->resource_unref(id);
+		}
+	}
+	virgl_resources.clear();
+	backings.clear();
 	resources.clear();
 	scanout_resource = 0;
 	scanout_x = scanout_y = 0;
@@ -85,7 +102,7 @@ void VirtioGpu::control(Memory &mem, Aplic &aplic)
 			const Desc desc = descriptor(mem, CONTROLQ, d);
 			if (desc.flags & DESC_F_WRITE) {
 				writable.push_back({desc.addr, desc.len});
-			} else if (in.size() + desc.len <= (1u << 20)) {
+			} else if (in.size() + desc.len <= (16u << 20)) {   // SUBMIT_3D carries command streams
 				const size_t at = in.size();
 				in.resize(at + desc.len);
 				mem.read_bytes(desc.addr, in.data() + at, desc.len);
@@ -93,7 +110,21 @@ void VirtioGpu::control(Memory &mem, Aplic &aplic)
 			if (!(desc.flags & DESC_F_NEXT)) break;
 			d = desc.next;
 		}
-		command(in, out, mem);
+		if (virgl) {
+			Writes writes;
+			if (replay_result) {
+				if (!replay_result(out, writes)) {   // the log ran out: a replay of another run
+					out.assign(HDR, 0);
+					put32(out, 0, RESP_ERR_UNSPEC);
+				}
+			} else {
+				command_virgl(in, out, writes, mem);
+				if (on_result) on_result(out, writes);
+			}
+			for (const auto &[addr, bytes] : writes) mem.write_bytes(addr, bytes.data(), bytes.size());
+		} else {
+			command(in, out, mem);
+		}
 		uint32_t written = 0;
 		for (const auto &[addr, len] : writable) {
 			const uint32_t n = (uint32_t)std::min<size_t>(len, out.size() - written);
@@ -277,6 +308,11 @@ void VirtioGpu::present(uint32_t x, uint32_t y, uint32_t w, uint32_t h, Memory &
 
 void VirtioGpu::blank(Memory &mem)
 {
+	if (virgl) {
+		std::memset(screen_buf.data(), 0, screen_buf.size());
+		screen_gen.fetch_add(1, std::memory_order_relaxed);
+		return;
+	}
 	std::memset(mem.linux_framebuffer_mut(), 0, (size_t)width * height * 4);
 	mem.linux_framebuffer_touched();
 }

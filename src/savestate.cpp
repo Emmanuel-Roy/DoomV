@@ -519,6 +519,11 @@ bool DoomSystem::restore_snapshot(const std::string &dir) { return SaveState::re
 bool SaveState::save(DoomSystem &s, const std::string &dir)
 {
 	Memory &memory = s.memory;
+	if (memory.gpu.is_virgl()) {
+		std::cout << "snapshot: not taken -- with -gpu=virgl the GPU's state is on the host GPU, "
+		             "and that cannot be saved\n";
+		return false;
+	}
 	if (!memory.share.fids.empty()) {
 		std::cout << "snapshot: not taken -- the guest has files open on the shared folder, "
 		             "and saving those is not supported yet\n";

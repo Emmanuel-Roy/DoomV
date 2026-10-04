@@ -103,8 +103,9 @@ def add_boot_options(parser, linux=True):
                        help="CPUs, 1 to 4095 (default 1); the device tree is made to match")
         g.add_argument("--net", action="store_true",
                        help="a network card; the guest reaches the internet through the host")
-        g.add_argument("--gpu", action="store_true",
-                       help="a virtio-gpu for the display, in place of the simple framebuffer")
+        g.add_argument("--gpu", nargs="?", const="2d", choices=("2d", "virgl"), metavar="virgl",
+                       help="a virtio-gpu for the display, in place of the simple framebuffer; "
+                            "--gpu virgl adds 3D (OpenGL) on this computer's GPU")
         g.add_argument("--no-sound", dest="sound", action="store_false",
                        help="no sound card (by default the guest plays and records through this computer's)")
     g.add_argument("--headless", action="store_true", help="no window; output goes to this console")
@@ -145,7 +146,13 @@ def boot_args(args, passthrough=()):
         out.append("-net")
     if getattr(args, "sound", False):
         out.append("-snd")
-    if getattr(args, "gpu", False):
+    gpu = getattr(args, "gpu", None)
+    if gpu == "virgl":
+        # Loaded at run time from build/virgl; fetched the first time it is wanted.
+        if not (ROOT / "build/virgl/bin/libvirglrenderer-1.dll").exists():
+            run([sys.executable, str(ROOT / "scripts/get_virgl.py")])
+        out.append("-gpu=virgl")
+    elif gpu:
         out.append("-gpu")
     clock = getattr(args, "clock", "fixed")
     if clock != "fixed":
