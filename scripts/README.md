@@ -52,6 +52,7 @@ python scripts/boot.py ubuntu --install-desktops   # once, before --desktop (hou
 python scripts/boot.py ubuntu --setup-network      # once, before --net, for an image made before networking
 python scripts/boot.py ubuntu --setup-browser      # once: a browser (NetSurf) and w3m; includes --setup-network
 python scripts/boot.py ubuntu --setup-sound        # once: aplay, arecord and speaker-test; includes --setup-network
+python scripts/boot.py ubuntu --setup-gpu          # once: the desktops on --gpu, current Mesa, glxgears/vkcube
 ```
 
 `--desktop` boots from scratch, about 25 minutes to a usable desktop.

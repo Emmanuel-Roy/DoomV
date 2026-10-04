@@ -66,7 +66,10 @@ logged by `-record` as `<instruction> vsync <kind> <resource>:<offset>:<bytes>`,
 and a `-replay` writes them into plain buffers standing in for the host's,
 at the same instructions, with no GPU.
 
-## Not yet
+## Presenting
 
-- Presenting to the X desktop: Mesa's Vulkan WSI needs DRI3 from the X
-  server, and dma-buf sharing to go with it.
+A Vulkan program in a window presents by copying its frames through the
+CPU (`MESA_VK_WSI_DEBUG=sw`, set by the desktop sessions): the frames are
+host-visible memory the guest can map now that nothing is external. Handing
+the image to X directly, as a dma-buf, would need the host to import Vulkan
+memory into OpenGL, which the fork rules out on Windows.

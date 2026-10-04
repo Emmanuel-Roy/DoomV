@@ -771,8 +771,7 @@ OpenGL or Vulkan: the host GPU's resources -- the console's and X's
 framebuffers -- are saved with their contents and made again on a restore,
 and so is the context the kernel keeps for them. A context a program has
 given commands to, or anything of Venus's, holds state on the host GPU that
-cannot be saved; a snapshot then is refused with a message saying so. X still draws through `/dev/fb0` in software; the GPU is for
-programs that use OpenGL or EGL themselves.
+cannot be saved; a snapshot then is refused with a message saying so.
 
 Vulkan comes with it: Mesa's Venus driver in the guest
 sees `Virtio-GPU Venus (<your GPU>)`, and its commands run on the host GPU.
@@ -787,6 +786,16 @@ end in identical machine state. And what Venus and the GPU write into that
 shared memory is an input like any other: at each of those points `-record`
 logs the bytes that changed, and `-replay` puts them back with no GPU, to
 the same machine state.
+
+On the desktops, X itself runs on the GPU when there is one: the
+`modesetting` driver with glamor, which gives programs DRI3, so an OpenGL
+program in a window renders through virgl like any other. A Vulkan program
+presents by copying its frames through the CPU (`MESA_VK_WSI_DEBUG=sw`, set
+by the session): sharing a Vulkan image with X's OpenGL would need the host
+to share GPU memory between the two APIs, which drivers on Windows do not.
+Without `-gpu` the desktops draw into the framebuffer as before. An image
+made before this needs `boot.py ubuntu --setup-gpu` once, which also installs
+current Mesa drivers and `glxgears`, `vkcube` and `kmscube` to try.
 
 ```
 python scripts/boot.py ubuntu --gpu           # builds tools/venus the first time

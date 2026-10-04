@@ -159,6 +159,20 @@ Section "ServerLayout"
 EndSection
 XORG
 
+# With a GPU (-gpu), X drives it through DRM and draws with OpenGL on it
+# (glamor), which gives programs DRI3: OpenGL ones render on the host GPU
+# through virgl. The same configuration with the device swapped; the
+# launcher picks this directory when /dev/dri/card0 is there.
+mkdir -p "$R/etc/X11/doomv-gpu.d"
+sed -e '/^Section "Device"$/,/^EndSection$/c\
+Section "Device"\
+	Identifier "DoomV framebuffer"\
+	Driver "modesetting"\
+	Option "kmsdev" "/dev/dri/card0"\
+	Option "AccelMethod" "glamor"\
+EndSection' "$R/etc/X11/xorg.conf.d/10-doomv.conf" > "$R/etc/X11/doomv-gpu.d/10-doomv.conf"
+grep -q 'Driver "modesetting"' "$R/etc/X11/doomv-gpu.d/10-doomv.conf"
+
 # xterm's default font is X's core bitmap "fixed", from xfonts-base, which is
 # not installed: with it missing xterm prints "cannot load font" and exits,
 # which leaves Openbox with no terminal and ends the bare X session outright.
@@ -237,14 +251,26 @@ echo "DOOMV-DESKTOP-SESSION: $kind" > /dev/hvc0 2>/dev/null || true
 # The server binary directly: /usr/bin/X is a wrapper this minimal image
 # does not install.
 #
+#
+# With a GPU, the configuration that drives it (see /etc/X11/doomv-gpu.d).
+# Vulkan programs present by copying through the CPU: sharing a Vulkan image
+# with X's OpenGL needs the host to share GPU memory between the two APIs,
+# which a Windows host's drivers do not.
+set --
+if [ -e /dev/dri/card0 ]; then
+	set -- -configdir /etc/X11/doomv-gpu.d
+	echo "DOOMV-DESKTOP-SESSION: on the GPU" > /dev/hvc0 2>/dev/null || true
+fi
+export MESA_VK_WSI_DEBUG=sw
+#
 # The server's and the session's own output go to the serial console. Under
 # systemd they would otherwise land only in the journal, and a guest that is
 # stopped rather than shut down never flushes that to disk -- so when a
 # session fails, this is the one place the reason survives.
 if [ -w /dev/hvc0 ]; then
-	exec xinit "$session" -- /usr/lib/xorg/Xorg :0 vt7 -nolisten tcp > /dev/hvc0 2>&1
+	exec xinit "$session" -- /usr/lib/xorg/Xorg :0 vt7 -nolisten tcp "$@" > /dev/hvc0 2>&1
 fi
-exec xinit "$session" -- /usr/lib/xorg/Xorg :0 vt7 -nolisten tcp
+exec xinit "$session" -- /usr/lib/xorg/Xorg :0 vt7 -nolisten tcp "$@"
 LAUNCH
 chmod 755 "$R/usr/local/lib/doomv/session-"* "$R/usr/local/sbin/doomv-desktop"
 

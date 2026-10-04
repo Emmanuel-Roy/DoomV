@@ -7,6 +7,7 @@
   python scripts/boot.py ubuntu --net                 # with a network (once: --setup-network)
   python scripts/boot.py ubuntu --setup-browser       # once: a browser, and the network for it
   python scripts/boot.py ubuntu --setup-sound         # once: aplay, arecord, speaker-test
+  python scripts/boot.py ubuntu --setup-gpu           # once: OpenGL and Vulkan for --gpu
   python scripts/boot.py ubuntu --login               # test: log in, run a command, exit
 
 The image is an input: it takes hours to build, so this script never builds
@@ -250,6 +251,9 @@ def install_desktops(image: Path, timeout_hours: float, emulator_args=()):
 # emulated CPU. The sound set: ALSA's aplay, arecord, speaker-test and mixer.
 BROWSER_PACKAGES = "systemd-timesyncd ca-certificates curl w3m netsurf-gtk"
 SOUND_PACKAGES = "alsa-utils"
+# --setup-gpu: Mesa's OpenGL (virgl) and Vulkan (venus) drivers, current, and
+# the programs to try them with.
+GPU_PACKAGES = "libgl1-mesa-dri libegl-mesa0 libgbm1 mesa-vulkan-drivers mesa-utils vulkan-tools kmscube"
 
 
 def install_script(packages: str) -> str:
@@ -366,6 +370,9 @@ def main():
                    help="install a browser (NetSurf, and w3m for the console), once; includes --setup-network")
     u.add_argument("--setup-sound", action="store_true",
                    help="install ALSA's tools (aplay, arecord, speaker-test), once; includes --setup-network")
+    u.add_argument("--setup-gpu", action="store_true",
+                   help="set the desktops up for --gpu and install Mesa's OpenGL and Vulkan drivers, once; "
+                        "includes --setup-network")
     add_boot_options(parser)
     t = parser.add_argument_group("test")
     t.add_argument("--login", action="store_true", help="headless: log in, run a command, exit")
@@ -387,9 +394,17 @@ def main():
         if args.install_desktops:
             install_desktops(image, args.install_timeout, boot_args(args, passthrough))
             return 0
-        if args.setup_browser or args.setup_sound:
+        if args.setup_gpu:
+            # The desktops' X configuration for a GPU (mkdesktop.sh writes both,
+            # and the session picks one at boot).
+            if emulator_running():
+                raise RuntimeError("A DoomV is already running; close it before changing the image.")
+            run(["wsl.exe", "-d", "Ubuntu", "-u", "root", "--", "bash",
+                 wsl_path(ROOT / "tools/linux/ubuntu/mkdesktop.sh"), "--sessions-only", wsl_path(image)])
+        if args.setup_browser or args.setup_sound or args.setup_gpu:
             packages = " ".join(p for p, on in ((BROWSER_PACKAGES, args.setup_browser),
-                                                 (SOUND_PACKAGES, args.setup_sound)) if on)
+                                                 (SOUND_PACKAGES, args.setup_sound),
+                                                 (GPU_PACKAGES, args.setup_gpu)) if on)
             install_packages(image, packages, args.timeout, boot_args(args, passthrough))
             if args.setup_browser:
                 print("Browse with: python scripts/boot.py ubuntu --net --desktop openbox, then in its "
@@ -397,6 +412,9 @@ def main():
             if args.setup_sound:
                 print("Test with: speaker-test -c 2 -t wav -l 1   (play)   "
                       "arecord -d 5 a.wav && aplay a.wav   (record, then play back)")
+            if args.setup_gpu:
+                print("Try it: python scripts/boot.py ubuntu --gpu --desktop openbox, then in its terminal: "
+                      "glxgears &   vkcube &")
             return 0
         if args.setup_network:
             if emulator_running():

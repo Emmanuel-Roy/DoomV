@@ -634,15 +634,17 @@ void VirtioGpu::present_virgl(Memory &mem)
 	if (!map || scanout_x >= info.width || scanout_y >= info.height) return;
 	const uint32_t w = std::min(info.width - scanout_x, width), h = std::min(info.height - scanout_y, height);
 	readback.resize((size_t)w * h * 4);
-	const bool top_down = info.flags & RESOURCE_FLAG_Y_0_TOP;
-	// Rows count from the bottom in a resource that is not top-down.
-	virgl_box box{scanout_x, top_down ? scanout_y : info.height - scanout_y - h, 0, w, h, 1};
+	// In the guest's coordinates, top row first, whichever way up the host
+	// keeps the texture: virglrenderer's transfers turn a resource that is not
+	// Y_0_TOP the right way round themselves. (Turning it again here showed
+	// X, whose framebuffer is such a resource, upside down.)
+	virgl_box box{scanout_x, scanout_y, 0, w, h, 1};
 	struct iovec iov{readback.data(), readback.size()};
 	v->force_ctx_0();
 	if (v->transfer_read_iov(scanout_resource, 0, 0, w * 4, 0, &box, 0, &iov, 1) != 0) return;
 	uint8_t *screen = screen_buf.data();
 	for (uint32_t row = 0; row < h; row++) {
-		const uint8_t *src = readback.data() + (size_t)(top_down ? row : h - 1 - row) * w * 4;
+		const uint8_t *src = readback.data() + (size_t)row * w * 4;
 		uint8_t *dst = screen + (size_t)row * width * 4;
 		for (uint32_t i = 0; i < w; i++, src += 4, dst += 4) {
 			dst[0] = src[map[0]]; dst[1] = src[map[1]]; dst[2] = src[map[2]]; dst[3] = 0;
