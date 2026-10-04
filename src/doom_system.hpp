@@ -270,6 +270,9 @@ private:
 	struct GpuEvent { uint64_t at; std::vector<uint8_t> response; VirtioGpu::Writes writes; };
 	std::vector<GpuEvent> replay_gpu;
 	size_t replay_gpu_pos = 0;
+	struct VsyncEvent { uint64_t at; int kind; VirtioGpu::BlobWrites writes; };
+	std::vector<VsyncEvent> replay_vsync;
+	size_t replay_vsync_pos = 0;
 	std::unique_ptr<HostAudio> host_audio;
 	std::vector<SoundEvent> replay_snd;
 	size_t replay_snd_pos = 0;

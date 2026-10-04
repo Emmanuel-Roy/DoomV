@@ -139,11 +139,14 @@ int main(int argc, char *argv[])
 			network = true;
 		} else if (arg == "-gpu" || arg == "-gpu=2d" || arg == "-gpu=virgl" || arg == "-gpu=venus") {
 			// A virtio-gpu in place of the simple-framebuffer: Linux draws
-			// through its DRM driver, and the window shows the scanout.
-			// =virgl adds 3D, run on the host GPU by virglrenderer.
+			// through its DRM driver, and the window shows the scanout. All of
+			// it by default -- 2D, OpenGL (virgl) and Vulkan (Venus) -- and the
+			// guest's Mesa picks what each program uses. =2d is the display
+			// alone; =virgl leaves out Vulkan; =venus is the default spelled
+			// out.
 			gpu = true;
-			virgl = arg == "-gpu=virgl" || arg == "-gpu=venus";
-			venus = arg == "-gpu=venus";
+			virgl = arg != "-gpu=2d";
+			venus = arg == "-gpu" || arg == "-gpu=venus";
 		} else if (arg == "-snd") {
 			// A sound card, playing through and recording from the host's
 			// default audio devices.
@@ -326,10 +329,6 @@ int main(int argc, char *argv[])
 	}
 	// Before -replay, which brings back the clock the recorded run had.
 	if (have_rtc) system.set_rtc_epoch(rtc_epoch);
-	if (venus && !replay_path.empty()) {
-		std::cout << "-replay does not cover -gpu=venus yet: a run with it cannot be replayed\n";
-		return -1;
-	}
 	if (!replay_path.empty() && !system.set_input_replay(replay_path.c_str())) {
 		std::cout << "cannot read input log: " << replay_path << "\n";
 		return -1;

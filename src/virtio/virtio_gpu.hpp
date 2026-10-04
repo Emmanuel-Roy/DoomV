@@ -44,6 +44,7 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -74,13 +75,33 @@ public:
 	// memory (VIRTIO_GPU_SHM_ID_HOST_VISIBLE), above any RAM -size -ram allows.
 	static constexpr uint64_t HOSTMEM_BASE = 0x1000000000ull;   // 64GB
 	static constexpr uint64_t HOSTMEM_SIZE = 0x100000000ull;    // 4GB
-	// The host bytes behind [offset, offset + len) of the window, or null
-	// where nothing is mapped.
+	// The bytes behind [offset, offset + len) of the window, or null where
+	// nothing is mapped. A guest store goes through hostmem_write, so that the
+	// step knows the guest has written and a recording knows what it wrote.
 	uint8_t *hostmem(uint64_t offset, uint64_t len) const;
-	// Venus's step: run what the rings hold and let the GPU finish. At the
-	// input points; a notify runs it itself. Inline, since the input points
-	// are frequent and it is almost always off.
-	void tick() { if (venus) step(); }
+	bool hostmem_write(uint64_t offset, const void *data, uint64_t len);
+	// Venus's step, at an input point: only when the guest has written the
+	// shared memory since the last one, or every ALIVE_PERIOD instructions so
+	// that the rings are reported alive. Inline, since the input points are
+	// frequent and it is almost always off.
+	static constexpr uint64_t ALIVE_PERIOD = 10'000'000;
+	void tick(uint64_t now)
+	{
+		if (venus && (venus_dirty || now >= next_alive)) {
+			next_alive = now + ALIVE_PERIOD;
+			sync(SYNC_TICK);
+		}
+	}
+
+	// What the host and the GPU write into Venus's shared memory is an input
+	// too. At each sync point, while recording, every changed run of bytes
+	// is handed to on_sync as (resource, offset, bytes); on a replay,
+	// replay_sync supplies them and there is no GPU. A sync point is a tick
+	// (SYNC_TICK) or a command that runs Venus (SYNC_COMMAND).
+	enum SyncKind { SYNC_TICK = 0, SYNC_COMMAND = 1 };
+	using BlobWrites = std::vector<std::tuple<uint32_t, uint64_t, std::vector<uint8_t>>>;
+	std::function<void(SyncKind, const BlobWrites &)> on_sync;
+	std::function<bool(SyncKind, BlobWrites &)> replay_sync;
 
 	// In 3D mode, a command's result -- the response, and what it wrote
 	// into guest memory, as (address, bytes) -- is an input. on_result sees
@@ -156,14 +177,32 @@ private:
 	bool enabled = false;
 	bool virgl = false;
 	bool venus = false;
-	// Venus: its contexts, its resources (which context, how mapped), and
-	// what is mapped where in the host-memory window.
+	// Venus: its contexts, its resources, and what is mapped where in the
+	// host-memory window.
 	std::vector<uint32_t> venus_contexts;
-	std::map<uint32_t, std::pair<uint32_t, uint32_t>> venus_blobs;   // resource: context, map_info
-	struct Mapping { uint8_t *ptr; uint64_t size; uint32_t resource; };
+	struct Blob {
+		uint32_t ctx = 0, map_info = 0;
+		uint64_t size = 0;
+		bool device = false;              // a VkDeviceMemory, which the GPU writes; else shared memory
+		bool fresh = true;                // not yet compared since it was made
+		uint8_t *bytes = nullptr;         // the host's memory, or `own` on a replay
+		std::vector<uint8_t> own;         // a replay's stand-in for the host's memory
+		std::vector<uint8_t> mirror;      // recording: the bytes as the guest last had them
+	};
+	std::map<uint32_t, Blob> venus_blobs;                            // by resource
+	struct Mapping { uint64_t size; uint32_t resource; };
 	std::map<uint64_t, Mapping> mappings;                            // by offset in the window
+	bool venus_dirty = false;                                        // the guest wrote shared memory
+	uint64_t next_alive = 0;
 	bool is_venus_context(uint32_t ctx) const;
-	void step();
+	// A sync point: live, run Venus and (recording) take down what changed;
+	// on a replay, put back what was taken down.
+	void sync(SyncKind kind);
+	// The commands after which Venus runs.
+	bool syncs_after(const std::vector<uint8_t> &in) const;
+	// On a replay the commands are not run, but the device must still know
+	// Venus's contexts and blobs, to map them and to know where the syncs are.
+	void track_replayed(const std::vector<uint8_t> &in, const std::vector<uint8_t> &out);
 	std::unique_ptr<VirglBackend> backend;
 	bool backend_tried = false;
 	std::map<uint32_t, Backing> backings;

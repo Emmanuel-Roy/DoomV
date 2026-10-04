@@ -362,7 +362,7 @@ index 6a3a909..950b9c0 100644
  vkr_queue_create(struct vkr_context *ctx,
                   struct vkr_device *dev,
 diff --git a/src/venus/vkr_renderer.c b/src/venus/vkr_renderer.c
-index c43a96e..f3b22d4 100644
+index c43a96e..59af8e0 100644
 --- a/src/venus/vkr_renderer.c
 +++ b/src/venus/vkr_renderer.c
 @@ -10,6 +10,8 @@
@@ -404,11 +404,11 @@ index c43a96e..f3b22d4 100644
     return vkr_context_submit_cmd(ctx, cmd, size);
  }
  
-@@ -229,6 +238,48 @@ vkr_renderer_import_resource(uint32_t ctx_id,
+@@ -229,6 +238,49 @@ vkr_renderer_import_resource(uint32_t ctx_id,
     return vkr_context_import_resource(ctx, res_id, fd_type, fd, size);
  }
  
-+void
++bool
 +vkr_renderer_sync_step(void)
 +{
 +   /* Rings first, until none moves -- one can wait for a seqno another's
@@ -436,6 +436,7 @@ index c43a96e..f3b22d4 100644
 +      list_for_each_entry (struct vkr_ring, ring, &ctx->rings, head)
 +         vkr_ring_sync_report(ring);
 +   }
++   return ran;
 +}
 +
 +bool
@@ -454,7 +455,7 @@ index c43a96e..f3b22d4 100644
  vkr_renderer_destroy_resource(uint32_t ctx_id, uint32_t res_id)
  {
 diff --git a/src/venus/vkr_renderer.h b/src/venus/vkr_renderer.h
-index be3ae04..c8f0d09 100644
+index be3ae04..096a253 100644
 --- a/src/venus/vkr_renderer.h
 +++ b/src/venus/vkr_renderer.h
 @@ -16,6 +16,13 @@
@@ -471,13 +472,14 @@ index be3ae04..c8f0d09 100644
  
  typedef void (*vkr_renderer_retire_fence_callback_type)(uint32_t ctx_id,
                                                          uint32_t ring_idx,
-@@ -74,4 +81,15 @@ vkr_renderer_import_resource(uint32_t ctx_id,
+@@ -74,4 +81,16 @@ vkr_renderer_import_resource(uint32_t ctx_id,
  void
  vkr_renderer_destroy_resource(uint32_t ctx_id, uint32_t res_id);
  
 +/* VKR_RENDERER_SYNC only. Runs every ring until none can make progress,
-+ * then waits for every queue to finish on the host GPU. */
-+void
++ * then waits for every queue to finish on the host GPU. True if GPU work
++ * may have run -- only then can device memory have changed. */
++bool
 +vkr_renderer_sync_step(void);
 +
 +/* VKR_RENDERER_SYNC only: a host pointer to a resource's memory -- shared
@@ -662,7 +664,7 @@ index 4c655af..39be2b3 100644
        if (dev->GetMemoryWin32HandleKHR)
           vk->GetMemoryFdKHR = vkr_win32_GetMemoryFdKHR;
 diff --git a/src/virglrenderer.c b/src/virglrenderer.c
-index d2f928e..b3c55f1 100644
+index d2f928e..2dedb40 100644
 --- a/src/virglrenderer.c
 +++ b/src/virglrenderer.c
 @@ -1638,3 +1638,78 @@ int virgl_renderer_get_dev_fd(int ctx_id)
@@ -739,13 +741,13 @@ index d2f928e..b3c55f1 100644
 +   vkr_renderer_destroy_resource(ctx_id, res_id);
 +}
 +
-+VIRGL_EXPORT void
++VIRGL_EXPORT bool
 +virgl_doomv_venus_step(void)
 +{
-+   vkr_renderer_sync_step();
++   return vkr_renderer_sync_step();
 +}
 diff --git a/src/virglrenderer.h b/src/virglrenderer.h
-index 0bcafef..be39882 100644
+index 0bcafef..c1c448c 100644
 --- a/src/virglrenderer.h
 +++ b/src/virglrenderer.h
 @@ -517,4 +517,19 @@ VIRGL_EXPORT int virgl_renderer_get_dev_fd(int ctx_id);
@@ -765,6 +767,6 @@ index 0bcafef..be39882 100644
 +                                                    uint64_t blob_size, uint32_t blob_flags, uint32_t *out_map_info);
 +VIRGL_EXPORT bool virgl_doomv_venus_map_resource(uint32_t ctx_id, uint32_t res_id, void **out_ptr, uint64_t *out_size);
 +VIRGL_EXPORT void virgl_doomv_venus_destroy_resource(uint32_t ctx_id, uint32_t res_id);
-+VIRGL_EXPORT void virgl_doomv_venus_step(void);
++VIRGL_EXPORT bool virgl_doomv_venus_step(void);
 +
  #endif

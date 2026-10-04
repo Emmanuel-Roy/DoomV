@@ -1988,6 +1988,24 @@ bool DoomSystem::set_input_replay(const char *path)
 			replay_gpu.push_back(std::move(e));
 			continue;
 		}
+		// Venus's memory at a sync point:
+		// "<instruction> vsync <kind> <resource>:<offset>:<hex bytes>...".
+		if (kind == "vsync") {
+			VsyncEvent e{(uint64_t)stamp, 0, {}};
+			in >> e.kind;
+			std::string word;
+			while (in >> word) {
+				const size_t a = word.find(':'), b = word.find(':', a + 1);
+				if (a == std::string::npos || b == std::string::npos) continue;
+				std::vector<uint8_t> bytes;
+				for (size_t i = b + 1; i + 1 < word.size(); i += 2)
+					bytes.push_back((uint8_t)std::stoul(word.substr(i, 2), nullptr, 16));
+				e.writes.emplace_back((uint32_t)std::stoul(word.substr(0, a), nullptr, 16),
+				                      std::stoull(word.substr(a + 1, b - a - 1), nullptr, 16), std::move(bytes));
+			}
+			replay_vsync.push_back(std::move(e));
+			continue;
+		}
 		// A sound period: "<instruction> snd tx" (played), or
 		// "<instruction> snd rx <hex samples>" (recorded).
 		if (kind == "snd") {
@@ -2142,7 +2160,7 @@ void DoomSystem::service_input(uint64_t now)
 		}
 		service_network(now);
 		service_sound(now);
-		memory.get_gpu().tick();
+		memory.get_gpu().tick(now);
 		memory.get_rtc().poll(memory.get_timer().get_mtime(), memory.get_aplic());
 		memory.pump_input();
 		return;
@@ -2181,7 +2199,7 @@ void DoomSystem::service_input(uint64_t now)
 
 	service_network(now);
 	service_sound(now);
-	memory.get_gpu().tick();
+	memory.get_gpu().tick(now);
 	memory.get_rtc().poll(memory.get_timer().get_mtime(), memory.get_aplic());
 	if (record_dirty) {
 		std::fflush(record_file);
@@ -2224,13 +2242,6 @@ void DoomSystem::wire_gpu_log()
 {
 	VirtioGpu &gpu = memory.get_gpu();
 	if (!gpu.is_virgl()) return;
-	// Venus's results reach the guest through shared memory, not responses;
-	// -record does not take them down yet, so its log would not replay.
-	if (gpu.is_venus()) {
-		if (record_file)
-			std::cout << "gpu: -record does not cover -gpu=venus yet; this log will not replay" << std::endl;
-		return;
-	}
 	if (replaying) {
 		gpu.replay_result = [this](std::vector<uint8_t> &response, VirtioGpu::Writes &writes) {
 			if (replay_gpu_pos >= replay_gpu.size()) return false;
@@ -2242,8 +2253,29 @@ void DoomSystem::wire_gpu_log()
 			writes = std::move(e.writes);
 			return true;
 		};
+		// Venus's sync points: an entry belongs to this one if it was taken
+		// down at this instruction, at this kind of point; a sync point that
+		// changed nothing was not logged at all.
+		gpu.replay_sync = [this](VirtioGpu::SyncKind kind, VirtioGpu::BlobWrites &writes) {
+			if (replay_vsync_pos >= replay_vsync.size()) return false;
+			VsyncEvent &e = replay_vsync[replay_vsync_pos];
+			if (e.at != memory.instruction_count() || e.kind != kind) return false;
+			writes = std::move(e.writes);
+			replay_vsync_pos++;
+			return true;
+		};
 		return;
 	}
+	gpu.on_sync = [this](VirtioGpu::SyncKind kind, const VirtioGpu::BlobWrites &writes) {
+		if (!record_file) return;
+		std::fprintf(record_file, "%llu vsync %d", (unsigned long long)memory.instruction_count(), (int)kind);
+		for (const auto &[id, offset, bytes] : writes) {
+			std::fprintf(record_file, " %x:%llx:", id, (unsigned long long)offset);
+			for (uint8_t b : bytes) std::fprintf(record_file, "%02x", b);
+		}
+		std::fputc('\n', record_file);
+		record_dirty = true;
+	};
 	gpu.on_result = [this](const std::vector<uint8_t> &response, const VirtioGpu::Writes &writes) {
 		if (!record_file) return;
 		std::fprintf(record_file, "%llu gpu ", (unsigned long long)memory.instruction_count());

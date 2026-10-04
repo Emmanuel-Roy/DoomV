@@ -6,7 +6,7 @@ folder is what DoomV changes about the host side.
 
 ```
 python scripts/get_venus.py      # build it: about two minutes, into build/venus/
-python scripts/boot.py ubuntu --gpu venus
+python scripts/boot.py ubuntu --gpu
 ```
 
 ## Where it comes from
@@ -57,9 +57,16 @@ vkfill.c -o vkfill -ldl`), put it in the guest, and run it; two runs of the
 same session stopped at the same instruction must leave identical
 `crash.log` files.
 
+## Record and replay
+
+At every sync point -- a tick, or a command that runs Venus -- DoomV
+compares Venus's memory with a mirror of what the guest last had: shared
+memory always, device memory when GPU work ran. The runs that differ are
+logged by `-record` as `<instruction> vsync <kind> <resource>:<offset>:<bytes>`,
+and a `-replay` writes them into plain buffers standing in for the host's,
+at the same instructions, with no GPU.
+
 ## Not yet
 
-- `-record`/`-replay` and snapshots: what the GPU writes into shared memory
-  is not taken down.
 - Presenting to the X desktop: Mesa's Vulkan WSI needs DRI3 from the X
   server, and dma-buf sharing to go with it.

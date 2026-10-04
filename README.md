@@ -526,7 +526,7 @@ riscv_doom.exe -opensbi=<f> -kernel=<f> -dtb=<f> -initrd=<f> [options]   # Linux
 | `-lockstep=<path>` | Run against a reference trace -- Sail's, or an RTL simulation's -- and halt at the first record that does not match. See [Lock-stepping](#lockstep). |
 | `-lockstep-strict` | With `-lockstep`, compare everything, counters, time and interrupt timing included, and take nothing from the reference. How DoomV is held to Sail. |
 | `-net` | A network card, with user-mode NAT behind it: the guest reaches the internet through the host. See [Networking](#networking). |
-| `-gpu`, `-gpu=virgl`, `-gpu=venus` | A virtio-gpu for a Linux guest's display, in place of the simple framebuffer; `=virgl` adds the guest's OpenGL on the host GPU, `=venus` OpenGL and Vulkan. See [GPU](#gpu). |
+| `-gpu`, `-gpu=2d` | A virtio-gpu for a Linux guest, in place of the simple framebuffer: the display, OpenGL (virgl) and Vulkan (Venus) on the host GPU, and the guest's Mesa picks what each program uses. `=2d` is the display alone (`=virgl` leaves out Vulkan). See [GPU](#gpu). |
 | `-snd` | A sound card, playing through the host's default output and recording from its default input. See [Sound](#sound). |
 | `-rtc=host` or `-rtc=<seconds>` | Where the guest's clock starts: the host's time, read once at start, or seconds since 1970. Without it, 2026-01-01, so a run repeats exactly. The boot scripts pass `host`. See [The clock](#clock). |
 | `-harts=<n>` | A machine of `n` identical harts (default 1), each starting at the entry with `a0` = its hart id. They take turns a step at a time, so a run is as deterministic as with one. See [Several harts](#harts). |
@@ -733,7 +733,10 @@ in flight, not the connections.
 ### GPU
 
 `-gpu` (`boot.py linux --gpu`, `boot.py ubuntu --gpu`) gives a Linux guest a
-virtio-gpu, and its DRM driver runs the display: the console and X draw into
+virtio-gpu with everything below at once -- the display, OpenGL and Vulkan --
+and Ubuntu's Mesa decides, per program, what to use: `virgl` for OpenGL,
+`venus` for Vulkan, software where neither applies. `-gpu=2d` is the display
+alone. Its DRM driver runs the display: the console and X draw into
 resources in guest memory and flush them to the screen, rather than into a
 fixed aperture. DoomV takes the simple-framebuffer out of the device tree it
 loads, so the GPU is the only display; the guest sees `virtio_gpudrmfb` as
@@ -741,7 +744,7 @@ loads, so the GPU is the only display; the guest sees `virtio_gpudrmfb` as
 completes inside the notify that sent it, so a run is as repeatable as
 without. One scanout, the size of the window; no blob resources.
 
-`-gpu=virgl` (`--gpu virgl`) makes it a 3D GPU as well. The guest's Mesa
+OpenGL (also `-gpu=virgl`, without Vulkan) makes it a 3D GPU as well. The guest's Mesa
 driver -- `virgl`, in every Ubuntu -- sends Gallium command streams, and
 [virglrenderer](https://gitlab.freedesktop.org/virgl/virglrenderer) runs them
 as OpenGL on this computer's GPU: OpenGL 4.3 and OpenGL ES 3.2 in the guest.
@@ -765,7 +768,7 @@ The picture is read back from the host GPU into a buffer only the window and
 in this mode. X still draws through `/dev/fb0` in software; the GPU is for
 programs that use OpenGL or EGL themselves.
 
-`-gpu=venus` (`--gpu venus`) adds Vulkan: Mesa's Venus driver in the guest
+Vulkan comes with it: Mesa's Venus driver in the guest
 sees `Virtio-GPU Venus (<your GPU>)`, and its commands run on the host GPU.
 Venus normally runs on threads of its own, which read the guest's command
 rings and write results into memory the guest shares, whenever they get to
@@ -774,12 +777,13 @@ timing. DoomV's build runs it with no threads at all
 ([tools/venus/](tools/venus/README.md)): the rings are run, the GPU waited
 for and fences retired only at a notify or an input point, so all of that
 lands at the same instruction on every run. Two runs doing the same GPU work
-end in identical machine state. `-record` and `-replay` do not cover it yet,
-nor do snapshots; Vulkan programs work, presenting to the X desktop does not
-yet (that needs DRI3).
+end in identical machine state. And what Venus and the GPU write into that
+shared memory is an input like any other: at each of those points `-record`
+logs the bytes that changed, and `-replay` puts them back with no GPU, to
+the same machine state.
 
 ```
-python scripts/boot.py ubuntu --gpu venus     # builds tools/venus the first time
+python scripts/boot.py ubuntu --gpu           # builds tools/venus the first time
 # in the guest (apt install mesa-vulkan-drivers vulkan-tools):
 vulkaninfo --summary                          # Virtio-GPU Venus (<your GPU>)
 ```

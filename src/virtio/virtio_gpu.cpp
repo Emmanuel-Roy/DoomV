@@ -77,11 +77,12 @@ void VirtioGpu::reset()
 		}
 	}
 	if (backend && venus) {
-		for (const auto &[id, blob] : venus_blobs) backend->venus_destroy_resource(blob.first, id);
+		for (const auto &[id, blob] : venus_blobs) backend->venus_destroy_resource(blob.ctx, id);
 		for (uint32_t ctx : venus_contexts) backend->venus_destroy_context(ctx);
 	}
 	venus_blobs.clear();
 	venus_contexts.clear();
+	venus_dirty = false;
 	mappings.clear();
 	virgl_resources.clear();
 	backings.clear();
@@ -124,11 +125,15 @@ void VirtioGpu::control(Memory &mem, Aplic &aplic)
 					out.assign(HDR, 0);
 					put32(out, 0, RESP_ERR_UNSPEC);
 				}
+				if (venus) track_replayed(in, out);
 			} else {
 				command_virgl(in, out, writes, mem);
 				if (on_result) on_result(out, writes);
 			}
 			for (const auto &[addr, bytes] : writes) mem.write_bytes(addr, bytes.data(), bytes.size());
+			// A command that started Venus's work: it is run, and finished,
+			// now -- at this instruction.
+			if (venus && syncs_after(in)) sync(SYNC_COMMAND);
 		} else {
 			command(in, out, mem);
 		}

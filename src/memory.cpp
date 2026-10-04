@@ -300,7 +300,7 @@ void Memory::write8(uint64_t addr, uint8_t val)
 	} else if (addr >= UART_BASE && addr < UART_BASE + UART_SIZE) {
 		uart.write(addr - UART_BASE, val);
 	} else if (addr - VirtioGpu::HOSTMEM_BASE < VirtioGpu::HOSTMEM_SIZE) {
-		if (uint8_t *p = gpu.hostmem(addr - VirtioGpu::HOSTMEM_BASE, 1)) *p = val;
+		gpu.hostmem_write(addr - VirtioGpu::HOSTMEM_BASE, &val, 1);
 	} else {
 		uint64_t off;
 		if (VirtioMmio *dev = virtio_at(addr, off)) dev->write8(off, val);
@@ -442,12 +442,9 @@ void Memory::write32(uint64_t addr, uint32_t val)
 		return;
 	}
 
-	if (addr - VirtioGpu::HOSTMEM_BASE < VirtioGpu::HOSTMEM_SIZE) {
-		if (uint8_t *p = gpu.hostmem(addr - VirtioGpu::HOSTMEM_BASE, 4)) {
-			std::memcpy(p, &val, sizeof val);
-			return;
-		}
-	}
+	if (addr - VirtioGpu::HOSTMEM_BASE < VirtioGpu::HOSTMEM_SIZE &&
+	    gpu.hostmem_write(addr - VirtioGpu::HOSTMEM_BASE, &val, sizeof val))
+		return;
 	write8(addr + 0, (val >> 0) & 0xFF);
 	write8(addr + 1, (val >> 8) & 0xFF);
 	write8(addr + 2, (val >> 16) & 0xFF);

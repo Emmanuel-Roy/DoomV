@@ -103,9 +103,9 @@ def add_boot_options(parser, linux=True):
                        help="CPUs, 1 to 4095 (default 1); the device tree is made to match")
         g.add_argument("--net", action="store_true",
                        help="a network card; the guest reaches the internet through the host")
-        g.add_argument("--gpu", nargs="?", const="2d", choices=("2d", "virgl", "venus"), metavar="virgl|venus",
-                       help="a virtio-gpu for the display, in place of the simple framebuffer; "
-                            "--gpu virgl adds OpenGL on this computer's GPU, --gpu venus OpenGL and Vulkan")
+        g.add_argument("--gpu", nargs="?", const="all", choices=("all", "2d", "virgl"), metavar="2d",
+                       help="a virtio-gpu, with OpenGL and Vulkan on this computer's GPU; the guest picks what "
+                            "each program uses. --gpu 2d: the display alone")
         g.add_argument("--no-sound", dest="sound", action="store_false",
                        help="no sound card (by default the guest plays and records through this computer's)")
     g.add_argument("--headless", action="store_true", help="no window; output goes to this console")
@@ -147,18 +147,18 @@ def boot_args(args, passthrough=()):
     if getattr(args, "sound", False):
         out.append("-snd")
     gpu = getattr(args, "gpu", None)
-    if gpu == "venus":
+    if gpu == "all":
         # Built, not fetched: the first time it is wanted, about two minutes.
         if not (ROOT / "build/venus/bin/libvirglrenderer-1.dll").exists():
             run([sys.executable, str(ROOT / "scripts/get_venus.py")])
-        out.append("-gpu=venus")
+        out.append("-gpu")
     elif gpu == "virgl":
         # Loaded at run time from build/virgl; fetched the first time it is wanted.
         if not (ROOT / "build/virgl/bin/libvirglrenderer-1.dll").exists():
             run([sys.executable, str(ROOT / "scripts/get_virgl.py")])
         out.append("-gpu=virgl")
     elif gpu:
-        out.append("-gpu")
+        out.append("-gpu=2d")
     clock = getattr(args, "clock", "fixed")
     if clock != "fixed":
         if clock != "host" and not clock.isdigit():

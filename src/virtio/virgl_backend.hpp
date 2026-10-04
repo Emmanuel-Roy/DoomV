@@ -54,7 +54,7 @@ public:
 	bool (*venus_create_resource)(uint32_t, uint32_t, uint64_t, uint64_t, uint32_t, uint32_t *) = nullptr;
 	bool (*venus_map_resource)(uint32_t, uint32_t, void **, uint64_t *) = nullptr;
 	void (*venus_destroy_resource)(uint32_t, uint32_t) = nullptr;
-	void (*venus_step)() = nullptr;
+	bool (*venus_step)() = nullptr;   // true if GPU work may have run
 
 	// virglrenderer's own functions, resolved from the DLL.
 	int (*resource_create)(VirglResourceArgs *, struct iovec *, uint32_t) = nullptr;

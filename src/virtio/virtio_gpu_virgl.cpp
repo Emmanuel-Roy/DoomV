@@ -155,7 +155,7 @@ void VirtioGpu::command_virgl(const std::vector<uint8_t> &in, std::vector<uint8_
 		if (blob != venus_blobs.end()) {
 			for (auto m = mappings.begin(); m != mappings.end();)
 				m = m->second.resource == id ? mappings.erase(m) : std::next(m);
-			v->venus_destroy_resource(blob->second.first, id);
+			v->venus_destroy_resource(blob->second.ctx, id);
 			venus_blobs.erase(blob);
 			break;
 		}
@@ -281,7 +281,6 @@ void VirtioGpu::command_virgl(const std::vector<uint8_t> &in, std::vector<uint8_
 	}
 	case CMD_CTX_DESTROY:
 		if (is_venus_context(ctx)) {
-			v->venus_step();   // anything it left running finishes first
 			v->venus_destroy_context(ctx);
 			venus_contexts.erase(std::find(venus_contexts.begin(), venus_contexts.end(), ctx));
 		} else {
@@ -302,8 +301,21 @@ void VirtioGpu::command_virgl(const std::vector<uint8_t> &in, std::vector<uint8_
 		uint32_t map_info = 0;
 		if (!is_venus_context(ctx) || blob_mem != BLOB_MEM_HOST3D) { resp = RESP_ERR_INVALID_PARAMETER; break; }
 		if (!id || venus_blobs.count(id)) { resp = RESP_ERR_INVALID_RESOURCE_ID; break; }
+		void *ptr = nullptr;
+		uint64_t mapped = 0;
 		if (!v->venus_create_resource(ctx, id, blob_id, size, flags, &map_info)) { resp = RESP_ERR_OUT_OF_MEMORY; break; }
-		venus_blobs[id] = {ctx, map_info};
+		if (!v->venus_map_resource(ctx, id, &ptr, &mapped) || mapped < size) {
+			v->venus_destroy_resource(ctx, id);
+			resp = RESP_ERR_OUT_OF_MEMORY;
+			break;
+		}
+		Blob &b = venus_blobs[id];
+		b.ctx = ctx;
+		b.map_info = map_info;
+		b.size = size;
+		b.device = blob_id != 0;
+		b.bytes = (uint8_t *)ptr;
+		if (on_sync) b.mirror.assign(size, 0);
 		break;
 	}
 	case CMD_RESOURCE_MAP_BLOB: {
@@ -311,16 +323,12 @@ void VirtioGpu::command_virgl(const std::vector<uint8_t> &in, std::vector<uint8_
 		const uint32_t id = le32(in, 24);
 		const uint64_t offset = le64(in, 32);
 		const auto blob = venus_blobs.find(id);
-		void *ptr = nullptr;
-		uint64_t size = 0;
-		if (blob == venus_blobs.end() || !v->venus_map_resource(blob->second.first, id, &ptr, &size)) {
-			resp = RESP_ERR_INVALID_RESOURCE_ID;
-			break;
-		}
+		if (blob == venus_blobs.end()) { resp = RESP_ERR_INVALID_RESOURCE_ID; break; }
+		const uint64_t size = blob->second.size;
 		if (offset > HOSTMEM_SIZE || size > HOSTMEM_SIZE - offset) { resp = RESP_ERR_INVALID_PARAMETER; break; }
-		mappings[offset] = {(uint8_t *)ptr, size, id};
+		mappings[offset] = {size, id};
 		resp = RESP_OK_MAP_INFO;
-		put32(out, HDR, blob->second.second);
+		put32(out, HDR, blob->second.map_info);
 		put32(out, HDR + 4, 0);
 		break;
 	}
@@ -337,9 +345,6 @@ void VirtioGpu::command_virgl(const std::vector<uint8_t> &in, std::vector<uint8_
 		std::memcpy(cmds.data(), in.data() + 32, size);
 		if (is_venus_context(ctx)) {
 			if (!v->venus_submit_cmd(ctx, cmds.data(), size)) resp = RESP_ERR_INVALID_PARAMETER;
-			// A notify of a ring, or a command that waits on one: whatever it
-			// started is run and finished now, at this instruction.
-			v->venus_step();
 		} else if (v->submit_cmd(cmds.data(), (int)ctx, (int)(size / 4)) != 0) {
 			resp = RESP_ERR_INVALID_PARAMETER;
 		}
@@ -357,7 +362,6 @@ void VirtioGpu::command_virgl(const std::vector<uint8_t> &in, std::vector<uint8_
 		// Venus fence on a ring is retired by Venus, inside the call.
 		const uint32_t ring_idx = in.size() > 20 ? in[20] : 0;
 		if (v && is_venus_context(ctx) && (flags & FLAG_INFO_RING_IDX)) {
-			v->venus_step();
 			v->venus_submit_fence(ctx, 0, ring_idx, le64(in, 8));
 		} else if (v) {
 			v->finish(0);
@@ -381,12 +385,114 @@ uint8_t *VirtioGpu::hostmem(uint64_t offset, uint64_t len) const
 	--it;
 	const uint64_t into = offset - it->first;
 	if (into >= it->second.size || len > it->second.size - into) return nullptr;
-	return it->second.ptr + into;
+	const auto blob = venus_blobs.find(it->second.resource);
+	return blob == venus_blobs.end() || !blob->second.bytes ? nullptr : blob->second.bytes + into;
 }
 
-void VirtioGpu::step()
+bool VirtioGpu::hostmem_write(uint64_t offset, const void *data, uint64_t len)
 {
-	if (backend) backend->venus_step();
+	uint8_t *p = hostmem(offset, len);
+	if (!p) return false;
+	std::memcpy(p, data, len);
+	venus_dirty = true;
+	if (on_sync) {
+		// the guest's own bytes are not the host's: the mirror follows them
+		auto it = std::prev(mappings.upper_bound(offset));
+		Blob &b = venus_blobs[it->second.resource];
+		if (b.mirror.size() == b.size) std::memcpy(b.mirror.data() + (offset - it->first), data, len);
+	}
+	return true;
+}
+
+bool VirtioGpu::syncs_after(const std::vector<uint8_t> &in) const
+{
+	const uint32_t type = le32(in, 0), ctx = le32(in, 16);
+	if (!is_venus_context(ctx)) return false;
+	return type == CMD_SUBMIT_3D || type == CMD_RESOURCE_CREATE_BLOB || type == CMD_CTX_DESTROY ||
+	       ((le32(in, 4) & FLAG_FENCE) && (le32(in, 4) & FLAG_INFO_RING_IDX));
+}
+
+void VirtioGpu::sync(SyncKind kind)
+{
+	venus_dirty = false;
+	if (replay_sync) {
+		BlobWrites writes;
+		if (!replay_sync(kind, writes)) return;
+		for (const auto &[id, offset, bytes] : writes) {
+			const auto blob = venus_blobs.find(id);
+			if (blob != venus_blobs.end() && offset <= blob->second.size &&
+			    bytes.size() <= blob->second.size - offset)
+				std::memcpy(blob->second.bytes + offset, bytes.data(), bytes.size());
+		}
+		return;
+	}
+	if (!backend) return;   // nothing has started Venus
+	const bool ran = backend->venus_step();
+	if (!on_sync) return;
+	// What changed since the guest last had it: shared memory always (the
+	// rings, the replies), device memory when the GPU may have written it.
+	BlobWrites writes;
+	constexpr uint64_t CHUNK = 64;
+	for (auto &[id, b] : venus_blobs) {
+		if (b.device && !ran && !b.fresh) continue;
+		b.fresh = false;
+		if (b.mirror.size() != b.size) b.mirror.assign(b.size, 0);
+		uint64_t at = 0;
+		while (at < b.size) {
+			const uint64_t n = std::min(CHUNK, b.size - at);
+			if (std::memcmp(b.bytes + at, b.mirror.data() + at, n) == 0) { at += n; continue; }
+			uint64_t end = at + n;
+			while (end < b.size) {
+				const uint64_t m = std::min(CHUNK, b.size - end);
+				if (std::memcmp(b.bytes + end, b.mirror.data() + end, m) == 0) break;
+				end += m;
+			}
+			writes.emplace_back(id, at, std::vector<uint8_t>(b.bytes + at, b.bytes + end));
+			std::memcpy(b.mirror.data() + at, b.bytes + at, end - at);
+			at = end;
+		}
+	}
+	if (!writes.empty()) on_sync(kind, writes);
+}
+
+void VirtioGpu::track_replayed(const std::vector<uint8_t> &in, const std::vector<uint8_t> &out)
+{
+	const uint32_t type = le32(in, 0), ctx = le32(in, 16), resp = le32(out, 0);
+	switch (type) {
+	case CMD_CTX_CREATE:
+		if (venus && (le32(in, 28) & 0xff) == CAPSET_VENUS && resp == RESP_OK_NODATA)
+			venus_contexts.push_back(ctx);
+		break;
+	case CMD_CTX_DESTROY: {
+		const auto it = std::find(venus_contexts.begin(), venus_contexts.end(), ctx);
+		if (it != venus_contexts.end()) venus_contexts.erase(it);
+		break;
+	}
+	case CMD_RESOURCE_CREATE_BLOB:
+		if (is_venus_context(ctx) && resp == RESP_OK_NODATA) {
+			Blob &b = venus_blobs[le32(in, 24)];
+			b.ctx = ctx;
+			b.size = le64(in, 48);
+			b.device = le64(in, 40) != 0;
+			b.own.assign(b.size, 0);
+			b.bytes = b.own.data();
+		}
+		break;
+	case CMD_RESOURCE_MAP_BLOB: {
+		const auto blob = venus_blobs.find(le32(in, 24));
+		if (blob != venus_blobs.end() && resp == RESP_OK_MAP_INFO)
+			mappings[le64(in, 32)] = {blob->second.size, blob->first};
+		break;
+	}
+	case CMD_RESOURCE_UNMAP_BLOB:
+	case CMD_RESOURCE_UNREF: {
+		const uint32_t id = le32(in, 24);
+		for (auto m = mappings.begin(); m != mappings.end();)
+			m = m->second.resource == id ? mappings.erase(m) : std::next(m);
+		if (type == CMD_RESOURCE_UNREF) venus_blobs.erase(id);
+		break;
+	}
+	}
 }
 
 // The scanout's resource, read back from the host GPU into the window's
