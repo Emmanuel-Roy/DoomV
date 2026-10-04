@@ -69,7 +69,7 @@ void VirtioGpu::notify(unsigned q, Memory &mem, Aplic &aplic)
 void VirtioGpu::reset()
 {
 	if (backend) {
-		for (uint32_t id : virgl_resources) {
+		for (const auto &[id, res] : virgl_res) {
 			struct iovec *iov = nullptr;
 			int n = 0;
 			backend->resource_detach_iov((int)id, &iov, &n);
@@ -84,7 +84,9 @@ void VirtioGpu::reset()
 	venus_contexts.clear();
 	venus_dirty = false;
 	mappings.clear();
-	virgl_resources.clear();
+	virgl_res.clear();
+	virgl_contexts.clear();
+	restore_pending = false;
 	backings.clear();
 	resources.clear();
 	scanout_resource = 0;
@@ -125,7 +127,7 @@ void VirtioGpu::control(Memory &mem, Aplic &aplic)
 					out.assign(HDR, 0);
 					put32(out, 0, RESP_ERR_UNSPEC);
 				}
-				if (venus) track_replayed(in, out);
+				track_replayed(in, out);
 			} else {
 				command_virgl(in, out, writes, mem);
 				if (on_result) on_result(out, writes);

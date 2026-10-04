@@ -764,8 +764,14 @@ in this mode every GPU command's result -- the response, and anything a
 read-back writes into guest memory -- is an input: `-record` logs each, and
 `-replay` hands them back with no GPU at all, to the same machine state.
 The picture is read back from the host GPU into a buffer only the window and
-`-fbdump` see. The host GPU's state cannot be saved, so a snapshot is refused
-in this mode. X still draws through `/dev/fb0` in software; the GPU is for
+`-fbdump` see.
+
+Snapshots work with the GPU as long as no program in the guest is using
+OpenGL or Vulkan: the host GPU's resources -- the console's and X's
+framebuffers -- are saved with their contents and made again on a restore,
+and so is the context the kernel keeps for them. A context a program has
+given commands to, or anything of Venus's, holds state on the host GPU that
+cannot be saved; a snapshot then is refused with a message saying so. X still draws through `/dev/fb0` in software; the GPU is for
 programs that use OpenGL or EGL themselves.
 
 Vulkan comes with it: Mesa's Venus driver in the guest

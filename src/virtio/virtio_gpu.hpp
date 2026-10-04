@@ -116,6 +116,18 @@ public:
 	// must not differ for that. It goes here, for the window and -fbdump, in
 	// the same x8r8g8b8 layout as the Linux framebuffer.
 	const uint8_t *screen() const { return screen_buf.data(); }
+
+	// Whether a program holds state on the host GPU that cannot be saved: a
+	// virgl context that has been given commands, or anything of Venus's.
+	// Otherwise -- the kernel's own context for the console, its buffers --
+	// a snapshot saves the resources' contents and the contexts, and a
+	// restore makes them again.
+	bool has_3d_state() const
+	{
+		for (const auto &kv : virgl_contexts)
+			if (kv.second.used) return true;
+		return !venus_contexts.empty() || !venus_blobs.empty();
+	}
 	uint64_t screen_generation() const { return screen_gen.load(std::memory_order_relaxed); }
 
 private:
@@ -206,7 +218,30 @@ private:
 	std::unique_ptr<VirglBackend> backend;
 	bool backend_tried = false;
 	std::map<uint32_t, Backing> backings;
-	std::vector<uint32_t> virgl_resources;   // every resource the host has, for a reset
+	// Every virgl resource, with what it was made with and the guest pages
+	// behind it: to free them on a reset, and to make them again after a
+	// restore (restore_pending, done on the CPU thread at the first use).
+	struct VirglRes {
+		VirglResourceArgs args{};
+		std::vector<std::pair<uint64_t, uint32_t>> backing;   // guest address, length
+		std::vector<uint8_t> contents;                       // a snapshot's copy, level 0
+	};
+	std::map<uint32_t, VirglRes> virgl_res;
+	struct VirglCtx {
+		uint32_t init = 0;
+		std::string name;
+		std::vector<uint32_t> attached;   // resources
+		bool used = false;                // has been given commands (SUBMIT_3D)
+	};
+	std::map<uint32_t, VirglCtx> virgl_contexts;
+	bool restore_pending = false;
+	void restore_resources(VirglBackend *v, Memory &mem);
+	// For a snapshot: each resource's contents, read back from the host GPU
+	// (or, on a replay, which has none, from the guest pages behind it).
+	void save_contents(Memory &mem);
+	// Bytes of a resource's level 0, as transfers lay it out with stride 0.
+	static uint64_t level0_bytes(const VirglRes &r);
+	static VirglResourceArgs create_args(const std::vector<uint8_t> &in);
 	std::vector<uint8_t> readback;
 	std::vector<uint8_t> screen_buf;
 	std::atomic<uint64_t> screen_gen{0};

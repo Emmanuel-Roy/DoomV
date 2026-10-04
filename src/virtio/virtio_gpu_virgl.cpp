@@ -5,6 +5,7 @@
 #include "virgl_backend.hpp"
 #include "memory.hpp"
 #include <algorithm>
+#include <cstdio>
 #include <cstring>
 #include <iostream>
 
@@ -64,6 +65,96 @@ const uint8_t *swizzle(uint32_t format)
 
 } // namespace
 
+VirglResourceArgs VirtioGpu::create_args(const std::vector<uint8_t> &in)
+{
+	VirglResourceArgs args{};
+	args.handle = le32(in, 24);
+	if (le32(in, 0) == CMD_RESOURCE_CREATE_2D) {
+		args.target = PIPE_TEXTURE_2D;
+		args.format = le32(in, 28);
+		args.bind = BIND_RENDER_TARGET;
+		args.width = le32(in, 32);
+		args.height = le32(in, 36);
+		args.depth = 1;
+		args.array_size = 1;
+		args.flags = RESOURCE_FLAG_Y_0_TOP;
+	} else {
+		// target, format, bind, width, height, depth, array_size,
+		// last_level, nr_samples, flags.
+		args.target = le32(in, 28);
+		args.format = le32(in, 32);
+		args.bind = le32(in, 36);
+		args.width = le32(in, 40);
+		args.height = le32(in, 44);
+		args.depth = le32(in, 48);
+		args.array_size = le32(in, 52);
+		args.last_level = le32(in, 56);
+		args.nr_samples = le32(in, 60);
+		args.flags = le32(in, 64);
+	}
+	return args;
+}
+
+// After a restore: every resource the snapshot had, made again on the host
+// GPU, backed by the same guest pages and filled from them.
+void VirtioGpu::restore_resources(VirglBackend *v, Memory &mem)
+{
+	restore_pending = false;
+	for (auto &[id, res] : virgl_res) {
+		VirglResourceArgs args = res.args;
+		if (v->resource_create(&args, nullptr, 0) != 0) continue;
+		if (!res.contents.empty()) {
+			virgl_box box{0, 0, 0, res.args.width, std::max(res.args.height, 1u), std::max(res.args.depth, 1u)};
+			struct iovec iov{res.contents.data(), res.contents.size()};
+			v->transfer_write_iov(id, 0, 0, 0, 0, &box, 0, &iov, 1);
+			res.contents.clear();
+			res.contents.shrink_to_fit();
+		}
+		if (res.backing.empty()) continue;
+		Backing &b = backings[id];
+		b = Backing{};
+		for (const auto &[addr, len] : res.backing) {
+			if (!Memory::in_ram(addr, len)) continue;
+			b.iov.push_back({mem.ram_data_mut() + (addr - Memory::RAM_BASE), len});
+			b.guest.push_back(addr);
+		}
+		v->resource_attach_iov((int)id, b.iov.data(), (int)b.iov.size());
+	}
+	for (const auto &[ctx, c] : virgl_contexts) {
+		const int rc = c.init ? v->context_create_with_flags(ctx, c.init, (uint32_t)c.name.size(), c.name.c_str())
+		                      : v->context_create(ctx, (uint32_t)c.name.size(), c.name.c_str());
+		if (rc != 0) continue;
+		for (uint32_t id : c.attached) v->ctx_attach_resource((int)ctx, (int)id);
+	}
+}
+
+uint64_t VirtioGpu::level0_bytes(const VirglRes &r)
+{
+	uint64_t backed = 0;
+	for (const auto &b : r.backing) backed += b.second;
+	if (backed) return backed;
+	return (uint64_t)r.args.width * std::max(r.args.height, 1u) * std::max(r.args.depth, 1u) * 4;
+}
+
+void VirtioGpu::save_contents(Memory &mem)
+{
+	for (auto &[id, res] : virgl_res) {
+		res.contents.assign(level0_bytes(res), 0);
+		if (backend && backend->started()) {
+			virgl_box box{0, 0, 0, res.args.width, std::max(res.args.height, 1u), std::max(res.args.depth, 1u)};
+			struct iovec iov{res.contents.data(), res.contents.size()};
+			backend->force_ctx_0();
+			if (backend->transfer_read_iov(id, 0, 0, 0, 0, &box, 0, &iov, 1) == 0) continue;
+		}
+		uint64_t at = 0;   // no GPU: what the guest's pages hold
+		for (const auto &[addr, len] : res.backing) {
+			mem.read_bytes(addr, res.contents.data() + at, std::min<uint64_t>(len, res.contents.size() - at));
+			at += len;
+			if (at >= res.contents.size()) break;
+		}
+	}
+}
+
 VirglBackend *VirtioGpu::host()
 {
 	if (!backend_tried) {
@@ -82,6 +173,8 @@ void VirtioGpu::command_virgl(const std::vector<uint8_t> &in, std::vector<uint8_
 	out.assign(HDR, 0);
 	uint32_t resp = RESP_OK_NODATA;
 	VirglBackend *v = type == CMD_GET_DISPLAY_INFO ? nullptr : host();
+
+	if (v && restore_pending) restore_resources(v, mem);
 
 	if (type == CMD_GET_DISPLAY_INFO) {
 		resp = RESP_OK_DISPLAY_INFO;
@@ -119,34 +212,11 @@ void VirtioGpu::command_virgl(const std::vector<uint8_t> &in, std::vector<uint8_
 	}
 	case CMD_RESOURCE_CREATE_2D:
 	case CMD_RESOURCE_CREATE_3D: {
-		VirglResourceArgs args{};
-		args.handle = le32(in, 24);
-		if (type == CMD_RESOURCE_CREATE_2D) {
-			args.target = PIPE_TEXTURE_2D;
-			args.format = le32(in, 28);
-			args.bind = BIND_RENDER_TARGET;
-			args.width = le32(in, 32);
-			args.height = le32(in, 36);
-			args.depth = 1;
-			args.array_size = 1;
-			args.flags = RESOURCE_FLAG_Y_0_TOP;
-		} else {
-			// target, format, bind, width, height, depth, array_size,
-			// last_level, nr_samples, flags.
-			args.target = le32(in, 28);
-			args.format = le32(in, 32);
-			args.bind = le32(in, 36);
-			args.width = le32(in, 40);
-			args.height = le32(in, 44);
-			args.depth = le32(in, 48);
-			args.array_size = le32(in, 52);
-			args.last_level = le32(in, 56);
-			args.nr_samples = le32(in, 60);
-			args.flags = le32(in, 64);
-		}
+		VirglResourceArgs args = create_args(in);
 		if (args.handle == 0) { resp = RESP_ERR_INVALID_RESOURCE_ID; break; }
+		const VirglResourceArgs kept = args;   // virglrenderer may write to its copy
 		if (v->resource_create(&args, nullptr, 0) != 0) { resp = RESP_ERR_INVALID_PARAMETER; break; }
-		virgl_resources.push_back(args.handle);
+		virgl_res[kept.handle] = {kept, {}};
 		break;
 	}
 	case CMD_RESOURCE_UNREF: {
@@ -159,14 +229,14 @@ void VirtioGpu::command_virgl(const std::vector<uint8_t> &in, std::vector<uint8_
 			venus_blobs.erase(blob);
 			break;
 		}
-		const auto it = std::find(virgl_resources.begin(), virgl_resources.end(), id);
-		if (it == virgl_resources.end()) { resp = RESP_ERR_INVALID_RESOURCE_ID; break; }
+		const auto it = virgl_res.find(id);
+		if (it == virgl_res.end()) { resp = RESP_ERR_INVALID_RESOURCE_ID; break; }
 		struct iovec *iov = nullptr;
 		int n = 0;
 		v->resource_detach_iov((int)id, &iov, &n);
 		backings.erase(id);
 		v->resource_unref(id);
-		virgl_resources.erase(it);
+		virgl_res.erase(it);
 		if (scanout_resource == id) {
 			scanout_resource = 0;
 			blank(mem);
@@ -192,6 +262,12 @@ void VirtioGpu::command_virgl(const std::vector<uint8_t> &in, std::vector<uint8_
 		if (v->resource_attach_iov((int)id, kept.iov.data(), (int)kept.iov.size()) != 0) {
 			backings.erase(id);
 			resp = RESP_ERR_INVALID_RESOURCE_ID;
+			break;
+		}
+		if (auto r = virgl_res.find(id); r != virgl_res.end()) {
+			r->second.backing.clear();
+			for (size_t i = 0; i < kept.iov.size(); i++)
+				r->second.backing.push_back({kept.guest[i], (uint32_t)kept.iov[i].iov_len});
 		}
 		break;
 	}
@@ -201,6 +277,7 @@ void VirtioGpu::command_virgl(const std::vector<uint8_t> &in, std::vector<uint8_
 		int n = 0;
 		v->resource_detach_iov((int)id, &iov, &n);
 		backings.erase(id);
+		if (auto r = virgl_res.find(id); r != virgl_res.end()) r->second.backing.clear();
 		break;
 	}
 	case CMD_SET_SCANOUT: {
@@ -277,6 +354,7 @@ void VirtioGpu::command_virgl(const std::vector<uint8_t> &in, std::vector<uint8_
 		}
 		const int rc = init ? v->context_create_with_flags(ctx, init, nlen, name) : v->context_create(ctx, nlen, name);
 		if (rc != 0) resp = RESP_ERR_UNSPEC;
+		else virgl_contexts[ctx] = {init, std::string(name), {}, false};
 		break;
 	}
 	case CMD_CTX_DESTROY:
@@ -285,13 +363,23 @@ void VirtioGpu::command_virgl(const std::vector<uint8_t> &in, std::vector<uint8_
 			venus_contexts.erase(std::find(venus_contexts.begin(), venus_contexts.end(), ctx));
 		} else {
 			v->context_destroy(ctx);
+			virgl_contexts.erase(ctx);
 		}
 		break;
 	case CMD_CTX_ATTACH_RESOURCE:
-		if (!is_venus_context(ctx)) v->ctx_attach_resource((int)ctx, (int)le32(in, 24));
+		if (!is_venus_context(ctx)) {
+			v->ctx_attach_resource((int)ctx, (int)le32(in, 24));
+			if (auto c = virgl_contexts.find(ctx); c != virgl_contexts.end()) c->second.attached.push_back(le32(in, 24));
+		}
 		break;
 	case CMD_CTX_DETACH_RESOURCE:
-		if (!is_venus_context(ctx)) v->ctx_detach_resource((int)ctx, (int)le32(in, 24));
+		if (!is_venus_context(ctx)) {
+			v->ctx_detach_resource((int)ctx, (int)le32(in, 24));
+			if (auto c = virgl_contexts.find(ctx); c != virgl_contexts.end()) {
+				auto &a = c->second.attached;
+				a.erase(std::remove(a.begin(), a.end(), le32(in, 24)), a.end());
+			}
+		}
 		break;
 	case CMD_RESOURCE_CREATE_BLOB: {
 		// resource_id, blob_mem, blob_flags, nr_entries, blob_id, size.
@@ -345,8 +433,9 @@ void VirtioGpu::command_virgl(const std::vector<uint8_t> &in, std::vector<uint8_
 		std::memcpy(cmds.data(), in.data() + 32, size);
 		if (is_venus_context(ctx)) {
 			if (!v->venus_submit_cmd(ctx, cmds.data(), size)) resp = RESP_ERR_INVALID_PARAMETER;
-		} else if (v->submit_cmd(cmds.data(), (int)ctx, (int)(size / 4)) != 0) {
-			resp = RESP_ERR_INVALID_PARAMETER;
+		} else {
+			if (auto c = virgl_contexts.find(ctx); c != virgl_contexts.end()) c->second.used = true;
+			if (v->submit_cmd(cmds.data(), (int)ctx, (int)(size / 4)) != 0) resp = RESP_ERR_INVALID_PARAMETER;
 		}
 		break;
 	}
@@ -459,15 +548,50 @@ void VirtioGpu::track_replayed(const std::vector<uint8_t> &in, const std::vector
 {
 	const uint32_t type = le32(in, 0), ctx = le32(in, 16), resp = le32(out, 0);
 	switch (type) {
-	case CMD_CTX_CREATE:
-		if (venus && (le32(in, 28) & 0xff) == CAPSET_VENUS && resp == RESP_OK_NODATA)
+	case CMD_CTX_CREATE: {
+		if (resp != RESP_OK_NODATA) break;
+		const uint32_t init = le32(in, 28), nlen = std::min<uint32_t>(le32(in, 24), 64);
+		if (venus && (init & 0xff) == CAPSET_VENUS) {
 			venus_contexts.push_back(ctx);
+		} else {
+			std::string name(in.size() >= 32 + nlen ? std::string((const char *)in.data() + 32, nlen) : std::string());
+			name = name.c_str();
+			virgl_contexts[ctx] = {init, name, {}, false};
+		}
 		break;
+	}
 	case CMD_CTX_DESTROY: {
 		const auto it = std::find(venus_contexts.begin(), venus_contexts.end(), ctx);
 		if (it != venus_contexts.end()) venus_contexts.erase(it);
+		virgl_contexts.erase(ctx);
 		break;
 	}
+	case CMD_CTX_ATTACH_RESOURCE:
+		if (auto c = virgl_contexts.find(ctx); c != virgl_contexts.end()) c->second.attached.push_back(le32(in, 24));
+		break;
+	case CMD_CTX_DETACH_RESOURCE:
+		if (auto c = virgl_contexts.find(ctx); c != virgl_contexts.end()) {
+			auto &a = c->second.attached;
+			a.erase(std::remove(a.begin(), a.end(), le32(in, 24)), a.end());
+		}
+		break;
+	case CMD_SUBMIT_3D:
+		if (auto c = virgl_contexts.find(ctx); c != virgl_contexts.end()) c->second.used = true;
+		break;
+	case CMD_RESOURCE_CREATE_2D:
+	case CMD_RESOURCE_CREATE_3D:
+		if (resp == RESP_OK_NODATA) virgl_res[le32(in, 24)] = {create_args(in), {}};
+		break;
+	case CMD_RESOURCE_ATTACH_BACKING:
+		if (auto r = virgl_res.find(le32(in, 24)); r != virgl_res.end() && resp == RESP_OK_NODATA) {
+			r->second.backing.clear();
+			for (uint32_t i = 0, n = le32(in, 28); i < n && 32 + (uint64_t)i * 16 + 16 <= in.size(); i++)
+				r->second.backing.push_back({le64(in, 32 + i * 16), le32(in, 40 + i * 16)});
+		}
+		break;
+	case CMD_RESOURCE_DETACH_BACKING:
+		if (auto r = virgl_res.find(le32(in, 24)); r != virgl_res.end()) r->second.backing.clear();
+		break;
 	case CMD_RESOURCE_CREATE_BLOB:
 		if (is_venus_context(ctx) && resp == RESP_OK_NODATA) {
 			Blob &b = venus_blobs[le32(in, 24)];
@@ -489,7 +613,10 @@ void VirtioGpu::track_replayed(const std::vector<uint8_t> &in, const std::vector
 		const uint32_t id = le32(in, 24);
 		for (auto m = mappings.begin(); m != mappings.end();)
 			m = m->second.resource == id ? mappings.erase(m) : std::next(m);
-		if (type == CMD_RESOURCE_UNREF) venus_blobs.erase(id);
+		if (type == CMD_RESOURCE_UNREF) {
+			venus_blobs.erase(id);
+			virgl_res.erase(id);
+		}
 		break;
 	}
 	}
@@ -501,6 +628,7 @@ void VirtioGpu::present_virgl(Memory &mem)
 {
 	VirglBackend *v = host();
 	VirglResourceInfo info{};
+	if (v && restore_pending) restore_resources(v, mem);
 	if (!v || !scanout_resource || v->resource_get_info((int)scanout_resource, &info) != 0) return;
 	const uint8_t *map = swizzle(info.virgl_format);
 	if (!map || scanout_x >= info.width || scanout_y >= info.height) return;
@@ -512,7 +640,6 @@ void VirtioGpu::present_virgl(Memory &mem)
 	struct iovec iov{readback.data(), readback.size()};
 	v->force_ctx_0();
 	if (v->transfer_read_iov(scanout_resource, 0, 0, w * 4, 0, &box, 0, &iov, 1) != 0) return;
-	(void)mem;
 	uint8_t *screen = screen_buf.data();
 	for (uint32_t row = 0; row < h; row++) {
 		const uint8_t *src = readback.data() + (size_t)(top_down ? row : h - 1 - row) * w * 4;

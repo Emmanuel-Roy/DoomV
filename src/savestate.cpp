@@ -46,8 +46,8 @@ constexpr char MAGIC[8] = {'D', 'O', 'O', 'M', 'V', 'S', 'N', 'P'};
 // single-hart layout, from before a machine could have several harts, and
 // reads as a machine of one; version 2 has no network card, 3 no
 // real-time clock, 4 no sound card, with two queues to a virtio device
-// where there are now four, and 5 no GPU.
-constexpr uint32_t VERSION = 6;
+// where there are now four, 5 no GPU, and 6 no GPU 3D state.
+constexpr uint32_t VERSION = 7;
 
 class Writer {
 public:
@@ -311,7 +311,7 @@ struct SaveState {
 
 	// The GPU: its resources, host copies included, and the scanout.
 	// Version 6 on.
-	template <class IO> static void gpu(IO &io, VirtioGpu &g)
+	template <class IO> static void gpu(IO &io, VirtioGpu &g, uint32_t version)
 	{
 		io.pod(g.status);
 		io.pod(g.device_feat_sel);
@@ -336,6 +336,66 @@ struct SaveState {
 				const uint32_t id = io.template get<uint32_t>();
 				resource(io, g.resources[id]);
 			}
+		}
+		if (version < 7) return;
+		// 3D: the host GPU's resources, contents included, and the contexts
+		// that hold nothing but them -- made again on a restore
+		// (VirtioGpu::restore_resources).
+		uint64_t n3d = g.virgl_res.size(), nctx = g.virgl_contexts.size();
+		io.pod(n3d);
+		if constexpr (std::is_same_v<IO, Writer>) {
+			for (auto &[id, r] : g.virgl_res) {
+				io.pod(id);
+				io.pod(r.args);
+				uint64_t nb = r.backing.size(), bytes = r.contents.size();
+				io.pod(nb);
+				for (auto &b : r.backing) { io.pod(b.first); io.pod(b.second); }
+				io.pod(bytes);
+				io.bytes(r.contents.data(), bytes);
+				r.contents.clear();
+				r.contents.shrink_to_fit();
+			}
+		} else {
+			g.virgl_res.clear();
+			for (uint64_t i = 0; i < n3d && io.ok(); i++) {
+				VirtioGpu::VirglRes &r = g.virgl_res[io.template get<uint32_t>()];
+				io.pod(r.args);
+				const uint64_t nb = io.template get<uint64_t>();
+				if (nb > (1u << 24)) { io.fail(); return; }
+				r.backing.resize(nb);
+				for (auto &b : r.backing) { io.pod(b.first); io.pod(b.second); }
+				const uint64_t bytes = io.template get<uint64_t>();
+				if (bytes > VirtioGpu::MEMORY_LIMIT) { io.fail(); return; }
+				r.contents.resize(bytes);
+				io.bytes(r.contents.data(), bytes);
+			}
+		}
+		io.pod(nctx);
+		if constexpr (std::is_same_v<IO, Writer>) {
+			for (auto &[id, c] : g.virgl_contexts) {
+				io.pod(id);
+				io.pod(c.init);
+				uint64_t nl = c.name.size(), na = c.attached.size();
+				io.pod(nl);
+				io.bytes(c.name.data(), nl);
+				io.pod(na);
+				for (uint32_t a : c.attached) io.pod(a);
+			}
+		} else {
+			g.virgl_contexts.clear();
+			for (uint64_t i = 0; i < nctx && io.ok(); i++) {
+				VirtioGpu::VirglCtx &c = g.virgl_contexts[io.template get<uint32_t>()];
+				io.pod(c.init);
+				const uint64_t nl = io.template get<uint64_t>();
+				if (nl > 64) { io.fail(); return; }
+				c.name.resize(nl);
+				io.bytes(c.name.data(), nl);
+				const uint64_t na = io.template get<uint64_t>();
+				if (na > (1u << 20)) { io.fail(); return; }
+				c.attached.resize(na);
+				for (uint32_t &a : c.attached) io.pod(a);
+			}
+			g.restore_pending = g.virgl && (!g.virgl_res.empty() || !g.virgl_contexts.empty());
 		}
 	}
 	template <class IO> static void resource(IO &io, VirtioGpu::Resource &r)
@@ -443,7 +503,10 @@ struct SaveState {
 		if (version >= 3) net(io, m.net, version);
 		if (version >= 4) rtc(io, m.rtc);
 		if (version >= 5) snd(io, m.snd);
-		if (version >= 6) gpu(io, m.gpu);
+		if (version >= 6) {
+			if constexpr (std::is_same_v<IO, Writer>) m.gpu.save_contents(m);
+			gpu(io, m.gpu, version);
+		}
 		io.mark(0x44455600);   // "DEV"
 	}
 
@@ -519,9 +582,10 @@ bool DoomSystem::restore_snapshot(const std::string &dir) { return SaveState::re
 bool SaveState::save(DoomSystem &s, const std::string &dir)
 {
 	Memory &memory = s.memory;
-	if (memory.gpu.is_virgl()) {
-		std::cout << "snapshot: not taken -- with -gpu=virgl the GPU's state is on the host GPU, "
-		             "and that cannot be saved\n";
+	if (memory.gpu.has_3d_state()) {
+		std::cout << "snapshot: not taken -- a program in the guest is using the GPU for OpenGL or Vulkan, "
+		             "and what it holds on the host GPU cannot be saved; take it with no such program running"
+		          << std::endl;
 		return false;
 	}
 	if (!memory.share.fids.empty()) {
