@@ -1,0 +1,770 @@
+diff --git a/src/venus/vkr_buffer.c b/src/venus/vkr_buffer.c
+index 2d12eba..fe6bee0 100644
+--- a/src/venus/vkr_buffer.c
++++ b/src/venus/vkr_buffer.c
+@@ -7,6 +7,23 @@
+ 
+ #include "vkr_buffer_gen.h"
+ #include "vkr_physical_device.h"
++#include "vkr_renderer.h"
++
++/* VKR_RENDERER_SYNC: remove every `type` struct from a pNext chain. Nothing is
++ * external in that mode -- memory is mapped for the embedder, never exported
++ * -- and drivers narrow an external buffer's memory types (AMD on Windows to
++ * device-local only, leaving nothing to map). */
++static void
++vkr_sync_strip(const void *head, VkStructureType type)
++{
++   VkBaseInStructure *prev = (VkBaseInStructure *)head;
++   while (prev && prev->pNext) {
++      if (prev->pNext->sType == type)
++         prev->pNext = prev->pNext->pNext;
++      else
++         prev = (VkBaseInStructure *)prev->pNext;
++   }
++}
+ 
+ static VkExternalMemoryHandleTypeFlags
+ vkr_buffer_get_host_external_handle_types(struct vkr_device *dev)
+@@ -27,6 +44,15 @@ vkr_buffer_prepare_external_create_info(struct vkr_device *dev,
+                                         VkBufferCreateInfo *create_info_storage,
+                                         VkExternalMemoryBufferCreateInfo *external_info_storage)
+ {
++   if (vkr_sync_mode) {
++      VkBufferCreateInfo *create_info = create_info_storage;
++      *create_info = **in_out_create_info;
++      vkr_sync_strip(create_info, VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_BUFFER_CREATE_INFO);
++      *in_out_create_info = create_info;
++      (void)external_info_storage;
++      return;
++   }
++
+    const VkExternalMemoryHandleTypeFlags host_handle_types =
+       vkr_buffer_get_host_external_handle_types(dev);
+    if (!host_handle_types)
+@@ -201,6 +227,8 @@ vkr_dispatch_vkGetDeviceBufferMemoryRequirements(
+    struct vkr_device *dev = vkr_device_from_handle(args->device);
+    struct vn_device_proc_table *vk = &dev->proc_table;
+ 
++   if (vkr_sync_mode)
++      vkr_sync_strip(args->pInfo->pCreateInfo, VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_BUFFER_CREATE_INFO);
+    vn_replace_vkGetDeviceBufferMemoryRequirements_args_handle(args);
+    vk->GetDeviceBufferMemoryRequirements(args->device, args->pInfo,
+                                          args->pMemoryRequirements);
+diff --git a/src/venus/vkr_context.c b/src/venus/vkr_context.c
+index a79fe2f..9616edb 100644
+--- a/src/venus/vkr_context.c
++++ b/src/venus/vkr_context.c
+@@ -196,6 +196,9 @@ static inline void
+ vkr_context_free_resource(struct hash_entry *entry)
+ {
+    struct vkr_resource *res = entry->data;
++   /* A VKR_RENDERER_SYNC mapping (sync_map) is not unmapped here: freeing
++    * the VkDeviceMemory unmaps it, and by a context's teardown the device
++    * and its memory are already gone. */
+    if (res->fd_type == VIRGL_RESOURCE_FD_SHM)
+       munmap(res->u.data, res->size);
+    else if (res->u.fd >= 0)
+@@ -237,7 +240,8 @@ vkr_context_import_resource_internal(struct vkr_context *ctx,
+ {
+    assert(!vkr_context_get_resource(ctx, res_id));
+ 
+-   struct vkr_resource *res = malloc(sizeof(*res));
++   /* zeroed: sync_mem and sync_map are set only for mapped device memory */
++   struct vkr_resource *res = calloc(1, sizeof(*res));
+    if (!res)
+       return false;
+ 
+@@ -333,6 +337,31 @@ vkr_context_create_resource_from_device_memory(struct vkr_context *ctx,
+       return false;
+    }
+ 
++   if (vkr_sync_mode) {
++      struct vkr_device *dev = mem->device;
++      void *ptr = NULL;
++      if (!(mem->property_flags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) ||
++          dev->proc_table.MapMemory(dev->base.handle.device, mem->base.handle.device_memory,
++                                    0, VK_WHOLE_SIZE, 0, &ptr) != VK_SUCCESS)
++         return false;
++      if (!vkr_context_import_resource_internal(ctx, res_id, blob_size,
++                                                VIRGL_RESOURCE_FD_OPAQUE, -1, NULL)) {
++         dev->proc_table.UnmapMemory(dev->base.handle.device, mem->base.handle.device_memory);
++         return false;
++      }
++      struct vkr_resource *res = vkr_context_get_resource(ctx, res_id);
++      res->sync_mem = mem;
++      res->sync_map = ptr;
++      *out_blob = (struct virgl_context_blob){
++         .type = VIRGL_RESOURCE_FD_OPAQUE,
++         .u.fd = -1,
++         .map_info = (mem->property_flags & VK_MEMORY_PROPERTY_HOST_CACHED_BIT)
++                        ? VIRGL_RENDERER_MAP_CACHE_CACHED
++                        : VIRGL_RENDERER_MAP_CACHE_WC,
++      };
++      return true;
++   }
++
+    struct virgl_context_blob blob;
+    if (!vkr_device_memory_export_blob(mem, blob_size, blob_flags, &blob)) {
+       return false;
+@@ -469,6 +498,18 @@ vkr_context_wait_ring_seqno(struct vkr_context *ctx,
+ 
+    bool ok = true;
+ 
++   if (vkr_sync_mode) {
++      while (!vkr_context_get_fatal(ctx) &&
++             !vkr_seqno_ge(vkr_ring_load_head(ring), ring_seqno)) {
++         if (!vkr_ring_sync_run(ring)) {
++            vkr_log("%s: ring %u cannot reach seqno %u", __func__, (unsigned)ring->id,
++                    (unsigned)ring_seqno);
++            return false;
++         }
++      }
++      return true;
++   }
++
+    mtx_lock(&ctx->wait_ring.mutex);
+    ctx->wait_ring.id = ring->id;
+    ctx->wait_ring.seqno = ring_seqno;
+@@ -589,6 +630,8 @@ vkr_context_ring_monitor_init(struct vkr_context *ctx, uint32_t report_period_us
+ 
+    ctx->ring_monitor.report_period_us = report_period_us;
+    ctx->ring_monitor.started = true;
++   if (vkr_sync_mode)
++      return true;   /* vkr_renderer_sync_step reports the rings alive */
+    ret = thrd_create(&ctx->ring_monitor.thread, vkr_context_ring_monitor_thread, ctx);
+    if (ret != thrd_success)
+       goto err_monitor_thrd_create;
+@@ -612,7 +655,8 @@ vkr_context_ring_monitor_fini(struct vkr_context *ctx)
+    cnd_signal(&ctx->ring_monitor.cond);
+    mtx_unlock(&ctx->ring_monitor.mutex);
+ 
+-   thrd_join(ctx->ring_monitor.thread, NULL);
++   if (!vkr_sync_mode)
++      thrd_join(ctx->ring_monitor.thread, NULL);
+ 
+    cnd_destroy(&ctx->ring_monitor.cond);
+    mtx_destroy(&ctx->ring_monitor.mutex);
+diff --git a/src/venus/vkr_context.h b/src/venus/vkr_context.h
+index 12541a7..f8ab9f0 100644
+--- a/src/venus/vkr_context.h
++++ b/src/venus/vkr_context.h
+@@ -32,6 +32,12 @@ struct vkr_resource {
+    } u;
+ 
+    size_t size;
++
++   /* VKR_RENDERER_SYNC: a resource made from a VkDeviceMemory is mapped
++    * here for the embedder rather than exported (see
++    * vkr_renderer_map_resource) */
++   struct vkr_device_memory *sync_mem;
++   void *sync_map;
+ };
+ 
+ enum vkr_context_validate_level {
+diff --git a/src/venus/vkr_device_memory.c b/src/venus/vkr_device_memory.c
+index 7c168fb..bf5276b 100644
+--- a/src/venus/vkr_device_memory.c
++++ b/src/venus/vkr_device_memory.c
+@@ -349,6 +349,19 @@ vkr_dispatch_vkAllocateMemory(struct vn_dispatch_context *dispatch,
+       prev_of_res_info->pNext = import_info;
+    }
+ 
++   /* VKR_RENDERER_SYNC: nothing is exported -- a blob of this memory is
++    * mapped for the embedder (vkr_renderer_map_resource) -- so an export
++    * request from the guest is dropped rather than passed to the driver. */
++   if (vkr_sync_mode) {
++      VkBaseInStructure *prev = (VkBaseInStructure *)alloc_info;
++      while (prev->pNext) {
++         if (prev->pNext->sType == VK_STRUCTURE_TYPE_EXPORT_MEMORY_ALLOCATE_INFO)
++            prev->pNext = prev->pNext->pNext;
++         else
++            prev = (VkBaseInStructure *)prev->pNext;
++      }
++   }
++
+    VkExportMemoryAllocateInfo *export_info =
+       vkr_find_struct(alloc_info->pNext, VK_STRUCTURE_TYPE_EXPORT_MEMORY_ALLOCATE_INFO);
+ 
+@@ -373,7 +386,7 @@ vkr_dispatch_vkAllocateMemory(struct vn_dispatch_context *dispatch,
+    int udmabuf_fd = -1;
+    void *gbm_bo = NULL;
+    VkExportMemoryAllocateInfo local_export_info;
+-   if ((property_flags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) && !res_info) {
++   if ((property_flags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) && !res_info && !vkr_sync_mode) {
+       /* An implementation can support dma_buf import along with opaque fd export/import.
+        * If the client driver is using external memory and requesting dma_buf, without
+        * dma_buf fd export support, we must use gbm bo import path instead of forcing
+diff --git a/src/venus/vkr_image.c b/src/venus/vkr_image.c
+index e149902..7df0647 100644
+--- a/src/venus/vkr_image.c
++++ b/src/venus/vkr_image.c
+@@ -4,6 +4,7 @@
+  */
+ 
+ #include "vkr_image.h"
++#include "vkr_renderer.h"
+ 
+ #include "vkr_image_gen.h"
+ #include "vkr_device.h"
+@@ -13,10 +14,27 @@
+ #define DRM_FORMAT_MOD_LINEAR 0ULL
+ #endif
+ 
++/* VKR_RENDERER_SYNC: remove every `type` struct from a pNext chain. Nothing is
++ * external in that mode (see vkr_buffer_prepare_external_create_info). */
++static void
++vkr_sync_strip(const void *head, VkStructureType type)
++{
++   VkBaseInStructure *prev = (VkBaseInStructure *)head;
++   while (prev && prev->pNext) {
++      if (prev->pNext->sType == type)
++         prev->pNext = prev->pNext->pNext;
++      else
++         prev = (VkBaseInStructure *)prev->pNext;
++   }
++}
++
+ static void
+ vkr_dispatch_vkCreateImage(struct vn_dispatch_context *dispatch,
+                            struct vn_command_vkCreateImage *args)
+ {
++   if (vkr_sync_mode)
++      vkr_sync_strip(args->pCreateInfo, VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO);
++
+    /* XXX If VkExternalMemoryImageCreateInfo is chained by the app, all is
+     * good.  If it is not chained, we might still bind an external memory to
+     * the image, because vkr_dispatch_vkAllocateMemory makes any HOST_VISIBLE
+@@ -319,6 +337,8 @@ vkr_dispatch_vkGetDeviceImageMemoryRequirements(
+    struct vkr_device *dev = vkr_device_from_handle(args->device);
+    struct vn_device_proc_table *vk = &dev->proc_table;
+ 
++   if (vkr_sync_mode)
++      vkr_sync_strip(args->pInfo->pCreateInfo, VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO);
+    vn_replace_vkGetDeviceImageMemoryRequirements_args_handle(args);
+    vk->GetDeviceImageMemoryRequirements(args->device, args->pInfo,
+                                         args->pMemoryRequirements);
+diff --git a/src/venus/vkr_queue.c b/src/venus/vkr_queue.c
+index e111881..86124cd 100644
+--- a/src/venus/vkr_queue.c
++++ b/src/venus/vkr_queue.c
+@@ -163,6 +163,19 @@ vkr_queue_sync_submit(struct vkr_queue *queue,
+       return false;
+    }
+ 
++   if (vkr_sync_mode) {
++      /* there is no thread to retire it later: it is done now */
++      if (!sync->device_lost) {
++         VkResult wait;
++         do {
++            wait = vk->WaitForFences(dev->base.handle.device, 1, &sync->fence, true,
++                                     1000000000ull);
++         } while (wait == VK_TIMEOUT);
++      }
++      vkr_queue_sync_retire(queue, sync);
++      return true;
++   }
++
+    mtx_lock(&queue->sync_thread.mutex);
+    list_addtail(&sync->head, &queue->sync_thread.syncs);
+    cnd_signal(&queue->sync_thread.cond);
+@@ -171,9 +184,45 @@ vkr_queue_sync_submit(struct vkr_queue *queue,
+    return true;
+ }
+ 
++/* VKR_RENDERER_SYNC: every queue, so the step can wait for all of them */
++static struct list_head vkr_sync_queues = { &vkr_sync_queues, &vkr_sync_queues };
++
++void
++vkr_queue_sync_drain_all(void)
++{
++   list_for_each_entry (struct vkr_queue, queue, &vkr_sync_queues, sync_registry) {
++      struct vkr_device *dev = queue->device;
++      struct vn_device_proc_table *vk = &dev->proc_table;
++      if (!queue->sync_drain_fence) {
++         const VkFenceCreateInfo info = { .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO };
++         if (vk->CreateFence(dev->base.handle.device, &info, NULL, &queue->sync_drain_fence) !=
++             VK_SUCCESS)
++            continue;
++      }
++      vk->ResetFences(dev->base.handle.device, 1, &queue->sync_drain_fence);
++      mtx_lock(&queue->vk_mutex);
++      const VkResult result =
++         vk->QueueSubmit(queue->base.handle.queue, 0, NULL, queue->sync_drain_fence);
++      mtx_unlock(&queue->vk_mutex);
++      if (result != VK_SUCCESS)
++         continue;
++      /* Bounded: work waiting on a semaphore nothing has signalled yet would
++       * never finish, and the guest must not hang the machine with it. */
++      vk->WaitForFences(dev->base.handle.device, 1, &queue->sync_drain_fence, true,
++                        5000000000ull);
++   }
++}
++
+ static void
+ vkr_queue_sync_thread_fini(struct vkr_queue *queue)
+ {
++   if (vkr_sync_mode) {
++      list_del(&queue->sync_registry);
++      if (queue->sync_drain_fence)
++         queue->device->proc_table.DestroyFence(queue->device->base.handle.device,
++                                                queue->sync_drain_fence, NULL);
++      return;
++   }
+    /* vkDeviceWaitIdle has been called */
+    mtx_lock(&queue->sync_thread.mutex);
+    queue->sync_thread.join = true;
+@@ -292,6 +341,11 @@ vkr_queue_sync_thread_init(struct vkr_queue *queue)
+ 
+    list_inithead(&queue->sync_thread.syncs);
+ 
++   if (vkr_sync_mode) {
++      list_addtail(&queue->sync_registry, &vkr_sync_queues);
++      return 0;
++   }
++
+    ret = thrd_create(&queue->sync_thread.thread, vkr_queue_thread, queue);
+    if (ret != thrd_success)
+       goto fail_thrd_create;
+diff --git a/src/venus/vkr_queue.h b/src/venus/vkr_queue.h
+index 6a3a909..950b9c0 100644
+--- a/src/venus/vkr_queue.h
++++ b/src/venus/vkr_queue.h
+@@ -20,6 +20,7 @@ struct vkr_queue_sync {
+ };
+ 
+ struct vkr_queue {
++
+    struct vkr_object base;
+ 
+    struct vkr_context *context;
+@@ -48,6 +49,11 @@ struct vkr_queue {
+       thrd_t thread;
+       bool join;
+    } sync_thread;
++
++   /* VKR_RENDERER_SYNC: for draining the queue in vkr_renderer_sync_step. At
++    * the end: base must stay first, objects are cast to and from it. */
++   VkFence sync_drain_fence;
++   struct list_head sync_registry;
+ };
+ VKR_DEFINE_OBJECT_CAST(queue, VK_OBJECT_TYPE_QUEUE, VkQueue)
+ 
+@@ -78,6 +84,10 @@ vkr_context_init_semaphore_dispatch(struct vkr_context *ctx);
+ void
+ vkr_context_init_event_dispatch(struct vkr_context *ctx);
+ 
++/* VKR_RENDERER_SYNC: wait for every queue to finish what it has been given */
++void
++vkr_queue_sync_drain_all(void);
++
+ struct vkr_queue *
+ vkr_queue_create(struct vkr_context *ctx,
+                  struct vkr_device *dev,
+diff --git a/src/venus/vkr_renderer.c b/src/venus/vkr_renderer.c
+index c43a96e..f3b22d4 100644
+--- a/src/venus/vkr_renderer.c
++++ b/src/venus/vkr_renderer.c
+@@ -10,6 +10,8 @@
+ #include "venus_hw.h"
+ 
+ #include "vkr_context.h"
++#include "vkr_queue.h"
++#include "vkr_ring.h"
+ 
+ struct vkr_renderer_state {
+    const struct vkr_renderer_callbacks *cbs;
+@@ -20,6 +22,11 @@ struct vkr_renderer_state {
+ 
+ struct vkr_renderer_state vkr_state;
+ 
++bool vkr_sync_mode;
++
++/* VKR_RENDERER_SYNC: work was submitted since the queues were last drained */
++static bool vkr_sync_dirty;
++
+ size_t
+ vkr_get_capset(void *capset, uint32_t flags)
+ {
+@@ -65,7 +72,8 @@ vkr_renderer_init(uint32_t flags, const struct vkr_renderer_callbacks *cbs)
+ 
+    static const uint32_t required_flags =
+       VKR_RENDERER_THREAD_SYNC | VKR_RENDERER_ASYNC_FENCE_CB;
+-   if ((flags & required_flags) != required_flags)
++   vkr_sync_mode = flags & VKR_RENDERER_SYNC;
++   if (!vkr_sync_mode && (flags & required_flags) != required_flags)
+       return false;
+ 
+    vkr_debug_init();
+@@ -150,6 +158,7 @@ vkr_renderer_submit_cmd(uint32_t ctx_id, void *cmd, uint32_t size)
+    if (!ctx)
+       return false;
+ 
++   vkr_sync_dirty = true;
+    return vkr_context_submit_cmd(ctx, cmd, size);
+ }
+ 
+@@ -229,6 +238,48 @@ vkr_renderer_import_resource(uint32_t ctx_id,
+    return vkr_context_import_resource(ctx, res_id, fd_type, fd, size);
+ }
+ 
++void
++vkr_renderer_sync_step(void)
++{
++   /* Rings first, until none moves -- one can wait for a seqno another's
++    * commands submit -- then the GPU, so that everything submitted has
++    * finished and written what it writes before the guest runs again. */
++   bool ran = vkr_sync_dirty, progress;
++   do {
++      progress = false;
++      list_for_each_entry (struct vkr_context, ctx, &vkr_state.contexts, head) {
++         list_for_each_entry (struct vkr_ring, ring, &ctx->rings, head) {
++            if (ring->started && vkr_ring_sync_run(ring))
++               progress = true;
++         }
++      }
++      ran |= progress;
++   } while (progress);
++
++   /* only when something may have reached a queue: draining costs a
++    * round trip to the GPU, and the step runs often */
++   if (ran)
++      vkr_queue_sync_drain_all();
++   vkr_sync_dirty = false;
++
++   list_for_each_entry (struct vkr_context, ctx, &vkr_state.contexts, head) {
++      list_for_each_entry (struct vkr_ring, ring, &ctx->rings, head)
++         vkr_ring_sync_report(ring);
++   }
++}
++
++bool
++vkr_renderer_map_resource(uint32_t ctx_id, uint32_t res_id, void **out_ptr, uint64_t *out_size)
++{
++   struct vkr_context *ctx = vkr_renderer_lookup_context(ctx_id);
++   struct vkr_resource *res = ctx ? vkr_context_get_resource(ctx, res_id) : NULL;
++   if (!res)
++      return false;
++   *out_ptr = res->fd_type == VIRGL_RESOURCE_FD_SHM ? (void *)res->u.data : res->sync_map;
++   *out_size = res->size;
++   return *out_ptr != NULL;
++}
++
+ void
+ vkr_renderer_destroy_resource(uint32_t ctx_id, uint32_t res_id)
+ {
+diff --git a/src/venus/vkr_renderer.h b/src/venus/vkr_renderer.h
+index be3ae04..c8f0d09 100644
+--- a/src/venus/vkr_renderer.h
++++ b/src/venus/vkr_renderer.h
+@@ -16,6 +16,13 @@
+ 
+ #define VKR_RENDERER_THREAD_SYNC (1u << 0)
+ #define VKR_RENDERER_ASYNC_FENCE_CB (1u << 1)
++/* DoomV: no threads of the renderer's own. Rings are processed, fences
++ * retired and queues drained only inside vkr_renderer_sync_step and the
++ * calls the embedder makes, all on the embedder's thread, so everything the
++ * guest can see happens at points the embedder chooses. */
++#define VKR_RENDERER_SYNC (1u << 2)
++
++extern bool vkr_sync_mode;
+ 
+ typedef void (*vkr_renderer_retire_fence_callback_type)(uint32_t ctx_id,
+                                                         uint32_t ring_idx,
+@@ -74,4 +81,15 @@ vkr_renderer_import_resource(uint32_t ctx_id,
+ void
+ vkr_renderer_destroy_resource(uint32_t ctx_id, uint32_t res_id);
+ 
++/* VKR_RENDERER_SYNC only. Runs every ring until none can make progress,
++ * then waits for every queue to finish on the host GPU. */
++void
++vkr_renderer_sync_step(void);
++
++/* VKR_RENDERER_SYNC only: a host pointer to a resource's memory -- shared
++ * memory, or the VkDeviceMemory it was made from, mapped -- for the embedder
++ * to expose to the guest. */
++bool
++vkr_renderer_map_resource(uint32_t ctx_id, uint32_t res_id, void **out_ptr, uint64_t *out_size);
++
+ #endif /* VKR_RENDERER_H */
+diff --git a/src/venus/vkr_ring.c b/src/venus/vkr_ring.c
+index e03e51b..2e0d36b 100644
+--- a/src/venus/vkr_ring.c
++++ b/src/venus/vkr_ring.c
+@@ -420,6 +420,72 @@ out:
+    return ret;
+ }
+ 
++/* Set while a command run by vkr_ring_sync_run would have to wait for a
++ * virtqueue seqno that has not been submitted: the run stops before it. */
++static bool vkr_ring_sync_would_block;
++
++bool
++vkr_ring_sync_run(struct vkr_ring *ring)
++{
++   struct vkr_cs_decoder *dec = &ring->decoder;
++   bool progress = false;
++
++   if (vkr_cs_decoder_get_fatal(dec))
++      return false;
++
++   if (ring->sync_off == ring->sync_len) {
++      const uint32_t cmd_size = vkr_ring_load_tail(ring) - ring->buffer.cur;
++      if (!cmd_size)
++         return false;
++      if (cmd_size > ring->buffer.size) {
++         vkr_log("%s: cmd_size(%u) > ring->buffer.size(%u)", __func__, cmd_size,
++                 ring->buffer.size);
++         vkr_ring_set_status_bits(ring, VK_RING_STATUS_FATAL_BIT_MESA);
++         vkr_context_on_ring_fatal(ring->dispatch.data);
++         return false;
++      }
++      ring->sync_head = ring->buffer.cur;
++      vkr_ring_read_buffer(ring, ring->cmd, cmd_size);
++      ring->sync_off = 0;
++      ring->sync_len = cmd_size;
++   }
++
++   const uint8_t *start = (const uint8_t *)ring->cmd + ring->sync_off;
++   vkr_cs_decoder_set_buffer_stream(dec, start, ring->sync_len - ring->sync_off);
++   while (vkr_cs_decoder_has_command(dec)) {
++      const uint8_t *before = dec->cur;
++      vkr_ring_sync_would_block = false;
++      vn_dispatch_command(&ring->dispatch);
++      if (vkr_ring_sync_would_block) {
++         /* run it again when the seqno arrives */
++         dec->cur = before;
++         break;
++      }
++      if (vkr_cs_decoder_get_fatal(dec)) {
++         vkr_log("%s: vn_dispatch_command failed", __func__);
++         vkr_ring_set_status_bits(ring, VK_RING_STATUS_FATAL_BIT_MESA);
++         vkr_context_on_ring_fatal(ring->dispatch.data);
++         break;
++      }
++      progress = true;
++      const uint32_t cur_ring_head =
++         ring->sync_head + ring->sync_off + (uint32_t)(dec->cur - start);
++      vkr_ring_store_head(ring, cur_ring_head);
++   }
++   ring->sync_off += (uint32_t)(dec->cur - start);
++   vkr_cs_decoder_reset(dec);
++   return progress;
++}
++
++void
++vkr_ring_sync_report(struct vkr_ring *ring)
++{
++   uint32_t bits = VK_RING_STATUS_IDLE_BIT_MESA;
++   if (ring->monitor)
++      bits |= VK_RING_STATUS_ALIVE_BIT_MESA;
++   vkr_ring_set_status_bits(ring, bits);
++}
++
+ void
+ vkr_ring_start(struct vkr_ring *ring)
+ {
+@@ -427,6 +493,11 @@ vkr_ring_start(struct vkr_ring *ring)
+ 
+    assert(!ring->started);
+    ring->started = true;
++   if (vkr_sync_mode) {
++      /* no thread: vkr_renderer_sync_step runs the ring */
++      vkr_ring_sync_report(ring);
++      return;
++   }
+    ret = thrd_create(&ring->thread, vkr_ring_thread, ring);
+    if (ret != thrd_success)
+       ring->started = false;
+@@ -435,6 +506,10 @@ vkr_ring_start(struct vkr_ring *ring)
+ bool
+ vkr_ring_stop(struct vkr_ring *ring)
+ {
++   if (vkr_sync_mode) {
++      ring->started = false;
++      return true;
++   }
+    mtx_lock(&ring->mutex);
+ #ifdef _WIN32
+    if (GetThreadId(ring->thread) == GetCurrentThreadId()) {
+@@ -517,6 +592,13 @@ vkr_ring_wait_virtqueue_seqno(struct vkr_ring *ring, uint64_t seqno)
+ 
+    bool ok = true;
+ 
++   if (vkr_sync_mode) {
++      /* nothing else will submit it while this waits: stop the run here */
++      if (ring->virtqueue_seqno < seqno)
++         vkr_ring_sync_would_block = true;
++      return true;
++   }
++
+    mtx_lock(&ring->mutex);
+    while (ok && ring->started && ring->virtqueue_seqno < seqno)
+       ok = cnd_wait(&ring->cond, &ring->mutex) == thrd_success;
+diff --git a/src/venus/vkr_ring.h b/src/venus/vkr_ring.h
+index cd70c14..b8f9637 100644
+--- a/src/venus/vkr_ring.h
++++ b/src/venus/vkr_ring.h
+@@ -102,6 +102,12 @@ struct vkr_ring {
+    atomic_bool pending_notify;
+    atomic_bool monitor;
+    uint64_t virtqueue_seqno;
++
++   /* VKR_RENDERER_SYNC: commands read from the ring and not yet run -- a
++    * wait for a virtqueue seqno that has not arrived stops the run there --
++    * as [sync_off, sync_len) of cmd, the first of them at ring position
++    * sync_head. */
++   uint32_t sync_off, sync_len, sync_head;
+ };
+ 
+ struct vkr_ring *
+@@ -124,6 +130,15 @@ vkr_ring_notify(struct vkr_ring *ring);
+ bool
+ vkr_ring_write_extra(struct vkr_ring *ring, size_t offset, uint32_t val);
+ 
++/* VKR_RENDERER_SYNC: run what the ring holds. True if anything ran. */
++bool
++vkr_ring_sync_run(struct vkr_ring *ring);
++
++/* VKR_RENDERER_SYNC: mark the ring idle, so the driver notifies after it
++ * writes, and alive if it is monitored. */
++void
++vkr_ring_sync_report(struct vkr_ring *ring);
++
+ void
+ vkr_ring_submit_virtqueue_seqno(struct vkr_ring *ring, uint64_t seqno);
+ 
+diff --git a/src/venus/vkr_win32_shim.c b/src/venus/vkr_win32_shim.c
+index 4c655af..39be2b3 100644
+--- a/src/venus/vkr_win32_shim.c
++++ b/src/venus/vkr_win32_shim.c
+@@ -5,6 +5,7 @@
+ 
+ #ifdef _WIN32
+ 
++#include "vkr_renderer.h"
+ #include "vkr_win32_shim.h"
+ 
+ #include <windows.h>
+@@ -589,8 +590,12 @@ vkr_win32_device_install_shim(struct vkr_device *dev)
+    if (dev->physical_device->host_external_memory_win32 ||
+        dev->physical_device->host_external_fence_win32 ||
+        dev->physical_device->host_external_semaphore_win32) {
+-      vk->CreateBuffer = vkr_win32_CreateBuffer;
+-      vk->CreateImage = vkr_win32_CreateImage;
++      /* VKR_RENDERER_SYNC exports nothing: an external buffer or image would
++       * only be narrowed to memory types the embedder cannot map. */
++      if (!vkr_sync_mode) {
++         vk->CreateBuffer = vkr_win32_CreateBuffer;
++         vk->CreateImage = vkr_win32_CreateImage;
++      }
+ 
+       if (dev->GetMemoryWin32HandleKHR)
+          vk->GetMemoryFdKHR = vkr_win32_GetMemoryFdKHR;
+diff --git a/src/virglrenderer.c b/src/virglrenderer.c
+index d2f928e..b3c55f1 100644
+--- a/src/virglrenderer.c
++++ b/src/virglrenderer.c
+@@ -1638,3 +1638,78 @@ int virgl_renderer_get_dev_fd(int ctx_id)
+ 
+    return ctx->get_device_fd(ctx);
+ }
++
++/* DoomV: Venus driven directly, in this process, on the caller's thread --
++ * no render server, and no thread of the renderer's own (VKR_RENDERER_SYNC).
++ * Everything the guest can observe happens inside these calls, so the
++ * embedder decides when. */
++#include "venus/vkr_renderer.h"
++
++static struct vkr_renderer_callbacks doomv_venus_cbs;
++
++VIRGL_EXPORT bool
++virgl_doomv_venus_init(void (*retire_fence)(uint32_t ctx_id, uint32_t ring_idx, uint64_t fence_id))
++{
++   doomv_venus_cbs.debug_logger = NULL;
++   doomv_venus_cbs.retire_fence = retire_fence;
++   return vkr_renderer_init(VKR_RENDERER_SYNC, &doomv_venus_cbs);
++}
++
++VIRGL_EXPORT size_t
++virgl_doomv_venus_capset(void *capset)
++{
++   return vkr_get_capset(capset, 0);
++}
++
++VIRGL_EXPORT bool
++virgl_doomv_venus_create_context(uint32_t ctx_id, uint32_t ctx_flags, uint32_t nlen, const char *name)
++{
++   return vkr_renderer_create_context(ctx_id, ctx_flags, nlen, name);
++}
++
++VIRGL_EXPORT void
++virgl_doomv_venus_destroy_context(uint32_t ctx_id)
++{
++   vkr_renderer_destroy_context(ctx_id);
++}
++
++VIRGL_EXPORT bool
++virgl_doomv_venus_submit_cmd(uint32_t ctx_id, void *cmd, uint32_t size)
++{
++   return vkr_renderer_submit_cmd(ctx_id, cmd, size);
++}
++
++VIRGL_EXPORT bool
++virgl_doomv_venus_submit_fence(uint32_t ctx_id, uint32_t flags, uint32_t ring_idx, uint64_t fence_id)
++{
++   return vkr_renderer_submit_fence(ctx_id, flags, ring_idx, fence_id);
++}
++
++VIRGL_EXPORT bool
++virgl_doomv_venus_create_resource(uint32_t ctx_id, uint32_t res_id, uint64_t blob_id,
++                                  uint64_t blob_size, uint32_t blob_flags, uint32_t *out_map_info)
++{
++   enum virgl_resource_fd_type fd_type;
++   int fd = -1;
++   struct virgl_resource_vulkan_info vulkan_info;
++   return vkr_renderer_create_resource(ctx_id, res_id, blob_id, blob_size, blob_flags, &fd_type,
++                                       &fd, out_map_info, &vulkan_info);
++}
++
++VIRGL_EXPORT bool
++virgl_doomv_venus_map_resource(uint32_t ctx_id, uint32_t res_id, void **out_ptr, uint64_t *out_size)
++{
++   return vkr_renderer_map_resource(ctx_id, res_id, out_ptr, out_size);
++}
++
++VIRGL_EXPORT void
++virgl_doomv_venus_destroy_resource(uint32_t ctx_id, uint32_t res_id)
++{
++   vkr_renderer_destroy_resource(ctx_id, res_id);
++}
++
++VIRGL_EXPORT void
++virgl_doomv_venus_step(void)
++{
++   vkr_renderer_sync_step();
++}
+diff --git a/src/virglrenderer.h b/src/virglrenderer.h
+index 0bcafef..be39882 100644
+--- a/src/virglrenderer.h
++++ b/src/virglrenderer.h
+@@ -517,4 +517,19 @@ VIRGL_EXPORT int virgl_renderer_get_dev_fd(int ctx_id);
+ 
+ #endif /* VIRGL_RENDERER_UNSTABLE_APIS */
+ 
++
++/* DoomV: Venus in this process, with no threads of its own; see
++ * virglrenderer.c. */
++VIRGL_EXPORT bool virgl_doomv_venus_init(void (*retire_fence)(uint32_t ctx_id, uint32_t ring_idx, uint64_t fence_id));
++VIRGL_EXPORT size_t virgl_doomv_venus_capset(void *capset);
++VIRGL_EXPORT bool virgl_doomv_venus_create_context(uint32_t ctx_id, uint32_t ctx_flags, uint32_t nlen, const char *name);
++VIRGL_EXPORT void virgl_doomv_venus_destroy_context(uint32_t ctx_id);
++VIRGL_EXPORT bool virgl_doomv_venus_submit_cmd(uint32_t ctx_id, void *cmd, uint32_t size);
++VIRGL_EXPORT bool virgl_doomv_venus_submit_fence(uint32_t ctx_id, uint32_t flags, uint32_t ring_idx, uint64_t fence_id);
++VIRGL_EXPORT bool virgl_doomv_venus_create_resource(uint32_t ctx_id, uint32_t res_id, uint64_t blob_id,
++                                                    uint64_t blob_size, uint32_t blob_flags, uint32_t *out_map_info);
++VIRGL_EXPORT bool virgl_doomv_venus_map_resource(uint32_t ctx_id, uint32_t res_id, void **out_ptr, uint64_t *out_size);
++VIRGL_EXPORT void virgl_doomv_venus_destroy_resource(uint32_t ctx_id, uint32_t res_id);
++VIRGL_EXPORT void virgl_doomv_venus_step(void);
++
+ #endif

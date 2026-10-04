@@ -157,6 +157,10 @@ uint8_t Memory::read8(uint64_t addr)
 	// mount tag, the network card's MAC), and 16-bit loads are built from two.
 	uint64_t off;
 	if (VirtioMmio *dev = virtio_at(addr, off)) return dev->read8(off);
+	if (addr - VirtioGpu::HOSTMEM_BASE < VirtioGpu::HOSTMEM_SIZE) {
+		const uint8_t *p = gpu.hostmem(addr - VirtioGpu::HOSTMEM_BASE, 1);
+		return p ? *p : 0;
+	}
 	return 0;
 }
 
@@ -243,6 +247,15 @@ uint32_t Memory::read32(uint64_t addr)
 	}
 	// Past RAM, which never reaches it: the clock is read once a boot.
 	if (addr >= RTC_BASE && addr < RTC_BASE + RTC_SIZE) return rtc.read32(addr - RTC_BASE, timer.get_mtime());
+	// The GPU's host-memory window: Venus's rings and mapped device memory,
+	// a word at a time, so an aligned word is never seen half updated.
+	if (addr - VirtioGpu::HOSTMEM_BASE < VirtioGpu::HOSTMEM_SIZE) {
+		if (const uint8_t *p = gpu.hostmem(addr - VirtioGpu::HOSTMEM_BASE, 4)) {
+			uint32_t val;
+			std::memcpy(&val, p, sizeof val);
+			return val;
+		}
+	}
 
 	return (uint32_t)read16(addr) | ((uint32_t)read16(addr + 2) << 16);
 }
@@ -286,6 +299,8 @@ void Memory::write8(uint64_t addr, uint8_t val)
 		console_put(val);
 	} else if (addr >= UART_BASE && addr < UART_BASE + UART_SIZE) {
 		uart.write(addr - UART_BASE, val);
+	} else if (addr - VirtioGpu::HOSTMEM_BASE < VirtioGpu::HOSTMEM_SIZE) {
+		if (uint8_t *p = gpu.hostmem(addr - VirtioGpu::HOSTMEM_BASE, 1)) *p = val;
 	} else {
 		uint64_t off;
 		if (VirtioMmio *dev = virtio_at(addr, off)) dev->write8(off, val);
@@ -427,6 +442,12 @@ void Memory::write32(uint64_t addr, uint32_t val)
 		return;
 	}
 
+	if (addr - VirtioGpu::HOSTMEM_BASE < VirtioGpu::HOSTMEM_SIZE) {
+		if (uint8_t *p = gpu.hostmem(addr - VirtioGpu::HOSTMEM_BASE, 4)) {
+			std::memcpy(p, &val, sizeof val);
+			return;
+		}
+	}
 	write8(addr + 0, (val >> 0) & 0xFF);
 	write8(addr + 1, (val >> 8) & 0xFF);
 	write8(addr + 2, (val >> 16) & 0xFF);
@@ -538,6 +559,7 @@ bool Memory::is_backed(uint64_t addr, unsigned size) const
 	if (in(CLINT_BASE, CLINT_SIZE)) return true;
 	if (in(APLIC_BASE, APLIC_SIZE)) return true;
 	if (in(RTC_BASE, RTC_SIZE)) return true;
+	if (gpu.is_venus() && in(VirtioGpu::HOSTMEM_BASE, VirtioGpu::HOSTMEM_SIZE)) return true;
 	if (in(IMSIC_M_BASE, imsic_span)) return true;
 	if (in(IMSIC_S_BASE, imsic_span)) return true;
 

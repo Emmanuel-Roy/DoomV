@@ -1,0 +1,13 @@
+desktop, 3,000,000,000 steps, 251.666 MIPS while sampled (sampling every 2 ms slows the run a little)
+
+ samples  share  function
+
+    7442  83.4%  ##################################################  [ntdll.dll]
+    1380  15.5%  #########  _ZNKSt3__111__copy_implclB9nqe230101INS_19istreambuf_iteratorIcNS_11char_traitsIcEEEES5_NS_19ostreambuf_iteratorIcS4_EETnNS_9enable_ifIXntsr23__specialized_algorithmINS_10_Algorithm6__copyENS_15__iterator_pairIT_T0_EENS_17__single_iteratorIT1_EEEE15__has_algorithmEiE4typeELi0EEENS_15__in_out_resultISC_SG_EESC_SD_SG_
+      97   1.1%  #  [msvcrt.dll]
+       3   0.0%  #  [KERNELBASE.dll]
+       2   0.0%  #  DoomSystem::run()
+       1   0.0%  #  std::__1::basic_filebuf<char, std::__1::char_traits<char> >::overflow(int)
+       1   0.0%  #  std::__1::basic_filebuf<char, std::__1::char_traits<char> >::underflow()
+
+8926 samples

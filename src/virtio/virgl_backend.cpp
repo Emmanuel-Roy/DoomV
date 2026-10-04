@@ -29,12 +29,17 @@ constexpr int WGL_CONTEXT_MAJOR_VERSION_ARB = 0x2091, WGL_CONTEXT_MINOR_VERSION_
               WGL_CONTEXT_PROFILE_MASK_ARB = 0x9126, WGL_CONTEXT_CORE_PROFILE_BIT_ARB = 0x1,
               WGL_CONTEXT_COMPATIBILITY_PROFILE_BIT_ARB = 0x2;
 
-std::filesystem::path library_path()
+std::filesystem::path library_path(bool venus)
 {
 	wchar_t exe[MAX_PATH];
 	GetModuleFileNameW(nullptr, exe, MAX_PATH);
-	return std::filesystem::path(exe).parent_path() / "build" / "virgl" / "bin" / "libvirglrenderer-1.dll";
+	return std::filesystem::path(exe).parent_path() / "build" / (venus ? "venus" : "virgl") / "bin" /
+	       "libvirglrenderer-1.dll";
 }
+
+// A Venus fence is retired inside the call that submitted it (the synchronous
+// mode has no thread to retire it later), so there is nothing to do here.
+void venus_retired(uint32_t, uint32_t, uint64_t) {}
 
 } // namespace
 
@@ -69,12 +74,13 @@ int VirglBackend::make_current(void *cookie, int, void *ctx)
 	return wglMakeCurrent((HDC)self->dc, (HGLRC)ctx) ? 0 : -1;
 }
 
-bool VirglBackend::start(std::string &error)
+bool VirglBackend::start(std::string &error, bool venus)
 {
-	const std::filesystem::path path = library_path();
+	const std::filesystem::path path = library_path(venus);
 	HMODULE lib = LoadLibraryExW(path.c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
 	if (!lib) {
-		error = "cannot load " + path.string() + " (fetch it with: python scripts/get_virgl.py)";
+		error = "cannot load " + path.string() + (venus ? " (build it with: python scripts/get_venus.py)"
+		                                                : " (fetch it with: python scripts/get_virgl.py)");
 		return false;
 	}
 	dll = lib;
@@ -106,6 +112,19 @@ bool VirglBackend::start(std::string &error)
 	get(create_fence, "virgl_renderer_create_fence");
 	get(poll, "virgl_renderer_poll");
 	get(force_ctx_0, "virgl_renderer_force_ctx_0");
+	bool (*venus_init)(void (*)(uint32_t, uint32_t, uint64_t)) = nullptr;
+	if (venus) {
+		get(venus_init, "virgl_doomv_venus_init");
+		get(venus_capset, "virgl_doomv_venus_capset");
+		get(venus_create_context, "virgl_doomv_venus_create_context");
+		get(venus_destroy_context, "virgl_doomv_venus_destroy_context");
+		get(venus_submit_cmd, "virgl_doomv_venus_submit_cmd");
+		get(venus_submit_fence, "virgl_doomv_venus_submit_fence");
+		get(venus_create_resource, "virgl_doomv_venus_create_resource");
+		get(venus_map_resource, "virgl_doomv_venus_map_resource");
+		get(venus_destroy_resource, "virgl_doomv_venus_destroy_resource");
+		get(venus_step, "virgl_doomv_venus_step");
+	}
 	if (missing) return false;
 
 	// A hidden window for a device context with an OpenGL pixel format: WGL
@@ -164,6 +183,10 @@ bool VirglBackend::start(std::string &error)
 	                    &VirglBackend::destroy_gl_context, &VirglBackend::make_current};
 	if (init(this, 0, &cb) != 0) {
 		error = "virgl_renderer_init failed";
+		return false;
+	}
+	if (venus && !venus_init(venus_retired)) {
+		error = "Venus did not start (no Vulkan on this host?)";
 		return false;
 	}
 	ready = true;

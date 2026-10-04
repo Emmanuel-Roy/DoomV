@@ -106,6 +106,9 @@ protected:
 	virtual void notify(unsigned q, Memory &mem, Aplic &aplic) = 0;
 	// Status 0: whatever the device holds beyond the transport, forgotten.
 	virtual void reset() {}
+	// Shared memory region `id`: where it is in guest physical memory and how
+	// long. False for a region the device does not have -- most have none.
+	virtual bool shm_region(uint32_t, uint64_t &, uint64_t &) const { return false; }
 
 	// ---- ring helpers ----------------------------------------------------------
 	uint32_t queue_size(const Queue &q) const { return q.num ? q.num : QUEUE_MAX; }
@@ -130,6 +133,7 @@ protected:
 	uint32_t driver_feat_sel = 0;
 	uint32_t driver_feat[2] = {0, 0};
 	uint32_t queue_sel = 0;
+	uint32_t shm_sel = 0;
 	uint32_t interrupt_status = 0;
 	Queue queues[MAX_QUEUES];
 };

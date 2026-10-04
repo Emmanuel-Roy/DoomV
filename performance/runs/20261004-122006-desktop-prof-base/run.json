@@ -1,0 +1,47 @@
+{
+  "time": "20261004-122006",
+  "label": "prof-base",
+  "workload": "desktop",
+  "steps": 3000000000,
+  "seconds": 11.921,
+  "restore_seconds": 10.943,
+  "mips": 251.666,
+  "crash_log_sha256": "35c61483d5e347339025c4b3e2817c873db128f67b25b730530f79f52c958898",
+  "exe": "build\\perfbase-src\\riscv_doom.exe",
+  "exe_sha256": "5566f0d570fb2e33cf473b13e6de4b3022b7316d1dbb8105bfc294d8112deb06",
+  "commit": "8375cc9",
+  "dirty": true,
+  "host": "AMD64 Family 25 Model 97 Stepping 2, AuthenticAMD / Windows 10",
+  "profiled": true,
+  "samples": 8926,
+  "top": [
+    [
+      "[ntdll.dll]",
+      7442
+    ],
+    [
+      "_ZNKSt3__111__copy_implclB9nqe230101INS_19istreambuf_iteratorIcNS_11char_traitsIcEEEES5_NS_19ostreambuf_iteratorIcS4_EETnNS_9enable_ifIXntsr23__specialized_algorithmINS_10_Algorithm6__copyENS_15__iterator_pairIT_T0_EENS_17__single_iteratorIT1_EEEE15__has_algorithmEiE4typeELi0EEENS_15__in_out_resultISC_SG_EESC_SD_SG_",
+      1380
+    ],
+    [
+      "[msvcrt.dll]",
+      97
+    ],
+    [
+      "[KERNELBASE.dll]",
+      3
+    ],
+    [
+      "DoomSystem::run()",
+      2
+    ],
+    [
+      "std::__1::basic_filebuf<char, std::__1::char_traits<char> >::overflow(int)",
+      1
+    ],
+    [
+      "std::__1::basic_filebuf<char, std::__1::char_traits<char> >::underflow()",
+      1
+    ]
+  ]
+}

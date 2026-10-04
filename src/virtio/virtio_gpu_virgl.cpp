@@ -16,14 +16,19 @@ constexpr uint32_t CMD_GET_DISPLAY_INFO = 0x0100, CMD_RESOURCE_CREATE_2D = 0x010
                    CMD_GET_CAPSET_INFO = 0x0108, CMD_GET_CAPSET = 0x0109,
                    CMD_CTX_CREATE = 0x0200, CMD_CTX_DESTROY = 0x0201, CMD_CTX_ATTACH_RESOURCE = 0x0202,
                    CMD_CTX_DETACH_RESOURCE = 0x0203, CMD_RESOURCE_CREATE_3D = 0x0204,
-                   CMD_TRANSFER_TO_HOST_3D = 0x0205, CMD_TRANSFER_FROM_HOST_3D = 0x0206, CMD_SUBMIT_3D = 0x0207;
+                   CMD_TRANSFER_TO_HOST_3D = 0x0205, CMD_TRANSFER_FROM_HOST_3D = 0x0206, CMD_SUBMIT_3D = 0x0207,
+                   CMD_RESOURCE_CREATE_BLOB = 0x010c, CMD_RESOURCE_MAP_BLOB = 0x0208,
+                   CMD_RESOURCE_UNMAP_BLOB = 0x0209;
 constexpr uint32_t RESP_OK_NODATA = 0x1100, RESP_OK_DISPLAY_INFO = 0x1101, RESP_OK_CAPSET_INFO = 0x1102,
-                   RESP_OK_CAPSET = 0x1103, RESP_ERR_UNSPEC = 0x1200, RESP_ERR_INVALID_SCANOUT_ID = 0x1202,
+                   RESP_OK_CAPSET = 0x1103, RESP_OK_MAP_INFO = 0x1106, RESP_ERR_UNSPEC = 0x1200,
+                   RESP_ERR_OUT_OF_MEMORY = 0x1201, RESP_ERR_INVALID_SCANOUT_ID = 0x1202,
                    RESP_ERR_INVALID_RESOURCE_ID = 0x1203, RESP_ERR_INVALID_PARAMETER = 0x1205;
-constexpr uint32_t FLAG_FENCE = 1;
+constexpr uint32_t FLAG_FENCE = 1, FLAG_INFO_RING_IDX = 2;
+constexpr uint32_t CAPSET_VENUS = 4;
+constexpr uint32_t BLOB_MEM_HOST3D = 2;
 constexpr size_t HDR = 24;
 constexpr unsigned MAX_SCANOUTS = 16;
-constexpr uint32_t CAPSETS[] = {1, 2};          // VIRTIO_GPU_CAPSET_VIRGL, _VIRGL2
+constexpr uint32_t CAPSETS[] = {1, 2, 4};       // VIRTIO_GPU_CAPSET_VIRGL, _VIRGL2, _VENUS
 constexpr uint32_t PIPE_TEXTURE_2D = 2, BIND_RENDER_TARGET = 1u << 1;
 constexpr uint32_t RESOURCE_FLAG_Y_0_TOP = 1;   // VIRTIO_GPU_RESOURCE_FLAG_Y_0_TOP, and virgl's info flag
 
@@ -65,7 +70,7 @@ VirglBackend *VirtioGpu::host()
 		backend_tried = true;
 		auto b = std::make_unique<VirglBackend>();
 		std::string error;
-		if (b->start(error)) backend = std::move(b);
+		if (b->start(error, venus)) backend = std::move(b);
 		else std::cout << "gpu: no 3D on this host: " << error << std::endl;
 	}
 	return backend.get();
@@ -89,9 +94,10 @@ void VirtioGpu::command_virgl(const std::vector<uint8_t> &in, std::vector<uint8_
 	} else switch (type) {
 	case CMD_GET_CAPSET_INFO: {
 		const uint32_t index = le32(in, 24);
-		if (index >= sizeof CAPSETS / sizeof CAPSETS[0]) { resp = RESP_ERR_INVALID_PARAMETER; break; }
+		if (index >= (venus ? 3u : 2u)) { resp = RESP_ERR_INVALID_PARAMETER; break; }
 		uint32_t max_ver = 0, max_size = 0;
-		v->get_cap_set(CAPSETS[index], &max_ver, &max_size);
+		if (CAPSETS[index] == CAPSET_VENUS) max_size = (uint32_t)v->venus_capset(nullptr);
+		else v->get_cap_set(CAPSETS[index], &max_ver, &max_size);
 		resp = RESP_OK_CAPSET_INFO;
 		put32(out, HDR, CAPSETS[index]);
 		put32(out, HDR + 4, max_ver);
@@ -102,11 +108,13 @@ void VirtioGpu::command_virgl(const std::vector<uint8_t> &in, std::vector<uint8_
 	case CMD_GET_CAPSET: {
 		const uint32_t id = le32(in, 24), version = le32(in, 28);
 		uint32_t max_ver = 0, max_size = 0;
-		v->get_cap_set(id, &max_ver, &max_size);
+		if (id == CAPSET_VENUS && venus) max_size = (uint32_t)v->venus_capset(nullptr);
+		else v->get_cap_set(id, &max_ver, &max_size);
 		if (!max_size || max_size > (1u << 20)) { resp = RESP_ERR_INVALID_PARAMETER; break; }
 		resp = RESP_OK_CAPSET;
 		out.resize(HDR + max_size, 0);
-		v->fill_caps(id, version, out.data() + HDR);
+		if (id == CAPSET_VENUS && venus) v->venus_capset(out.data() + HDR);
+		else v->fill_caps(id, version, out.data() + HDR);
 		break;
 	}
 	case CMD_RESOURCE_CREATE_2D:
@@ -143,6 +151,14 @@ void VirtioGpu::command_virgl(const std::vector<uint8_t> &in, std::vector<uint8_
 	}
 	case CMD_RESOURCE_UNREF: {
 		const uint32_t id = le32(in, 24);
+		const auto blob = venus_blobs.find(id);
+		if (blob != venus_blobs.end()) {
+			for (auto m = mappings.begin(); m != mappings.end();)
+				m = m->second.resource == id ? mappings.erase(m) : std::next(m);
+			v->venus_destroy_resource(blob->second.first, id);
+			venus_blobs.erase(blob);
+			break;
+		}
 		const auto it = std::find(virgl_resources.begin(), virgl_resources.end(), id);
 		if (it == virgl_resources.end()) { resp = RESP_ERR_INVALID_RESOURCE_ID; break; }
 		struct iovec *iov = nullptr;
@@ -254,25 +270,79 @@ void VirtioGpu::command_virgl(const std::vector<uint8_t> &in, std::vector<uint8_
 		const uint32_t nlen = std::min<uint32_t>(le32(in, 24), 64), init = le32(in, 28);
 		char name[65] = {};
 		if (in.size() >= 32 + nlen) std::memcpy(name, in.data() + 32, nlen);
+		if (venus && (init & 0xff) == CAPSET_VENUS) {
+			if (v->venus_create_context(ctx, init & 0xff, nlen, name)) venus_contexts.push_back(ctx);
+			else resp = RESP_ERR_UNSPEC;
+			break;
+		}
 		const int rc = init ? v->context_create_with_flags(ctx, init, nlen, name) : v->context_create(ctx, nlen, name);
 		if (rc != 0) resp = RESP_ERR_UNSPEC;
 		break;
 	}
 	case CMD_CTX_DESTROY:
-		v->context_destroy(ctx);
+		if (is_venus_context(ctx)) {
+			v->venus_step();   // anything it left running finishes first
+			v->venus_destroy_context(ctx);
+			venus_contexts.erase(std::find(venus_contexts.begin(), venus_contexts.end(), ctx));
+		} else {
+			v->context_destroy(ctx);
+		}
 		break;
 	case CMD_CTX_ATTACH_RESOURCE:
-		v->ctx_attach_resource((int)ctx, (int)le32(in, 24));
+		if (!is_venus_context(ctx)) v->ctx_attach_resource((int)ctx, (int)le32(in, 24));
 		break;
 	case CMD_CTX_DETACH_RESOURCE:
-		v->ctx_detach_resource((int)ctx, (int)le32(in, 24));
+		if (!is_venus_context(ctx)) v->ctx_detach_resource((int)ctx, (int)le32(in, 24));
 		break;
+	case CMD_RESOURCE_CREATE_BLOB: {
+		// resource_id, blob_mem, blob_flags, nr_entries, blob_id, size.
+		// Venus's: shared memory (blob_id 0) or a VkDeviceMemory, on the host.
+		const uint32_t id = le32(in, 24), blob_mem = le32(in, 28), flags = le32(in, 32);
+		const uint64_t blob_id = le64(in, 40), size = le64(in, 48);
+		uint32_t map_info = 0;
+		if (!is_venus_context(ctx) || blob_mem != BLOB_MEM_HOST3D) { resp = RESP_ERR_INVALID_PARAMETER; break; }
+		if (!id || venus_blobs.count(id)) { resp = RESP_ERR_INVALID_RESOURCE_ID; break; }
+		if (!v->venus_create_resource(ctx, id, blob_id, size, flags, &map_info)) { resp = RESP_ERR_OUT_OF_MEMORY; break; }
+		venus_blobs[id] = {ctx, map_info};
+		break;
+	}
+	case CMD_RESOURCE_MAP_BLOB: {
+		// resource_id, padding, offset in the host-memory window.
+		const uint32_t id = le32(in, 24);
+		const uint64_t offset = le64(in, 32);
+		const auto blob = venus_blobs.find(id);
+		void *ptr = nullptr;
+		uint64_t size = 0;
+		if (blob == venus_blobs.end() || !v->venus_map_resource(blob->second.first, id, &ptr, &size)) {
+			resp = RESP_ERR_INVALID_RESOURCE_ID;
+			break;
+		}
+		if (offset > HOSTMEM_SIZE || size > HOSTMEM_SIZE - offset) { resp = RESP_ERR_INVALID_PARAMETER; break; }
+		mappings[offset] = {(uint8_t *)ptr, size, id};
+		resp = RESP_OK_MAP_INFO;
+		put32(out, HDR, blob->second.second);
+		put32(out, HDR + 4, 0);
+		break;
+	}
+	case CMD_RESOURCE_UNMAP_BLOB: {
+		const uint32_t id = le32(in, 24);
+		for (auto m = mappings.begin(); m != mappings.end();)
+			m = m->second.resource == id ? mappings.erase(m) : std::next(m);
+		break;
+	}
 	case CMD_SUBMIT_3D: {
 		const uint32_t size = le32(in, 24);
 		if (size % 4 || 32 + (uint64_t)size > in.size()) { resp = RESP_ERR_INVALID_PARAMETER; break; }
 		std::vector<uint32_t> cmds(size / 4);   // aligned, as virglrenderer wants
 		std::memcpy(cmds.data(), in.data() + 32, size);
-		if (v->submit_cmd(cmds.data(), (int)ctx, (int)(size / 4)) != 0) resp = RESP_ERR_INVALID_PARAMETER;
+		if (is_venus_context(ctx)) {
+			if (!v->venus_submit_cmd(ctx, cmds.data(), size)) resp = RESP_ERR_INVALID_PARAMETER;
+			// A notify of a ring, or a command that waits on one: whatever it
+			// started is run and finished now, at this instruction.
+			v->venus_step();
+		} else if (v->submit_cmd(cmds.data(), (int)ctx, (int)(size / 4)) != 0) {
+			resp = RESP_ERR_INVALID_PARAMETER;
+		}
 		break;
 	}
 	default:
@@ -283,12 +353,40 @@ void VirtioGpu::command_virgl(const std::vector<uint8_t> &in, std::vector<uint8_
 	put32(out, 0, resp);
 	const uint32_t flags = le32(in, 4);
 	if (flags & FLAG_FENCE) {
-		// Fenced: answered once the host GPU has done everything so far.
-		if (v) v->finish(0);
-		put32(out, 4, FLAG_FENCE);
+		// Fenced: answered once the host GPU has done everything so far. A
+		// Venus fence on a ring is retired by Venus, inside the call.
+		const uint32_t ring_idx = in.size() > 20 ? in[20] : 0;
+		if (v && is_venus_context(ctx) && (flags & FLAG_INFO_RING_IDX)) {
+			v->venus_step();
+			v->venus_submit_fence(ctx, 0, ring_idx, le64(in, 8));
+		} else if (v) {
+			v->finish(0);
+		}
+		put32(out, 4, flags & (FLAG_FENCE | FLAG_INFO_RING_IDX));
 		std::memcpy(out.data() + 8, in.data() + 8, 8);
 		std::memcpy(out.data() + 16, in.data() + 16, 4);
+		out[20] = (uint8_t)ring_idx;
 	}
+}
+
+bool VirtioGpu::is_venus_context(uint32_t ctx) const
+{
+	return venus && std::find(venus_contexts.begin(), venus_contexts.end(), ctx) != venus_contexts.end();
+}
+
+uint8_t *VirtioGpu::hostmem(uint64_t offset, uint64_t len) const
+{
+	auto it = mappings.upper_bound(offset);
+	if (it == mappings.begin()) return nullptr;
+	--it;
+	const uint64_t into = offset - it->first;
+	if (into >= it->second.size || len > it->second.size - into) return nullptr;
+	return it->second.ptr + into;
+}
+
+void VirtioGpu::step()
+{
+	if (backend) backend->venus_step();
 }
 
 // The scanout's resource, read back from the host GPU into the window's

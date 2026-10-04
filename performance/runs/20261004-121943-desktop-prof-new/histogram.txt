@@ -1,0 +1,11 @@
+desktop, 3,000,000,000 steps, 243.544 MIPS while sampled (sampling every 2 ms slows the run a little)
+
+ samples  share  function
+
+    7681  83.7%  ##################################################  [ntdll.dll]
+    1399  15.2%  #########  _ZNKSt3__111__copy_implclB9nqe230101INS_19istreambuf_iteratorIcNS_11char_traitsIcEEEES5_NS_19ostreambuf_iteratorIcS4_EETnNS_9enable_ifIXntsr23__specialized_algorithmINS_10_Algorithm6__copyENS_15__iterator_pairIT_T0_EENS_17__single_iteratorIT1_EEEE15__has_algorithmEiE4typeELi0EEENS_15__in_out_resultISC_SG_EESC_SD_SG_
+      89   1.0%  #  [msvcrt.dll]
+       5   0.1%  #  [KERNELBASE.dll]
+       2   0.0%  #  __guard_dispatch_icall_dummy
+
+9176 samples

@@ -2142,6 +2142,7 @@ void DoomSystem::service_input(uint64_t now)
 		}
 		service_network(now);
 		service_sound(now);
+		memory.get_gpu().tick();
 		memory.get_rtc().poll(memory.get_timer().get_mtime(), memory.get_aplic());
 		memory.pump_input();
 		return;
@@ -2180,6 +2181,7 @@ void DoomSystem::service_input(uint64_t now)
 
 	service_network(now);
 	service_sound(now);
+	memory.get_gpu().tick();
 	memory.get_rtc().poll(memory.get_timer().get_mtime(), memory.get_aplic());
 	if (record_dirty) {
 		std::fflush(record_file);
@@ -2222,6 +2224,13 @@ void DoomSystem::wire_gpu_log()
 {
 	VirtioGpu &gpu = memory.get_gpu();
 	if (!gpu.is_virgl()) return;
+	// Venus's results reach the guest through shared memory, not responses;
+	// -record does not take them down yet, so its log would not replay.
+	if (gpu.is_venus()) {
+		if (record_file)
+			std::cout << "gpu: -record does not cover -gpu=venus yet; this log will not replay" << std::endl;
+		return;
+	}
 	if (replaying) {
 		gpu.replay_result = [this](std::vector<uint8_t> &response, VirtioGpu::Writes &writes) {
 			if (replay_gpu_pos >= replay_gpu.size()) return false;

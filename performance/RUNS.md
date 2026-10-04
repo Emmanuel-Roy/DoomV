@@ -430,3 +430,25 @@ and nothing else.
 | 20261003-183919 | doom 1000M | virtio-gpu | a9cca10+ | 292.84 | 3.4 | `3d73dac132f3` |  |
 | 20261003-183923 | desktop 3000M | virtio-gpu | a9cca10+ | 249.91 | 12.0 | `35c61483d5e3` |  |
 | 20261003-183949 | desktop 3000M | virtio-gpu | a9cca10+ | 251.50 | 11.9 | `35c61483d5e3` |  |
+| 20261004-121047 | doom 1000M | venus | 8375cc9+ | 288.06 | 3.5 | `3d73dac132f3` |  |
+| 20261004-121051 | desktop 3000M | venus | 8375cc9+ | 241.41 | 12.4 | `35c61483d5e3` |  |
+| 20261004-121121 | desktop 3000M | venus | 8375cc9+ | 243.66 | 12.3 | `35c61483d5e3` |  |
+| 20261004-121154 | desktop 3000M | venus | 8375cc9+ | 241.00 | 12.4 | `35c61483d5e3` |  |
+| 20261004-121217 | desktop 3000M | venus | 8375cc9+ | 244.08 | 12.3 | `35c61483d5e3` |  |
+| 20261004-121242 | doom 1000M | venus | 8375cc9+ | 294.80 | 3.4 | `3d73dac132f3` |  |
+| 20261004-121433 | desktop 3000M | venus (reference) | 8375cc9+ | 246.95 | 12.1 | `35c61483d5e3` |  |
+| 20261004-121458 | desktop 3000M | venus | 8375cc9+ | 240.87 | 12.5 | `35c61483d5e3` |  |
+| 20261004-121521 | desktop 3000M | venus (reference) | 8375cc9+ | 250.42 | 12.0 | `35c61483d5e3` |  |
+| 20261004-121544 | desktop 3000M | venus | 8375cc9+ | 240.36 | 12.5 | `35c61483d5e3` |  |
+| 20261004-121608 | doom 1000M | venus (reference) | 8375cc9+ | 293.68 | 3.4 | `3d73dac132f3` |  |
+| 20261004-121611 | doom 1000M | venus | 8375cc9+ | 294.41 | 3.4 | `3d73dac132f3` |  |
+| 20261004-121803 | desktop 3000M | venus (reference) | 8375cc9+ | 250.09 | 12.0 | `35c61483d5e3` |  |
+| 20261004-121826 | desktop 3000M | venus | 8375cc9+ | 242.34 | 12.4 | `35c61483d5e3` |  |
+| 20261004-121850 | desktop 3000M | venus (reference) | 8375cc9+ | 250.79 | 12.0 | `35c61483d5e3` |  |
+| 20261004-121913 | desktop 3000M | venus | 8375cc9+ | 242.47 | 12.4 | `35c61483d5e3` |  |
+| 20261004-121943 | desktop 3000M | prof-new | 8375cc9+ | 243.54 | 12.3 | `35c61483d5e3` | [histogram](runs/20261004-121943-desktop-prof-new/histogram.txt) |
+| 20261004-122006 | desktop 3000M | prof-base | 8375cc9+ | 251.67 | 11.9 | `35c61483d5e3` | [histogram](runs/20261004-122006-desktop-prof-base/histogram.txt) |
+| 20261004-122218 | desktop 3000M | venus inline tick (reference) | 8375cc9+ | 248.86 | 12.1 | `35c61483d5e3` |  |
+| 20261004-122241 | desktop 3000M | venus inline tick | 8375cc9+ | 248.73 | 12.1 | `35c61483d5e3` |  |
+| 20261004-122304 | desktop 3000M | venus inline tick (reference) | 8375cc9+ | 251.00 | 12.0 | `35c61483d5e3` |  |
+| 20261004-122327 | desktop 3000M | venus inline tick | 8375cc9+ | 246.49 | 12.2 | `35c61483d5e3` |  |

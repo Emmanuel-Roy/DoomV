@@ -10,6 +10,7 @@ wsl --install -d Ubuntu                                                      # o
 powershell -ExecutionPolicy Bypass -File scripts/toolchain.ps1               # RISC-V tools in WSL
 python scripts/get_clang.py                                                  # optional: a faster build
 python scripts/get_virgl.py                                                  # optional: 3D for --gpu virgl
+python scripts/get_venus.py                                                  # optional: Vulkan for --gpu venus (builds)
 ```
 
 ## Boot a guest
@@ -30,7 +31,7 @@ to exit. `python scripts/boot.py <guest> --help` lists everything a guest takes.
 | `--ram 4G` | Guest memory (default 1G). DOOM is capped near 2G. |
 | `--harts 4` | CPUs, 1 to 4095 (Linux and Ubuntu). The device tree is made to match. |
 | `--net` | A network card (Linux and Ubuntu); the guest reaches the internet through the host. |
-| `--gpu [virgl]` | The display through a virtio-gpu (Linux and Ubuntu), in place of the simple framebuffer. `--gpu virgl` adds 3D: the guest's OpenGL on this computer's GPU (fetches virglrenderer the first time). |
+| `--gpu [virgl\|venus]` | The display through a virtio-gpu (Linux and Ubuntu), in place of the simple framebuffer. `--gpu virgl` adds the guest's OpenGL on this computer's GPU, `--gpu venus` OpenGL and Vulkan (fetched or built the first time). |
 | `--no-sound` | No sound card. By default Linux and Ubuntu play and record through this computer's default devices. |
 | `--headless` | No window; output goes to the console. |
 | `--no-build` | Use what is already built. |

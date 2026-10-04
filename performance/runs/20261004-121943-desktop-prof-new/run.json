@@ -1,0 +1,39 @@
+{
+  "time": "20261004-121943",
+  "label": "prof-new",
+  "workload": "desktop",
+  "steps": 3000000000,
+  "seconds": 12.318,
+  "restore_seconds": 11.181,
+  "mips": 243.544,
+  "crash_log_sha256": "35c61483d5e347339025c4b3e2817c873db128f67b25b730530f79f52c958898",
+  "exe": "Z:\\Code\\Dev\\DoomV\\riscv_doom.exe",
+  "exe_sha256": "0480ac9a7cbef6dd89b59eca7783ff5976862e74b1f6aee99b3486360f00dd47",
+  "commit": "8375cc9",
+  "dirty": true,
+  "host": "AMD64 Family 25 Model 97 Stepping 2, AuthenticAMD / Windows 10",
+  "profiled": true,
+  "samples": 9176,
+  "top": [
+    [
+      "[ntdll.dll]",
+      7681
+    ],
+    [
+      "_ZNKSt3__111__copy_implclB9nqe230101INS_19istreambuf_iteratorIcNS_11char_traitsIcEEEES5_NS_19ostreambuf_iteratorIcS4_EETnNS_9enable_ifIXntsr23__specialized_algorithmINS_10_Algorithm6__copyENS_15__iterator_pairIT_T0_EENS_17__single_iteratorIT1_EEEE15__has_algorithmEiE4typeELi0EEENS_15__in_out_resultISC_SG_EESC_SD_SG_",
+      1399
+    ],
+    [
+      "[msvcrt.dll]",
+      89
+    ],
+    [
+      "[KERNELBASE.dll]",
+      5
+    ],
+    [
+      "__guard_dispatch_icall_dummy",
+      2
+    ]
+  ]
+}

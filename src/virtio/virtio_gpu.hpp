@@ -25,8 +25,17 @@
 // every response, and every byte a read-back writes into guest memory, is a
 // result that -record logs and -replay hands back with no GPU at all.
 //
-// Not offered: blob resources, EDID. The cursor queue is taken and
-// acknowledged; the pointer is drawn by the guest, as it is without the GPU.
+// With -gpu=venus it is that and Vulkan too: Venus contexts (CONTEXT_INIT,
+// capset 4), whose command rings live in shared memory the guest maps
+// through blob resources (RESOURCE_BLOB) placed in a host-memory window in
+// guest physical space. DoomV's build of virglrenderer runs Venus with no
+// threads of its own (scripts/get_venus.py): rings are run, GPU work waited
+// for and fences retired only inside step(), which runs at each notify and
+// each input point -- so the host only ever writes that memory while the
+// guest is stopped at an instruction that is the same every run.
+//
+// Not offered: EDID. The cursor queue is taken and acknowledged; the
+// pointer is drawn by the guest, as it is without the GPU.
 #include "virtio_mmio.hpp"
 #include "virgl_backend.hpp"
 #include <atomic>
@@ -57,6 +66,21 @@ public:
 	// -gpu=virgl: 3D as well, through the host GPU.
 	void set_virgl(bool on) { virgl = on; }
 	bool is_virgl() const { return virgl; }
+	// -gpu=venus: virgl and Venus (Vulkan) both.
+	void set_venus(bool on) { venus = on; virgl = virgl || on; }
+	bool is_venus() const { return venus; }
+
+	// The host-memory window: where mapped blobs appear in guest physical
+	// memory (VIRTIO_GPU_SHM_ID_HOST_VISIBLE), above any RAM -size -ram allows.
+	static constexpr uint64_t HOSTMEM_BASE = 0x1000000000ull;   // 64GB
+	static constexpr uint64_t HOSTMEM_SIZE = 0x100000000ull;    // 4GB
+	// The host bytes behind [offset, offset + len) of the window, or null
+	// where nothing is mapped.
+	uint8_t *hostmem(uint64_t offset, uint64_t len) const;
+	// Venus's step: run what the rings hold and let the GPU finish. At the
+	// input points; a notify runs it itself. Inline, since the input points
+	// are frequent and it is almost always off.
+	void tick() { if (venus) step(); }
 
 	// In 3D mode, a command's result -- the response, and what it wrote
 	// into guest memory, as (address, bytes) -- is an input. on_result sees
@@ -81,15 +105,29 @@ private:
 	};
 
 	bool present() const override { return enabled; }
-	// Word 0 bit 0: VIRTIO_GPU_F_VIRGL, in 3D mode. Word 1: VERSION_1.
-	uint32_t features(uint32_t sel) const override { return sel == 0 ? (virgl ? 1u : 0u) : sel == 1 ? 1u : 0u; }
+	// Word 0: bit 0 VIRTIO_GPU_F_VIRGL in 3D mode; with Venus, bit 3
+	// RESOURCE_BLOB and bit 4 CONTEXT_INIT. Word 1: VERSION_1.
+	uint32_t features(uint32_t sel) const override
+	{
+		if (sel == 1) return 1u;
+		if (sel != 0) return 0;
+		return (virgl ? 1u : 0u) | (venus ? (1u << 3) | (1u << 4) : 0u);
+	}
 	// struct virtio_gpu_config: events_read, events_clear, num_scanouts,
 	// num_capsets. One scanout, no events; in 3D mode the two virgl
-	// capability sets -- named whether or not the host can supply them, so
-	// that what the guest negotiates does not depend on the host.
+	// capability sets, and Venus's with it -- named whether or not the host
+	// can supply them, so that what the guest negotiates does not depend on
+	// the host.
 	uint8_t config_read8(uint64_t offset) const override
 	{
-		return offset == 8 ? 1 : offset == 12 ? (virgl ? 2 : 0) : 0;
+		return offset == 8 ? 1 : offset == 12 ? (venus ? 3 : virgl ? 2 : 0) : 0;
+	}
+	bool shm_region(uint32_t id, uint64_t &base, uint64_t &len) const override
+	{
+		if (!venus || id != 1) return false;   // VIRTIO_GPU_SHM_ID_HOST_VISIBLE
+		base = HOSTMEM_BASE;
+		len = HOSTMEM_SIZE;
+		return true;
 	}
 	void notify(unsigned q, Memory &mem, Aplic &aplic) override;
 	void reset() override;
@@ -117,6 +155,15 @@ private:
 	const uint32_t width, height;   // the scanout: Memory::LFB_W x LFB_H
 	bool enabled = false;
 	bool virgl = false;
+	bool venus = false;
+	// Venus: its contexts, its resources (which context, how mapped), and
+	// what is mapped where in the host-memory window.
+	std::vector<uint32_t> venus_contexts;
+	std::map<uint32_t, std::pair<uint32_t, uint32_t>> venus_blobs;   // resource: context, map_info
+	struct Mapping { uint8_t *ptr; uint64_t size; uint32_t resource; };
+	std::map<uint64_t, Mapping> mappings;                            // by offset in the window
+	bool is_venus_context(uint32_t ctx) const;
+	void step();
 	std::unique_ptr<VirglBackend> backend;
 	bool backend_tried = false;
 	std::map<uint32_t, Backing> backings;

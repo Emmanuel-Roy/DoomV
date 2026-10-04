@@ -76,6 +76,13 @@ void VirtioGpu::reset()
 			backend->resource_unref(id);
 		}
 	}
+	if (backend && venus) {
+		for (const auto &[id, blob] : venus_blobs) backend->venus_destroy_resource(blob.first, id);
+		for (uint32_t ctx : venus_contexts) backend->venus_destroy_context(ctx);
+	}
+	venus_blobs.clear();
+	venus_contexts.clear();
+	mappings.clear();
 	virgl_resources.clear();
 	backings.clear();
 	resources.clear();

@@ -22,12 +22,16 @@ uint32_t VirtioMmio::read32(uint64_t offset) const
 	case REG_INTERRUPT_STAT: return interrupt_status;
 	case REG_STATUS:         return status;
 	case REG_CONFIG_GEN:     return 0;
-	// No device here has shared memory regions. "None" is a length of all
-	// ones; zero would be a region of no size at address 0, and the GPU
-	// driver fails its probe trying to reserve it.
+	// A region the device does not have is a length of all ones; zero would
+	// be a region of no size at address 0, and the GPU driver fails its probe
+	// trying to reserve it.
 	case REG_SHM_LEN_LO: case REG_SHM_LEN_HI:
-	case REG_SHM_BASE_LO: case REG_SHM_BASE_HI:
-		return 0xFFFFFFFFu;
+	case REG_SHM_BASE_LO: case REG_SHM_BASE_HI: {
+		uint64_t base = 0, len = 0;
+		if (!shm_region(shm_sel, base, len)) return 0xFFFFFFFFu;
+		const uint64_t v = (offset == REG_SHM_LEN_LO || offset == REG_SHM_LEN_HI) ? len : base;
+		return (offset == REG_SHM_LEN_LO || offset == REG_SHM_BASE_LO) ? (uint32_t)v : (uint32_t)(v >> 32);
+	}
 	default:
 		if (offset >= REG_CONFIG) {
 			uint32_t v = 0;
@@ -53,6 +57,7 @@ void VirtioMmio::write32(uint64_t offset, uint32_t value, Memory &mem, Aplic &ap
 	case REG_DRIVER_FEAT_SEL: driver_feat_sel = value; return;
 	case REG_DRIVER_FEAT:     if (driver_feat_sel < 2) driver_feat[driver_feat_sel] = value; return;
 	case REG_QUEUE_SEL:       queue_sel = value; return;
+	case REG_SHM_SEL:         shm_sel = value; return;
 	case REG_QUEUE_NUM:       if (q) q->num = value; return;
 	case REG_QUEUE_READY:     if (q) q->ready = value; return;
 	case REG_QUEUE_DESC_LO:   if (q) low(q->desc); return;

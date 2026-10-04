@@ -37,8 +37,24 @@ public:
 	// Loads virglrenderer and makes the first context. False, with the reason
 	// in `error`, if either cannot be done; the GPU then answers every 3D
 	// command with an error, as a host without the hardware would.
-	bool start(std::string &error);
+	//
+	// With `venus`, the build of build/venus/ instead (scripts/get_venus.py):
+	// virglrenderer with DoomV's synchronous Venus, whose entry points below
+	// are then set too.
+	bool start(std::string &error, bool venus = false);
 	bool started() const { return ready; }
+
+	// Venus, in this process and on this thread (virglrenderer.h's
+	// virgl_doomv_venus_*). Null without it.
+	size_t (*venus_capset)(void *) = nullptr;
+	bool (*venus_create_context)(uint32_t, uint32_t, uint32_t, const char *) = nullptr;
+	void (*venus_destroy_context)(uint32_t) = nullptr;
+	bool (*venus_submit_cmd)(uint32_t, void *, uint32_t) = nullptr;
+	bool (*venus_submit_fence)(uint32_t, uint32_t, uint32_t, uint64_t) = nullptr;
+	bool (*venus_create_resource)(uint32_t, uint32_t, uint64_t, uint64_t, uint32_t, uint32_t *) = nullptr;
+	bool (*venus_map_resource)(uint32_t, uint32_t, void **, uint64_t *) = nullptr;
+	void (*venus_destroy_resource)(uint32_t, uint32_t) = nullptr;
+	void (*venus_step)() = nullptr;
 
 	// virglrenderer's own functions, resolved from the DLL.
 	int (*resource_create)(VirglResourceArgs *, struct iovec *, uint32_t) = nullptr;

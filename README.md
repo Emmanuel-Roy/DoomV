@@ -8,7 +8,7 @@ decoder, a register file, a memory bus, and the RVA23S64 profile (RV64GCV
 plus the extensions below, and H), with the handful of devices a
 distribution needs on top: AIA interrupt controllers, a framebuffer, a
 real-time clock, and virtio disks, keyboard and mouse, network card, sound
-card, GPU (2D, or 3D through the host's GPU), and a 9P folder shared with Windows.
+card, GPU (2D, or OpenGL and Vulkan through the host's GPU), and a 9P folder shared with Windows.
 
 <img width="1920" height="1080" alt="DOOM E1M1 running on DoomV, with the register file and trace log beside it" src="docs/images/doomv-hero.png" />
 
@@ -526,7 +526,7 @@ riscv_doom.exe -opensbi=<f> -kernel=<f> -dtb=<f> -initrd=<f> [options]   # Linux
 | `-lockstep=<path>` | Run against a reference trace -- Sail's, or an RTL simulation's -- and halt at the first record that does not match. See [Lock-stepping](#lockstep). |
 | `-lockstep-strict` | With `-lockstep`, compare everything, counters, time and interrupt timing included, and take nothing from the reference. How DoomV is held to Sail. |
 | `-net` | A network card, with user-mode NAT behind it: the guest reaches the internet through the host. See [Networking](#networking). |
-| `-gpu`, `-gpu=virgl` | A virtio-gpu for a Linux guest's display, in place of the simple framebuffer; `=virgl` adds 3D, the guest's OpenGL run on the host GPU. See [GPU](#gpu). |
+| `-gpu`, `-gpu=virgl`, `-gpu=venus` | A virtio-gpu for a Linux guest's display, in place of the simple framebuffer; `=virgl` adds the guest's OpenGL on the host GPU, `=venus` OpenGL and Vulkan. See [GPU](#gpu). |
 | `-snd` | A sound card, playing through the host's default output and recording from its default input. See [Sound](#sound). |
 | `-rtc=host` or `-rtc=<seconds>` | Where the guest's clock starts: the host's time, read once at start, or seconds since 1970. Without it, 2026-01-01, so a run repeats exactly. The boot scripts pass `host`. See [The clock](#clock). |
 | `-harts=<n>` | A machine of `n` identical harts (default 1), each starting at the entry with `a0` = its hart id. They take turns a step at a time, so a run is as deterministic as with one. See [Several harts](#harts). |
@@ -764,6 +764,25 @@ The picture is read back from the host GPU into a buffer only the window and
 `-fbdump` see. The host GPU's state cannot be saved, so a snapshot is refused
 in this mode. X still draws through `/dev/fb0` in software; the GPU is for
 programs that use OpenGL or EGL themselves.
+
+`-gpu=venus` (`--gpu venus`) adds Vulkan: Mesa's Venus driver in the guest
+sees `Virtio-GPU Venus (<your GPU>)`, and its commands run on the host GPU.
+Venus normally runs on threads of its own, which read the guest's command
+rings and write results into memory the guest shares, whenever they get to
+it -- the guest would see GPU results at instructions that depend on host
+timing. DoomV's build runs it with no threads at all
+([tools/venus/](tools/venus/README.md)): the rings are run, the GPU waited
+for and fences retired only at a notify or an input point, so all of that
+lands at the same instruction on every run. Two runs doing the same GPU work
+end in identical machine state. `-record` and `-replay` do not cover it yet,
+nor do snapshots; Vulkan programs work, presenting to the X desktop does not
+yet (that needs DRI3).
+
+```
+python scripts/boot.py ubuntu --gpu venus     # builds tools/venus the first time
+# in the guest (apt install mesa-vulkan-drivers vulkan-tools):
+vulkaninfo --summary                          # Virtio-GPU Venus (<your GPU>)
+```
 
 <a id="sound"></a>
 ### Sound
