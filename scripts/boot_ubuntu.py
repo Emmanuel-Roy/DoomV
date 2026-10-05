@@ -342,12 +342,11 @@ def desktop_snapshot_command(image: Path, snapshot: Path, args, passthrough):
                            "    python performance/make_desktop_snapshot.py")
     changed = [name for name in ("ram", "march", "restore", "drives", "shared")
                if getattr(args, name) not in (None, "")] + (["harts"] if args.harts != 1 else []) \
-              + (["net"] if args.net else []) + (["gpu"] if args.gpu else [])
+              + [name for name in ("net", "gpu", "sound") if getattr(args, name)]
     if changed:
         raise RuntimeError("--desktop-snapshot restores the machine the snapshot was made on; "
                            "it cannot take --" + ", --".join(changed))
     args.drives, args.shared = "", ""
-    args.sound = False   # the snapshot predates the sound card
     return ubuntu_command(image, boot_args(args, passthrough), dtb="ubuntu-xfce.dtb",
                           extra=[f"-restore={snapshot}"])
 
@@ -410,7 +409,8 @@ def main():
                 print("Browse with: python scripts/boot.py ubuntu --net --desktop openbox, then in its "
                       "terminal: netsurf https://en.wikipedia.org &   (or w3m <url>, in any shell)")
             if args.setup_sound:
-                print("Test with: speaker-test -c 2 -t wav -l 1   (play)   "
+                print("Test with: python scripts/boot.py ubuntu --sound, then in it: "
+                      "speaker-test -c 2 -t wav -l 1   (play)   "
                       "arecord -d 5 a.wav && aplay a.wav   (record, then play back)")
             if args.setup_gpu:
                 print("Try it: python scripts/boot.py ubuntu --gpu --desktop openbox, then in its terminal: "

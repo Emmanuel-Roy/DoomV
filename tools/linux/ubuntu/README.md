@@ -206,12 +206,12 @@ python scripts/boot.py ubuntu --setup-network
 framebuffer; X's configuration needs no change, since the GPU's DRM driver
 provides `/dev/fb0` too.
 
-**Sound.** Ubuntu boots with a sound card unless given `--no-sound`. The
+**Sound.** Ubuntu boots with a sound card when given `--sound`. The
 image has no ALSA tools; `--setup-sound` installs them (the same way as the
 browser, below):
 
 ```
-python scripts/boot.py ubuntu --setup-sound      # then: speaker-test -c 2 -t wav -l 1
+python scripts/boot.py ubuntu --setup-sound      # then boot with --sound: speaker-test -c 2 -t wav -l 1
 ```
 
 **A browser.** `--setup-browser` does the above, then boots the image with the

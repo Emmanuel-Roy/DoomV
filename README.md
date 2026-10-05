@@ -809,12 +809,12 @@ vulkaninfo --summary                          # Virtio-GPU Venus (<your GPU>)
 `-snd` gives a Linux guest a virtio-snd card with one output and one input
 stream, played through the host's default speakers and recorded from its
 default microphone -- whatever Windows has selected. The boot scripts add it
-for Linux and Ubuntu unless given `--no-sound`. The microphone is opened only
+for Linux and Ubuntu when given `--sound`. The microphone is opened only
 while the guest records, and closed again after.
 
 ```
 python scripts/boot.py ubuntu --setup-sound   # once: aplay, arecord, speaker-test
-python scripts/boot.py ubuntu                 # then, in the guest:
+python scripts/boot.py ubuntu --sound         # then, in the guest:
 speaker-test -c 2 -t wav -l 1                 #   play
 arecord -d 5 a.wav && aplay a.wav             #   record, and play it back
 ```

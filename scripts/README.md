@@ -32,7 +32,7 @@ to exit. `python scripts/boot.py <guest> --help` lists everything a guest takes.
 | `--harts 4` | CPUs, 1 to 4095 (Linux and Ubuntu). The device tree is made to match. |
 | `--net` | A network card (Linux and Ubuntu); the guest reaches the internet through the host. |
 | `--gpu [2d]` | A virtio-gpu (Linux and Ubuntu) in place of the simple framebuffer, with OpenGL and Vulkan on this computer's GPU; the guest picks per program (built the first time). `--gpu 2d`: the display alone. |
-| `--no-sound` | No sound card. By default Linux and Ubuntu play and record through this computer's default devices. |
+| `--sound` | A sound card (Linux and Ubuntu), playing and recording through this computer's default devices. |
 | `--headless` | No window; output goes to the console. |
 | `--no-build` | Use what is already built. |
 

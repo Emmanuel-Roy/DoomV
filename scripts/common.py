@@ -106,8 +106,8 @@ def add_boot_options(parser, linux=True):
         g.add_argument("--gpu", nargs="?", const="all", choices=("all", "2d", "virgl"), metavar="2d",
                        help="a virtio-gpu, with OpenGL and Vulkan on this computer's GPU; the guest picks what "
                             "each program uses. --gpu 2d: the display alone")
-        g.add_argument("--no-sound", dest="sound", action="store_false",
-                       help="no sound card (by default the guest plays and records through this computer's)")
+        g.add_argument("--sound", action="store_true",
+                       help="a sound card; the guest plays and records through this computer's")
     g.add_argument("--headless", action="store_true", help="no window; output goes to this console")
     g.add_argument("--no-build", action="store_true", help="skip the build; use what is already built")
 
