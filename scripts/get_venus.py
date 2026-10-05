@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build the virglrenderer that -gpu=venus loads: Vulkan in the guest, on the host GPU.
+"""Build the virglrenderer that -gpu loads: OpenGL and Vulkan in the guest, on the host GPU.
 
 There is no prebuilt one. Venus on Windows comes from winq-emu's fork of
 virglrenderer (MIT), and DoomV runs it in a mode the fork does not have --

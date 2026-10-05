@@ -99,7 +99,7 @@ int main(int argc, char *argv[])
 	bool network = false;
 	bool have_rtc = false;
 	bool sound = false;
-	bool gpu = false, virgl = false, venus = false;
+	bool gpu = false;
 	uint64_t rtc_epoch = 0;
 	for (int i = 1; i < argc; i++) {
 		std::string arg = argv[i];
@@ -137,16 +137,12 @@ int main(int argc, char *argv[])
 			// A network card, with user-mode NAT behind it: the guest gets
 			// 10.0.2.15 by DHCP and reaches the outside through host sockets.
 			network = true;
-		} else if (arg == "-gpu" || arg == "-gpu=2d" || arg == "-gpu=virgl" || arg == "-gpu=venus") {
+		} else if (arg == "-gpu") {
 			// A virtio-gpu in place of the simple-framebuffer: Linux draws
 			// through its DRM driver, and the window shows the scanout. All of
-			// it by default -- 2D, OpenGL (virgl) and Vulkan (Venus) -- and the
-			// guest's Mesa picks what each program uses. =2d is the display
-			// alone; =virgl leaves out Vulkan; =venus is the default spelled
-			// out.
+			// it at once -- 2D, OpenGL (virgl) and Vulkan (Venus) -- and the
+			// guest's Mesa picks what each program uses.
 			gpu = true;
-			virgl = arg != "-gpu=2d";
-			venus = arg == "-gpu" || arg == "-gpu=venus";
 		} else if (arg == "-snd") {
 			// A sound card, playing through and recording from the host's
 			// default audio devices.
@@ -297,7 +293,7 @@ int main(int argc, char *argv[])
 		std::cout << "cannot open disk image: " << disk_path << "\n";
 		return -1;
 	}
-	if (gpu) system.set_gpu(virgl, venus);
+	if (gpu) system.set_gpu();
 	if (linux_boot) {
 		if (!system.init_linux_boot(opensbi_path.c_str(), kernel_path.c_str(), dtb_path.c_str(), initrd_path.c_str())) {
 			return -1;

@@ -94,12 +94,7 @@ public:
 	void set_sound();
 	// -gpu: a virtio-gpu in place of the simple-framebuffer. Before
 	// init_linux_boot, which takes the framebuffer out of the device tree.
-	void set_gpu(bool virgl, bool venus)
-	{
-		memory.get_gpu().set_enabled(true);
-		memory.get_gpu().set_virgl(virgl);
-		memory.get_gpu().set_venus(venus);
-	}
+	void set_gpu() { memory.get_gpu().set_enabled(true); }
 	// In 3D mode, the GPU's results are inputs: logged by -record, supplied
 	// by -replay. After both are set up.
 	void wire_gpu_log();

@@ -337,7 +337,7 @@ src/
     virtio_net.*           the network card
     virtio_snd.*           the sound card
     virtio_gpu.*           the GPU: the display through Linux's DRM driver
-    virtio_gpu_virgl.cpp   its 3D commands, for -gpu=virgl
+    virtio_gpu_virgl.cpp   its 3D commands: OpenGL (virgl) and Vulkan (Venus)
     virgl_backend.*        virglrenderer and the WGL contexts it draws with
   net/usernet.*          user-mode NAT behind the network card
   audio/host_audio.*     the host's default speakers and microphone, behind the sound card
@@ -526,7 +526,7 @@ riscv_doom.exe -opensbi=<f> -kernel=<f> -dtb=<f> -initrd=<f> [options]   # Linux
 | `-lockstep=<path>` | Run against a reference trace -- Sail's, or an RTL simulation's -- and halt at the first record that does not match. See [Lock-stepping](#lockstep). |
 | `-lockstep-strict` | With `-lockstep`, compare everything, counters, time and interrupt timing included, and take nothing from the reference. How DoomV is held to Sail. |
 | `-net` | A network card, with user-mode NAT behind it: the guest reaches the internet through the host. See [Networking](#networking). |
-| `-gpu`, `-gpu=2d` | A virtio-gpu for a Linux guest, in place of the simple framebuffer: the display, OpenGL (virgl) and Vulkan (Venus) on the host GPU, and the guest's Mesa picks what each program uses. `=2d` is the display alone (`=virgl` leaves out Vulkan). See [GPU](#gpu). |
+| `-gpu` | A virtio-gpu for a Linux guest, in place of the simple framebuffer: the display, OpenGL (virgl) and Vulkan (Venus) on the host GPU, and the guest's Mesa picks what each program uses. See [GPU](#gpu). |
 | `-snd` | A sound card, playing through the host's default output and recording from its default input. See [Sound](#sound). |
 | `-rtc=host` or `-rtc=<seconds>` | Where the guest's clock starts: the host's time, read once at start, or seconds since 1970. Without it, 2026-01-01, so a run repeats exactly. The boot scripts pass `host`. See [The clock](#clock). |
 | `-harts=<n>` | A machine of `n` identical harts (default 1), each starting at the entry with `a0` = its hart id. They take turns a step at a time, so a run is as deterministic as with one. See [Several harts](#harts). |
@@ -735,8 +735,7 @@ in flight, not the connections.
 `-gpu` (`boot.py linux --gpu`, `boot.py ubuntu --gpu`) gives a Linux guest a
 virtio-gpu with everything below at once -- the display, OpenGL and Vulkan --
 and Ubuntu's Mesa decides, per program, what to use: `virgl` for OpenGL,
-`venus` for Vulkan, software where neither applies. `-gpu=2d` is the display
-alone. Its DRM driver runs the display: the console and X draw into
+`venus` for Vulkan, software where neither applies. Its DRM driver runs the display: the console and X draw into
 resources in guest memory and flush them to the screen, rather than into a
 fixed aperture. DoomV takes the simple-framebuffer out of the device tree it
 loads, so the GPU is the only display; the guest sees `virtio_gpudrmfb` as
@@ -744,16 +743,16 @@ loads, so the GPU is the only display; the guest sees `virtio_gpudrmfb` as
 completes inside the notify that sent it, so a run is as repeatable as
 without. One scanout, the size of the window; no blob resources.
 
-OpenGL (also `-gpu=virgl`, without Vulkan) makes it a 3D GPU as well. The guest's Mesa
+OpenGL makes it a 3D GPU as well. The guest's Mesa
 driver -- `virgl`, in every Ubuntu -- sends Gallium command streams, and
 [virglrenderer](https://gitlab.freedesktop.org/virgl/virglrenderer) runs them
 as OpenGL on this computer's GPU: OpenGL 4.3 and OpenGL ES 3.2 in the guest.
-virglrenderer comes from MSYS2's Windows build and is loaded only for this
-mode -- `python scripts/get_virgl.py` fetches it into `build/virgl/`, and the
-boot scripts do so the first time it is asked for.
+virglrenderer is DoomV's own build, loaded only with `-gpu` --
+`python scripts/get_venus.py` builds it into `build/venus/`, and the boot
+scripts do so the first time it is asked for.
 
 ```
-python scripts/boot.py ubuntu --gpu virgl
+python scripts/boot.py ubuntu --gpu
 # in the guest (apt install mesa-utils kmscube):
 eglinfo -B -p surfaceless     # renderer: virgl (<your GPU>)
 kmscube                       # a spinning cube, drawn by the host GPU

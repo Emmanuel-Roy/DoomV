@@ -29,12 +29,11 @@ constexpr int WGL_CONTEXT_MAJOR_VERSION_ARB = 0x2091, WGL_CONTEXT_MINOR_VERSION_
               WGL_CONTEXT_PROFILE_MASK_ARB = 0x9126, WGL_CONTEXT_CORE_PROFILE_BIT_ARB = 0x1,
               WGL_CONTEXT_COMPATIBILITY_PROFILE_BIT_ARB = 0x2;
 
-std::filesystem::path library_path(bool venus)
+std::filesystem::path library_path()
 {
 	wchar_t exe[MAX_PATH];
 	GetModuleFileNameW(nullptr, exe, MAX_PATH);
-	return std::filesystem::path(exe).parent_path() / "build" / (venus ? "venus" : "virgl") / "bin" /
-	       "libvirglrenderer-1.dll";
+	return std::filesystem::path(exe).parent_path() / "build" / "venus" / "bin" / "libvirglrenderer-1.dll";
 }
 
 // A Venus fence is retired inside the call that submitted it (the synchronous
@@ -76,11 +75,10 @@ int VirglBackend::make_current(void *cookie, int, void *ctx)
 
 bool VirglBackend::start(std::string &error, bool venus)
 {
-	const std::filesystem::path path = library_path(venus);
+	const std::filesystem::path path = library_path();
 	HMODULE lib = LoadLibraryExW(path.c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
 	if (!lib) {
-		error = "cannot load " + path.string() + (venus ? " (build it with: python scripts/get_venus.py)"
-		                                                : " (fetch it with: python scripts/get_virgl.py)");
+		error = "cannot load " + path.string() + " (build it with: python scripts/get_venus.py)";
 		return false;
 	}
 	dll = lib;

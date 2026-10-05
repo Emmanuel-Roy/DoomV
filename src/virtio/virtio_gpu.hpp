@@ -17,7 +17,7 @@
 // already read; with -gpu the device tree's simple-framebuffer node is
 // removed, so nothing else draws there.
 //
-// With -gpu=virgl it is also a 3D GPU: VIRTIO_GPU_F_VIRGL, the guest's Mesa
+// It is also a 3D GPU: VIRTIO_GPU_F_VIRGL, the guest's Mesa
 // sends Gallium command streams, and virglrenderer (virgl_backend.cpp) runs
 // them as OpenGL on the host GPU. Every command still completes before it is
 // answered -- a fenced one waits for the host GPU -- but what the host GPU
@@ -25,7 +25,7 @@
 // every response, and every byte a read-back writes into guest memory, is a
 // result that -record logs and -replay hands back with no GPU at all.
 //
-// With -gpu=venus it is that and Vulkan too: Venus contexts (CONTEXT_INIT,
+// And it has Vulkan too: Venus contexts (CONTEXT_INIT,
 // capset 4), whose command rings live in shared memory the guest maps
 // through blob resources (RESOURCE_BLOB) placed in a host-memory window in
 // guest physical space. DoomV's build of virglrenderer runs Venus with no
@@ -61,14 +61,11 @@ public:
 	VirtioGpu(uint32_t irq, uint32_t width, uint32_t height);
 	~VirtioGpu() override;
 
-	// A GPU is only there when the machine is given one (-gpu).
-	void set_enabled(bool on) { enabled = on; }
+	// A GPU is only there when the machine is given one (-gpu), and then
+	// all of it: 2D, OpenGL through virgl and Vulkan through Venus.
+	void set_enabled(bool on) { enabled = virgl = venus = on; }
 	bool is_enabled() const { return enabled; }
-	// -gpu=virgl: 3D as well, through the host GPU.
-	void set_virgl(bool on) { virgl = on; }
 	bool is_virgl() const { return virgl; }
-	// -gpu=venus: virgl and Venus (Vulkan) both.
-	void set_venus(bool on) { venus = on; virgl = virgl || on; }
 	bool is_venus() const { return venus; }
 
 	// The host-memory window: where mapped blobs appear in guest physical

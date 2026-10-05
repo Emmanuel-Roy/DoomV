@@ -1,11 +1,11 @@
 #pragma once
-// The host side of -gpu=virgl: virglrenderer, which turns the guest's Gallium
+// The host side of -gpu's 3D: virglrenderer, which turns the guest's Gallium
 // command streams into OpenGL on the host GPU, and the OpenGL contexts it
 // draws with.
 //
-// virglrenderer is loaded at run time from build/virgl/ (scripts/
-// get_virgl.py), so a DoomV without it builds and runs as before and only
-// -gpu=virgl needs it. On Windows it cannot make contexts of its own -- it
+// virglrenderer is loaded at run time from build/venus/ (scripts/
+// get_venus.py), so a DoomV without it builds and runs as before and only
+// -gpu needs it. On Windows it cannot make contexts of its own -- it
 // has EGL and GLX backends, neither of which exists here -- so they come from
 // here, through WGL, on a hidden window. Everything runs on the CPU thread:
 // that is where the device's commands are carried out, and an OpenGL context

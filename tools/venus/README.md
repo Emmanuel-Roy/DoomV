@@ -1,6 +1,6 @@
 # Venus for DoomV
 
-`-gpu=venus` gives a Linux guest Vulkan on the host GPU, through Mesa's Venus
+`-gpu` gives a Linux guest Vulkan on the host GPU, through Mesa's Venus
 driver in the guest and virglrenderer's Venus renderer on the host. This
 folder is what DoomV changes about the host side.
 
