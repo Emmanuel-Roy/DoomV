@@ -5,6 +5,7 @@
   python scripts/boot.py ubuntu --desktop xfce        # boot into a desktop
   python scripts/boot.py ubuntu --desktop-snapshot    # the booted XFCE desktop, in seconds
   python scripts/boot.py ubuntu --net                 # with a network (once: --setup-network)
+  python scripts/boot.py ubuntu --all                 # network, GPU and sound
   python scripts/boot.py ubuntu --setup-browser       # once: a browser, and the network for it
   python scripts/boot.py ubuntu --setup-sound         # once: aplay, arecord, speaker-test
   python scripts/boot.py ubuntu --setup-gpu           # once: OpenGL and Vulkan for --gpu

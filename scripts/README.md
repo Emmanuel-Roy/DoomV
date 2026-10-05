@@ -32,6 +32,7 @@ to exit. `python scripts/boot.py <guest> --help` lists everything a guest takes.
 | `--net` | A network card (Linux and Ubuntu); the guest reaches the internet through the host. |
 | `--gpu` | A virtio-gpu (Linux and Ubuntu) in place of the simple framebuffer, with OpenGL and Vulkan on this computer's GPU; the guest picks per program (built the first time). |
 | `--sound` | A sound card (Linux and Ubuntu), playing and recording through this computer's default devices. |
+| `--all` | Every device: `--net --gpu --sound`. |
 | `--headless` | No window; output goes to the console. |
 | `--no-build` | Use what is already built. |
 

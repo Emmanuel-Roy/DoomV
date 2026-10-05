@@ -1,6 +1,7 @@
 """Shared paths and processes for the Windows + WSL toolchain."""
 from __future__ import annotations
 
+import argparse
 import contextlib
 import json
 import os
@@ -108,8 +109,16 @@ def add_boot_options(parser, linux=True):
                             "each program uses")
         g.add_argument("--sound", action="store_true",
                        help="a sound card; the guest plays and records through this computer's")
+        g.add_argument("--all", action=AllDevices, nargs=0, help="every device: --net --gpu --sound")
     g.add_argument("--headless", action="store_true", help="no window; output goes to this console")
     g.add_argument("--no-build", action="store_true", help="skip the build; use what is already built")
+
+
+class AllDevices(argparse.Action):
+    """--all: every host device, as if each were given."""
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        namespace.net = namespace.gpu = namespace.sound = True
 
 
 def add_advanced_options(parser, linux=True):

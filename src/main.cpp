@@ -143,6 +143,9 @@ int main(int argc, char *argv[])
 			// it at once -- 2D, OpenGL (virgl) and Vulkan (Venus) -- and the
 			// guest's Mesa picks what each program uses.
 			gpu = true;
+		} else if (arg == "-all") {
+			// Every host device at once: -net -gpu -snd.
+			network = gpu = sound = true;
 		} else if (arg == "-snd") {
 			// A sound card, playing through and recording from the host's
 			// default audio devices.
