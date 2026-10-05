@@ -131,6 +131,7 @@ def add_advanced_options(parser, linux=True):
     a.add_argument("--record", metavar="FILE", help="log every input with the instruction it arrived at")
     a.add_argument("--replay", metavar="FILE", help="replay a --record log exactly")
     a.add_argument("--march", metavar="ISA", help="override the extensions, e.g. rv64imafdc_zicsr")
+    a.add_argument("--vlen", type=int, metavar="BITS", help="vector register width: 128 (default) to 65536")
     if linux:
         a.add_argument("--drives", metavar="DIR", help="storage drives folder (default drives/; '' for none)")
         a.add_argument("--shared", metavar="DIR", help="shared folder (default shared/; '' for none)")
@@ -169,6 +170,8 @@ def boot_args(args, passthrough=()):
         out.append("-ng")
     if args.march:
         out.append(f"-march={args.march}")
+    if getattr(args, "vlen", None):
+        out.append(f"-vlen={args.vlen}")
     if args.snapshot:
         out += [f"-snapshotat={args.snapshot_at}", f"-snapshot={args.snapshot}"]
     if args.restore:

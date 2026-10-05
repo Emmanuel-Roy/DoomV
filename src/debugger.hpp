@@ -11,6 +11,7 @@ public:
 
 	void load_breakpoints(const char *path);
 	void add_breakpoint(uint64_t addr);
+	void remove_breakpoint(uint64_t addr);
 	bool should_halt(uint64_t pc, bool instr_was_illegal);
 	// False when should_halt cannot return true whatever the pc: no
 	// breakpoints and no halting on illegal instructions. Checked inline

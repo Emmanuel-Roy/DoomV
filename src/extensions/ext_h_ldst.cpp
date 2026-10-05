@@ -165,9 +165,15 @@ void RiscvCore::exec_H(const DecodedOp &instr, Registers &regs, Memory &mem)
 			default: break;
 			}
 		}
+		// The address is the guest's, virtual, even though this mode is not
+		// virtualised: hstatus.GVA or mstatus.GVA has to say so.
+		trap_guest_va = true;
 		enter_trap(regs, cause, tval);
 		return;
 	}
+	// Translated here rather than by translate_or_trap, so logged here: the
+	// trace and the lock-step take a step's loads and stores from this log.
+	if (access_log) access_log->push_back({addr, paddr, (uint8_t)width, is_store});
 
 	if (is_store) {
 		uint64_t val = regs.read_x(instr.rs2);

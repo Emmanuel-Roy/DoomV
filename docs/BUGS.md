@@ -336,6 +336,17 @@ of console output (`2667bf1`, re-verified in `936df17`).
 167. [The counter CSRs had no rules of their own](#bug167)
 168. [A black line through every DOOM frame](#bug168)
 
+<a id="part-xv-toc"></a>
+### Part XV — Every simulator at once, and vectors wider than 128 (2026-10-05)
+
+177. [Signaling NaNs lost their signal in single-precision vector copies](#bug177)
+178. [Vector conversions between floats and integers rounded ties to even under RMM](#bug178)
+179. [A hypervisor load or store from HS or M never set GVA](#bug179)
+180. [Nothing compared an AMO's store, or the block cbo.zero cleared](#bug180)
+181. [The lock-step compared a vector register's every element write with its last](#bug181)
+182. [Narrowing to bf16 never raised underflow, overflow or invalid](#bug182)
+183. [vfwmaccbf16.vf: the scalar, its NaN-boxing and its invalid flag](#bug183)
+
 <a id="part-vii"></a>
 ### Part VII — Cross-cutting
 
@@ -7236,3 +7247,98 @@ output from the kernel at all. The device tree and the initramfs now sit
 new address, and `init_linux_boot` reads the size from the RISC-V Image
 header and refuses a kernel that would reach the device tree, with a message
 that says so.
+
+
+<a id="part-xv"></a>
+## Part XV — Every simulator at once, and vectors wider than 128
+
+Two things went in together. `-vlen` makes the vector length a run-time
+choice, and `tools/verification/corun.py` runs Sail, DoomV, Spike, Whisper and
+QEMU on the same program at once and walks each one's trace against Sail's.
+Wider vectors were checked against the riscv-vector-tests built for VLEN 256
+and 512, with Sail at the same width; the co-run took in the riscv-tests
+`lockstep_sail.py` had never selected, the `hypervisor-*` ones. Four of these
+bugs were there at VLEN 128 all along: the tests at 128 simply never put the
+value that shows them where it shows.
+
+<a id="bug177"></a>
+### 177. Signaling NaNs lost their signal in single-precision vector copies
+
+`vfmerge`, `vfmv`, the slides and `vfsgnj*` hand an element on unchanged, NaN
+payload and all. DoomV carries a single-precision element as a double, and
+read and wrote it with the host's float/double conversions, which quiet a
+signaling NaN: `0x7FA49854` went in and `0x7FE49854` came out. Seven of the
+VLEN=256 tests have such an element in a register group's last register; none
+at 128 did. A NaN now widens and narrows by hand, payload and quiet bit where
+they were, and sign injection works on the bits.
+
+<a id="bug178"></a>
+### 178. Vector conversions between floats and integers rounded ties to even under RMM
+
+Every vector conversion between a float and an integer -- `vfcvt`, and the
+widening and narrowing `vfwcvt`/`vfncvt` forms, in both directions -- went
+through the host FPU, which has no round-to-nearest-max-magnitude. Under
+`frm`=4 a tie went to even: −16,793,605 -- 25 bits, exactly halfway between
+two singles -- became …`002` where Sail has …`003`, and `vfcvt.xu.f`,
+`vfwcvt.x.f` and `vfncvt.f.x.w` were each one off in the last place on one
+element of a 512-bit group. A 64-bit integer was cast to double before the
+conversion proper, a second rounding for anything over 53 bits, and the
+narrowing double-to-single `vfncvt.f.f.w` had the same RMM gap. All of them go
+through SoftFloat now, at the operands' own widths, in one rounding; a
+narrower-than-32-bit integer result is the 32-bit conversion saturated, with
+invalid alone, as the half-precision forms already did. The suites at
+VLEN 128 never put an RMM tie in these instructions; at 256 and 512 they do.
+
+<a id="bug179"></a>
+### 179. A hypervisor load or store from HS or M never set GVA
+
+GVA says the trap's `tval` is a guest virtual address. DoomV set it only for a
+trap taken from a virtual mode. `hlv`, `hlvx` and `hsv` run in HS-mode (or M)
+and reach memory as the guest does, so when one faults -- on the VS-stage
+walk's own G-stage access, in these tests -- `tval` is a guest virtual address
+too, and Sail sets `hstatus.GVA` or `mstatus.GVA`. Four `hypervisor-*`
+riscv-tests differed there; the damo suite never reads the bit after such a
+fault. The fault now marks itself, and both trap paths honour it.
+
+<a id="bug180"></a>
+### 180. Nothing compared an AMO's store, or the block cbo.zero cleared
+
+Sail writes an AMO's store as `mem[RW,…]` and a `cbo.zero` block as one 64-byte
+`mem[C,…]`. The lock-step read only `mem[W,…]`, so both went unchecked, and
+DoomV's own `-trace` left AMO stores out (their access type is `Amo`, not
+`Store`) and logged one byte of each eight a `cbo.zero` cleared. The co-run,
+which compares every simulator's stores byte for byte, found it the first time
+it ran. The trace now writes AMO stores as `RW` with their full width, and
+the lock-step compares `W`, `RW` and `C` stores, byte by byte, at any width.
+
+<a id="bug181"></a>
+### 181. The lock-step compared a vector register's every element write with its last
+
+Sail logs a vector instruction an element at a time: the register (and
+`vstart`) once per element, each a little more filled in. The lock-step
+compared every one of those with the register DoomV ended with, so it could
+only ever pass when the first write was already the whole answer. Run at
+VLEN 256 it failed on a `vle32.v` that was right. It compares the last write of
+each register and CSR in a record now, which is what the instruction leaves.
+
+<a id="bug182"></a>
+### 182. Narrowing to bf16 never raised underflow, overflow or invalid
+
+`vfncvtbf16.f.f.w` rounded the single's bit pattern and shifted it. That gets
+the value right -- bf16 and single share eight exponent bits -- and only the
+inexact flag: a result that rounds to a subnormal is tiny and inexact, which
+is underflow, and Sail raised 0x3 where DoomV raised 0x1; a carry into the
+all-ones exponent is overflow, and a signaling NaN is invalid. Signatures do
+not record `fflags`, so 3042/3042 never saw it; the strict lock-step of the
+vector tests, run for the first time for `-vlen`, did. It goes through
+SoftFloat's `f32_to_bf16` now.
+
+<a id="bug183"></a>
+### 183. vfwmaccbf16.vf: the scalar, its NaN-boxing and its invalid flag
+
+The `.vf` form's scalar was unboxed as a half, so a value not properly
+NaN-boxed read as half's canonical NaN, `0x7E00` -- which as a bf16 is a large
+finite number -- instead of bf16's, `0x7FC0`. And Sail widens the scalar once,
+before the elements, raising invalid for a signaling NaN even when `vl` is 0
+(`zvfbfwma_insts.sail`); DoomV raised it only per element, so with `vl`=0 it
+raised nothing. Both are Sail's now.

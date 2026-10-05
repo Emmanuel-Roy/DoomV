@@ -100,6 +100,8 @@ int main(int argc, char *argv[])
 	bool have_rtc = false;
 	bool sound = false;
 	bool gpu = false;
+	int gdb_port = 0;
+	std::string gdb_address = "127.0.0.1";
 	uint64_t rtc_epoch = 0;
 	for (int i = 1; i < argc; i++) {
 		std::string arg = argv[i];
@@ -124,6 +126,25 @@ int main(int argc, char *argv[])
 			// Stop when the guest stores nonzero to this address. Every
 			// bare-metal RISC-V test suite ends that way.
 			tohost_addr = std::stoull(arg.substr(8), nullptr, 16);
+		} else if (arg.rfind("-gdb=", 0) == 0 || arg == "-gdb") {
+			// A gdb remote server: target remote localhost:<port> (1234 by
+			// default). The machine waits, halted, for gdb to connect.
+			// -gdb=<address>:<port> listens elsewhere than 127.0.0.1.
+			const std::string v = arg == "-gdb" ? "1234" : arg.substr(5);
+			const size_t colon = v.rfind(':');
+			if (colon != std::string::npos) gdb_address = v.substr(0, colon);
+			gdb_port = std::atoi(v.c_str() + (colon == std::string::npos ? 0 : colon + 1));
+			if (gdb_port <= 0 || gdb_port > 65535) {
+				std::cout << "-gdb takes a TCP port, e.g. -gdb=1234, or an address and port\n";
+				return -1;
+			}
+		} else if (arg.rfind("-vlen=", 0) == 0) {
+			// The vector registers' width in bits: a power of two from 128
+			// (the default) to 65536. Sail's vlen_exp is its log2.
+			if (!Registers::set_vlen(std::atoi(arg.c_str() + 6))) {
+				std::cout << "-vlen must be a power of two from 128 to 65536\n";
+				return -1;
+			}
 		} else if (arg.rfind("-harts=", 0) == 0) {
 			// The number of harts, all identical, numbered 0 up. They run
 			// round-robin, one step each in turn -- see "Harts" in
@@ -347,6 +368,7 @@ int main(int argc, char *argv[])
 	}
 	// After -replay and -record: which of the two the GPU's 3D results go to.
 	system.wire_gpu_log();
+	if (gdb_port && !system.set_gdb(gdb_address, gdb_port)) return -1;
 	if (!trace_path.empty() && !system.set_trace(trace_path.c_str())) {
 		std::cout << "cannot write commit log: " << trace_path << "\n";
 		return -1;

@@ -1358,7 +1358,8 @@ bool RiscvCore::translate_or_trap(Registers &regs, Memory &mem, uint64_t vaddr, 
 		return false;
 	}
 	if (access_log && type != AccessType::Fetch)
-		access_log->push_back({vaddr, paddr, (uint8_t)size, type == AccessType::Store});
+		access_log->push_back({vaddr, paddr, (uint8_t)size, type == AccessType::Store || type == AccessType::Amo,
+		                       type == AccessType::Amo});
 
 	// An access that crosses a page boundary is two accesses as far as the
 	// page tables are concerned, and the second page can answer differently
@@ -1488,6 +1489,8 @@ void RiscvCore::enter_trap(Registers &regs, uint64_t cause, uint64_t tval, bool 
 {
 	uint64_t pc = regs.get_pc();
 	PrivMode from = regs.get_priv();
+	const bool guest_va = trap_guest_va;
+	trap_guest_va = false;
 	trap_count++;
 	last_trap_cause = cause;
 	last_trap_tval = tval;
@@ -1631,7 +1634,7 @@ void RiscvCore::enter_trap(Registers &regs, uint64_t cause, uint64_t tval, bool 
 			// it alone would let a stale 1 from an earlier fault make the
 			// hypervisor read a non-address as a guest pointer.
 			static constexpr uint64_t HSTATUS_GVA_BIT = 1ull << 6;
-			bool gva = was_virt && tval_is_guest_va(cause_bit, is_interrupt);
+			bool gva = (was_virt || guest_va) && tval_is_guest_va(cause_bit, is_interrupt);
 			hstatus = gva ? (hstatus | HSTATUS_GVA_BIT) : (hstatus & ~HSTATUS_GVA_BIT);
 
 			hyp::write_hstatus(regs, hstatus);
@@ -1669,7 +1672,7 @@ void RiscvCore::enter_trap(Registers &regs, uint64_t cause, uint64_t tval, bool 
 		// HS-mode one, and it was defined here and never written. A guest
 		// fault that is not delegated lands in M with mtval holding a guest
 		// virtual address, and nothing said so.
-		bool mgva = was_virt && tval_is_guest_va(cause_bit, is_interrupt);
+		bool mgva = (was_virt || guest_va) && tval_is_guest_va(cause_bit, is_interrupt);
 		mstatus = mgva ? (mstatus | MSTATUS_GVA) : (mstatus & ~MSTATUS_GVA);
 	}
 	regs.write_csr(CSR_MSTATUS, mstatus);

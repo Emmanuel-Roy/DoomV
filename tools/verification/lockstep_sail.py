@@ -7,10 +7,18 @@ the same ELF with -lockstep against that trace. DoomV halts at the first
 record that differs from Sail's, so a failure here names the exact
 instruction and field where DoomV and the reference parted ways.
 
-    python tools/verification/lockstep_sail.py              # every rv64 test
+    python tools/verification/lockstep_sail.py              # every rv64 and hypervisor test
     python tools/verification/lockstep_sail.py rv64ui-p-add rv64mi-p-illegal
     python tools/verification/lockstep_sail.py --jobs 8 --keep
     python tools/verification/lockstep_sail.py --multihart  # only the multi-hart tests
+    python tools/verification/lockstep_sail.py --suite riscv-vector-tests-v128x64 --vlen 512
+
+--vlen runs both at another vector length: Sail with its config's vlen_exp
+changed to match, DoomV with -vlen. Tests built for one VLEN check their
+results against values for that VLEN, so at another the test's own verdict
+means nothing and a Sail "failure" is not skipped: the lock-step alone is
+the check, and every vector instruction is still compared, register by
+register, at the new width.
 
 The tests in tests/lockstep/multihart run on machines of several harts: Sail
 as tools/verification/simulators/sail/multihart's sail_riscv_mh --harts N,
@@ -85,7 +93,7 @@ def build_multihart_tests(counts) -> dict:
     return built
 
 
-def one(elf: pathlib.Path, harts: int, config: pathlib.Path, keep: bool, timeout: int):
+def one(elf: pathlib.Path, harts: int, config: pathlib.Path, keep: bool, timeout: int, vlen: int = 128):
     work = WORK / elf.name
     shutil.rmtree(work, ignore_errors=True)
     work.mkdir(parents=True)
@@ -95,9 +103,11 @@ def one(elf: pathlib.Path, harts: int, config: pathlib.Path, keep: bool, timeout
     sail = subprocess.run(["wsl", "-d", "Ubuntu", "-u", "root", "--"] + sail_cmd + ["--config", wsl(config)]
                           + SAIL_FLAGS + ["--trace-output", wsl(trace), wsl(elf)],
                           capture_output=True, text=True, timeout=timeout, env=run_suite._env())
-    if "SUCCESS" not in (sail.stdout or "") + (sail.stderr or ""):
+    if vlen == 128 and "SUCCESS" not in (sail.stdout or "") + (sail.stderr or ""):
         shutil.rmtree(work, ignore_errors=True)
         return elf.name, "skip", "Sail does not pass it"
+    if not trace.exists() or trace.stat().st_size == 0:
+        return elf.name, "skip", "Sail wrote no trace"
 
     syms = run_suite.elf_symbols(elf)
     cmd = [str(ROOT / "riscv_doom.exe"), "-ng", str(ROOT / "tools" / "doom" / "doombuild" / "DOOM1.WAD"), str(elf),
@@ -105,6 +115,8 @@ def one(elf: pathlib.Path, harts: int, config: pathlib.Path, keep: bool, timeout
            "-lockstep=" + str(trace), "-lockstep-strict", "-stopat=100000000"]
     if harts > 1:
         cmd.append(f"-harts={harts}")
+    if vlen != 128:
+        cmd.append(f"-vlen={vlen}")
     try:
         r = subprocess.run(cmd, cwd=work, capture_output=True, text=True, timeout=timeout)
         out = (r.stdout or "") + (r.stderr or "")
@@ -117,6 +129,13 @@ def one(elf: pathlib.Path, harts: int, config: pathlib.Path, keep: bool, timeout
         return elf.name, "fail", out[at:].strip()
     tohost = (work / "tohost.log").read_text().strip() if (work / "tohost.log").exists() else "?"
     summary = next((l for l in out.splitlines() if l.startswith("lockstep: ")), "no lockstep summary")
+    if vlen != 128:
+        # The test's verdict is for another VLEN; matching Sail to the end is the pass.
+        if "all matching" in summary or "matched before the run ended" in summary:
+            if not keep:
+                shutil.rmtree(work, ignore_errors=True)
+            return elf.name, "pass", summary
+        return elf.name, "fail", f"exit {code}: {summary}"
     if code != 0 or tohost != "1":
         return elf.name, "fail", f"exit {code}, tohost {tohost}: {summary}"
     if not keep:
@@ -132,24 +151,44 @@ def main():
     ap.add_argument("--timeout", type=int, default=300)
     ap.add_argument("--harts", default="2,4", help="hart counts for the multi-hart tests (default 2,4)")
     ap.add_argument("--multihart", action="store_true", help="run only the multi-hart tests")
+    ap.add_argument("--suite", help="a directory under tests/suites to take the ELFs from "
+                                    "(default riscv-tests' rv64 tests and the lock-step tests)")
+    ap.add_argument("--vlen", type=int, default=128, help="vector length for both (default 128)")
+    ap.add_argument("--limit", type=int, help="at most this many tests")
     args = ap.parse_args()
+    if args.vlen < 128 or args.vlen & (args.vlen - 1):
+        ap.error("--vlen must be a power of two, 128 or more")
 
     own = build_lockstep_tests()
     own.update(build_multihart_tests([int(n) for n in args.harts.split(",")]))
+    tests = SUITES / args.suite if args.suite else TESTS
     if args.tests:
-        elfs = [own.get(t, (TESTS / t, 1)) for t in args.tests]
+        elfs = [own.get(t, (tests / t, 1)) for t in args.tests]
+    elif args.suite:
+        elfs = [(p, 1) for p in sorted(tests.iterdir()) if p.is_file() and not p.suffix]
     elif args.multihart:
         elfs = [v for v in own.values() if v[1] > 1]
     else:
         elfs = [(p, 1) for p in sorted(TESTS.iterdir())
-                if re.match(r"rv64[a-z]+-[pv]-", p.name) and p.is_file() and not p.suffix]
+                if re.match(r"rv64[a-z]+-[pv]-|hypervisor-", p.name) and p.is_file() and not p.suffix]
         elfs += list(own.values())
+    if args.limit:
+        elfs = elfs[:args.limit]
     WORK.mkdir(parents=True, exist_ok=True)
     config = SAIL_CONFIG
+    if args.vlen != 128:
+        # The same configuration, at the other width.
+        text = SAIL_CONFIG.read_text()
+        exp = args.vlen.bit_length() - 1
+        changed = re.sub(r'"vlen_exp":\s*\d+', f'"vlen_exp": {exp}', text)
+        assert changed != text, "no vlen_exp in the Sail config"
+        config = WORK / f"rva23s64-vlen{args.vlen}.json"
+        config.write_text(changed)
 
     results = {"pass": [], "fail": [], "skip": []}
     with concurrent.futures.ThreadPoolExecutor(args.jobs) as pool:
-        for name, status, detail in pool.map(lambda e: one(e[0], e[1], config, args.keep, args.timeout), elfs):
+        for name, status, detail in pool.map(lambda e: one(e[0], e[1], config, args.keep, args.timeout, args.vlen),
+                                             elfs):
             results[status].append((name, detail))
             if status == "fail":
                 print(f"FAIL {name}\n  " + detail.replace("\n", "\n  "), flush=True)

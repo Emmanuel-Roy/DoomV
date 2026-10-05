@@ -192,6 +192,19 @@ invalidate, since every fetch reads straight out of live guest memory, so
 the correct emulation of "make sure instruction fetches see recent stores"
 is to just not need to do anything.
 
+<a id="vlen"></a>
+**Vector length.** VLEN is 128 bits unless `-vlen` says otherwise: any power
+of two up to 65536, the most the spec allows (`boot.py ... --vlen 512`). Every
+hart has the same. `vlenb` reports it, and the guest takes it from there --
+Linux sizes its vector state by it, and a Linux boot at 512 runs to its shell
+as at 128. At 128 the registers live inside the hart's register file as they
+always have, so snapshots taken before `-vlen` existed still restore; wider,
+they are the hart's own storage, saved after the rest, and a snapshot records
+its VLEN and is only restored at the same one. Each width is checked against
+Sail at that width: the riscv-vector-tests come built for VLEN 128, 256 and
+512, and Sail runs with its `vlen_exp` to match (see
+[Live results](#live-results)).
+
 ## Correctness
 
 "It draws pixels that look like Doom" is not a correctness bar, so this
@@ -205,14 +218,15 @@ RVA23S64 config at all. spike is still run behind `--ref spike`, because an
 independent implementation disagreeing is a signal even when it turns out
 to be the one that is wrong, but it does not decide anything.
 
+<a id="live-results"></a>
 ### Live results
 
 | suite | what it is | result |
 | --- | --- | --- |
 | riscv-arch-test RVA23S64 | the certification suite, 663 tests, signature-diffed against Sail | **663 / 663** |
 | differential | 19 hand-written suites, 639 cases, diffed against Sail | **19 / 19** |
-| riscv-vector-tests | 3042 generated V tests at VLEN=128, signature-diffed against Sail | **3042 / 3042** |
-| riscv-tests | the Berkeley suite, 377 applicable of 667 | **377 / 377** |
+| riscv-vector-tests | ~3040 generated V tests at each of VLEN 128, 256 and 512, signature-diffed against Sail at the same VLEN | **3042 / 3042, 3043 / 3043, 3043 / 3043** |
+| riscv-tests | the Berkeley suite, 377 applicable of 667; also lock-stepped strictly and co-run against Spike, Whisper and QEMU ([Every simulator at once](#corun)) | **377 / 377** |
 | damo-rv-priv-ats | hypervisor, the only H coverage that exists anywhere -- 43 groups | **43 / 43 groups** |
 | Linux | OpenSBI + 6.12 + busybox, ext4 root over virtio-blk | boots to an interactive shell, in a 1168x1056 framebuffer console |
 | Ubuntu 24.04 | 104 packages, configured by DoomV running Ubuntu's own `dpkg`, systemd as PID 1; 270 more for the desktops | boots, logs in at the framebuffer console, and starts Openbox, XFCE or bare X |
@@ -265,6 +279,55 @@ tools/verification/tests/archtest/setup.sh          # toolchain, Sail 0.13.1, ac
 tools/verification/tests/archtest/gen_reference.sh  # compile tests + Sail signatures
 tools/verification/tests/suites/fetch.sh            # precompiled third-party suites
 ```
+
+<a id="corun"></a>
+### Every simulator at once
+
+`tools/verification/corun.py` runs one bare-metal program on Sail, DoomV,
+Spike, Whisper and QEMU at the same time, reads each one's trace into the same
+steps -- program counter, instruction, whether it trapped, the x, f and v
+registers it left and the bytes it stored -- and walks every one against
+Sail's from the entry point. Where one first parts from Sail the report says
+at which instruction, in what, and what each side had:
+
+```
+python tools/verification/corun.py build/hello.elf
+python tools/verification/corun.py --suite riscv-tests              # all of them, with a summary
+python tools/verification/corun.py --suite riscv-vector-tests-v256x64 rv64vadd_vv-0
+```
+
+DoomV is held to more than the others. Besides its trace it runs under
+`-lockstep-strict` against Sail's, which compares every CSR, trap, interrupt
+and the clock as well, and when that stops on a difference a snapshot of DoomV
+is taken one instruction before the one that went wrong -- and checked, by
+restoring it and seeing that its next instruction is that one. The report
+prints the line that restores it; from there it can be stepped in the window's
+debugger or with [gdb](#gdb).
+
+Each simulator gets the same ISA (`--march`, by default the one the suites use
+with Sail), less what it does not know, and the report lists what it was not
+given; a vector length (`--vlen`) applies to all five. Over all 377
+riscv-tests (the rv64 ones, the M- and S-mode ones and the hypervisor ones):
+
+| | matches Sail | where it does not |
+| --- | --- | --- |
+| DoomV | 377 / 377, and 377 / 377 in strict lock-step | |
+| Spike | 362 | it traps on misaligned loads and stores, which Sail's configuration does in hardware; an `sc.w` that fails where Sail's succeeds; `marchid`, `mtinst`, `tselect` |
+| Whisper | 365 | given no H -- with H and only an ISA string it crashes -- so the hypervisor tests trap; `misa`, `marchid`, the counters |
+| QEMU | 368 | `misa`, `marchid`, `minstret`, `mtval2`, `pmpaddr`'s width, `tselect`; and one test that rewrites its own code, where QEMU's log names the old instruction |
+
+None of those is a bug in DoomV, and only the misaligned accesses and the
+`sc.w` are behaviour rather than a register's value or a missing extension. What the co-run found in
+DoomV, the first time it ran, is in [docs/BUGS.md](docs/BUGS.md#part-xv):
+`GVA` after a fault in `hlv`/`hsv`, stores no trace had been comparing, and --
+from the wider vector suites -- two vector floating-point bugs that had been
+there at VLEN 128 all along.
+
+Where each runs: Sail, Spike, Whisper and QEMU in WSL, DoomV on Windows.
+Spike and Whisper are built under `/root/build` (`simulators/spike/build.sh`;
+Whisper with `make` in a copy of `simulators/whisper/src`), and QEMU is
+Ubuntu's `qemu-system-riscv`. Traces and a `report.json` per program are in
+`build/corun/`.
 
 ### What that process actually found
 
@@ -326,6 +389,8 @@ src/
   riscv_core.hpp          shared declarations for each extension's execute function
   extensions/            one file per extension (ext_i.cpp, ext_m.cpp, ext_v_*.cpp, ...)
   debugger.*             breakpoints, halt conditions, crash/signature dumps
+  gdb_server.*           gdb's remote protocol over TCP: packets in, replies out
+  gdb_target.cpp         what gdb asks for, answered on the CPU thread between instructions
   gui.*                  the SDL window, framebuffer scaling, and the debug dashboard
   uart.*                 8250-compatible serial, which is the SBI console
   rtc.*                  a Goldfish real-time clock, so the guest knows the date
@@ -530,6 +595,8 @@ riscv_doom.exe -opensbi=<f> -kernel=<f> -dtb=<f> -initrd=<f> [options]   # Linux
 | `-snd` | A sound card, playing through the host's default output and recording from its default input. See [Sound](#sound). |
 | `-all` | Every host device: `-net -gpu -snd`. |
 | `-rtc=host` or `-rtc=<seconds>` | Where the guest's clock starts: the host's time, read once at start, or seconds since 1970. Without it, 2026-01-01, so a run repeats exactly. The boot scripts pass `host`. See [The clock](#clock). |
+| `-vlen=<bits>` | The vector registers' width: a power of two from 128 (the default) to 65536. `vlenb` reads it, and Linux and its programs size their vectors from that. See [Vector length](#vlen). |
+| `-gdb`, `-gdb=<port>`, `-gdb=<address>:<port>` | A gdb server, on 127.0.0.1:1234 unless given another port or address; the machine waits for gdb, halted before its first instruction. See [Debugging with gdb](#gdb). |
 | `-harts=<n>` | A machine of `n` identical harts (default 1), each starting at the entry with `a0` = its hart id. They take turns a step at a time, so a run is as deterministic as with one. See [Several harts](#harts). |
 
 `-ng` is what makes the conformance suites practical. With a window open a
@@ -913,7 +980,7 @@ any later instruction, it leaves the same `crash.log`, RAM, framebuffers and
 disk as a run that never stopped. `tools/verification/snapshot_check.py` checks
 exactly that, on any `bench.py` workload.
 
-- **Same machine.** `-restore` checks the RAM size, `-march`, Linux or DOOM,
+- **Same machine.** `-restore` checks the RAM size, `-march`, `-vlen`, Linux or DOOM,
   which disks are attached and whether there is a shared folder, and says which
   one differs. The boot files still have to be given, since that is how the
   machine is put together, though what they loaded is replaced.
@@ -953,6 +1020,51 @@ desktop, logged in as root, and it is yours.
   restore says so; make a new one.
 
 The same snapshot is the starting point of `bench.py`'s `desktop` workload.
+
+<a id="gdb"></a>
+### Debugging with gdb
+
+`-gdb` turns DoomV into a gdb remote target. The machine starts halted, before
+its first instruction, and waits on 127.0.0.1:1234:
+
+```
+riscv_doom.exe -ng <wad> prog.elf -gdb             # or a Linux boot, or -restore=<snapshot>
+riscv64-unknown-elf-gdb prog.elf -ex "target remote :1234"
+```
+
+Breakpoints, `stepi`, `continue`, Ctrl-C, `info registers`, `x/` and `print`
+all work. gdb sees:
+
+- **Registers** by its RISC-V numbering, described to it in a target
+  description: x0-x31 and pc, f0-f31, every CSR (`p $mstatus`, `p $satp`), the
+  privilege level (`p $priv`), and v0-v31 at the machine's VLEN, as bytes,
+  halfwords, words, doublewords or quadwords (`p $v8.w`). x, f, v and pc can be
+  set; CSRs are read-only -- a CSR write has effects on translation and
+  interrupts that the hart's own CSR instructions take care of.
+- **Memory** as the hart sees it at that moment: virtual through `satp` in S
+  or U mode (or through `vsatp`, for a guest whose G-stage is bare), physical in
+  M-mode. The page walk is gdb's own and read-only, so looking never sets a
+  page's accessed or dirty bit, and only RAM is reached: a device register can
+  change when it is read.
+- **Harts** as threads: `info threads`, `thread 3`. A step is one round, every
+  hart one instruction.
+- **`monitor steps`** prints the step count -- the number `-stopat` and
+  `-snapshotat` take -- and **`monitor snapshot <dir>`** saves the machine
+  there, for `-restore=<dir>` later.
+
+Stopping, stepping and looking change nothing the guest can see. Inputs are
+committed at instruction counts, not at host times, so a run under gdb that
+only breaks, steps and reads is the same run as one without it: stopped at a
+breakpoint, single-stepped, snapshotted from gdb and continued to
+`-stopat=400`, a riscv-tests program left a `crash.log` identical to the run
+without gdb. Writing a register or memory from gdb is an input like any other,
+and the run is then yours.
+
+When the program ends -- `-tohost`, a poweroff, `-stopat` -- gdb is told it
+exited. `kill` ends DoomV. A gdb in WSL cannot reach Windows' 127.0.0.1;
+`-gdb=<address>:1234` listens on another of this computer's addresses
+instead, such as the one WSL reaches Windows by (`ip route` in WSL names it),
+if the firewall lets WSL in.
 
 ### Running your own programs in the guest
 

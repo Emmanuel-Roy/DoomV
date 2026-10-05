@@ -50,16 +50,32 @@ public:
 	// V (vector) register file. Raw bytes, not a fixed element type: a real
 	// vector register gets reinterpreted at different element widths (SEW)
 	// from one instruction to the next, so an untyped byte array is the
-	// correct representation, not e.g. an array of uint32_t. VLEN=128 is a
-	// common, modest choice -- nothing outside Registers assumes a specific
-	// value. write_v() hands back a mutable pointer rather than an
-	// element-level setter because the V extension code needs to memcpy
-	// arbitrary EEW-sized/LMUL-grouped spans across register boundaries;
-	// that addressing logic lives with the V instructions, not here.
-	static constexpr int VLEN_BITS = 128;
-	static constexpr int VLEN_BYTES = VLEN_BITS / 8;
-	const uint8_t *read_v(int i) const;
-	uint8_t *write_v(int i);
+	// correct representation, not e.g. an array of uint32_t. write_v() hands
+	// back a mutable pointer rather than an element-level setter because the
+	// V extension code needs to memcpy arbitrary EEW-sized/LMUL-grouped spans
+	// across register boundaries; that addressing logic lives with the V
+	// instructions, not here.
+	//
+	// VLEN is the machine's, one for every hart, set by -vlen before any hart
+	// exists (set_vlen): 128 by default, any power of two up to the spec's
+	// 65536. At 128 the registers live in `v` inside this object, as they
+	// always have -- so a snapshot's layout is what it was; wider, they live
+	// in storage the hart owns, and vreg points there.
+	static constexpr int VLEN_DEFAULT = 128, VLEN_MAX = 65536;
+	static inline int VLEN_BITS = VLEN_DEFAULT;
+	static inline int VLEN_BYTES = VLEN_DEFAULT / 8;
+	static bool set_vlen(int bits)
+	{
+		if (bits < VLEN_DEFAULT || bits > VLEN_MAX || (bits & (bits - 1))) return false;
+		VLEN_BITS = bits;
+		VLEN_BYTES = bits / 8;
+		return true;
+	}
+	const uint8_t *read_v(int i) const { return vreg + (size_t)i * VLEN_BYTES; }
+	uint8_t *write_v(int i) { return vreg + (size_t)i * VLEN_BYTES; }
+	// Where the vector registers are, when VLEN is wider than `v` holds.
+	void use_vector_storage(uint8_t *storage) { vreg = storage; }
+	bool vectors_inline() const { return vreg == &v[0][0]; }
 
 	uint64_t get_pc() const { return pc; }
 	void set_pc(uint64_t value) { pc = value; }
@@ -213,7 +229,7 @@ public:
 private:
 	uint64_t x[32];
 	double f[32];
-	uint8_t v[32][VLEN_BYTES];
+	uint8_t v[32][VLEN_DEFAULT / 8];
 	uint64_t pc;
 	PrivMode priv;
 	bool virt = false; // the H extension's V bit -- see get_virt()
@@ -235,4 +251,9 @@ private:
 	int csr_window_pos;               // where the next one goes
 	int csr_window_len;               // grows to CSR_WINDOW, then stays
 	uint16_t csr_counts[4096];        // occurrences of each address in the ring
+
+	// The vector registers: `v`, or the hart's own storage when VLEN is
+	// wider. Last, so the fields before it are laid out as they were before
+	// VLEN could change, and a snapshot from then still reads (savestate.cpp).
+	uint8_t *vreg = &v[0][0];
 };

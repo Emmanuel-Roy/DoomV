@@ -451,10 +451,12 @@ struct DoomSystem::LockstepState {
 				continue;
 			}
 
-			if (starts(line, "mem[W,")) {
+			// A store: W, an AMO's RW, or C for the block a cbo.zero clears.
+			if (starts(line, "mem[W,") || starts(line, "mem[RW,") || starts(line, "mem[C,")) {
 				const size_t close = line.find("] <- ");
+				const size_t comma = line.find(',');
 				uint64_t addr = 0;
-				if (close == std::string::npos || !parse_hex(line.substr(6, close - 6), addr)) continue;
+				if (close == std::string::npos || !parse_hex(line.substr(comma + 1, close - comma - 1), addr)) continue;
 				if (!cur.trap_started) cur.stores.push_back({addr, line.substr(close + 5)});
 				cur.lines.push_back({n, line});
 				continue;
@@ -787,7 +789,9 @@ void DoomSystem::traced_step()
 	// ---- one step --------------------------------------------------------------
 	const int VB = Registers::VLEN_BYTES;
 	uint64_t x0[32], f0[32];
-	uint8_t v0[32 * Registers::VLEN_BYTES];
+	static std::vector<uint8_t> v0_storage;
+	v0_storage.resize((size_t)32 * VB);
+	uint8_t *const v0 = v0_storage.data();
 	for (int i = 0; i < 32; i++) {
 		x0[i] = regs.read_x(i);
 		const double d = regs.read_f(i);
@@ -880,7 +884,8 @@ void DoomSystem::traced_step()
 		for (const AccessRecord &a : writes) {
 			uint64_t v = 0;
 			store_value(a.paddr, a.size, v);
-			std::snprintf(buf, sizeof(buf), "mem[W,0x%016" PRIX64 "] <- 0x%0*" PRIX64, a.paddr, a.size * 2, v);
+			std::snprintf(buf, sizeof(buf), "mem[%s,0x%016" PRIX64 "] <- 0x%0*" PRIX64, a.amo ? "RW" : "W",
+			              a.paddr, a.size * 2, v);
 			actual.push_back(buf);
 		}
 	} else {
@@ -989,7 +994,16 @@ void DoomSystem::traced_step()
 		}
 	}
 
-	for (const RefField &f : ref.fields) {
+	// A vector instruction is logged an element at a time: Sail writes the
+	// register (and vstart) once per element, so one record can hold several
+	// values for one of them. The last is the one the instruction leaves.
+	std::map<std::pair<char, unsigned>, size_t> last_write;
+	for (size_t i = 0; i < ref.fields.size(); i++)
+		if (ref.fields[i].cls == 'v' || ref.fields[i].cls == 'c')
+			last_write[{ref.fields[i].cls, ref.fields[i].idx}] = i;
+	for (size_t fi = 0; fi < ref.fields.size(); fi++) {
+		const RefField &f = ref.fields[fi];
+		if ((f.cls == 'v' || f.cls == 'c') && last_write[{f.cls, f.idx}] != fi) continue;
 		uint64_t want = 0;
 		if (f.cls != 'v' && !parse_hex(f.value, want)) { fail("cannot read reference value " + f.value); return; }
 		if (f.cls == 'x') {
@@ -1056,18 +1070,29 @@ void DoomSystem::traced_step()
 				}
 			}
 		}
-		uint64_t mine = 0;
-		if (!store_value(paddr, (unsigned)size, mine)) {
-			if (!memory.is_ram(paddr, (unsigned)size)) {
+		// Byte by byte, as wide as the reference's value: a cbo.zero block is
+		// 64 bytes. What this step stored, or else what memory holds.
+		const std::vector<uint8_t> want_le = hex_bytes(s.value);   // least significant first
+		bool differs = false;
+		std::string mine_hex;
+		for (size_t i = 0; i < size; i++) {
+			const uint8_t w = want_le[i];
+			uint8_t m = 0;
+			const auto it = store_bytes.find(paddr + i);
+			if (it != store_bytes.end()) m = it->second;
+			else if (memory.is_ram(paddr + i, 1)) memory.read_bytes(paddr + i, &m, 1);
+			else {
 				fail("the reference stored to " + hex(s.addr, 16) + " and DoomV did not");
 				return;
 			}
-			uint8_t bytes[8] = {};
-			memory.read_bytes(paddr, bytes, std::min(size, (size_t)8));
-			for (size_t i = 0; i < std::min(size, (size_t)8); i++) mine |= (uint64_t)bytes[i] << (8 * i);
+			if (m != w) differs = true;
+			char b[3];
+			std::snprintf(b, sizeof b, "%02X", m);
+			mine_hex.insert(0, b);
 		}
-		if (mine != want) {
-			fail("store to " + hex(s.addr, 16) + ": reference " + s.value + ", DoomV " + hex(mine, (int)size * 2));
+		(void)want;
+		if (differs) {
+			fail("store to " + hex(s.addr, 16) + ": reference " + s.value + ", DoomV 0x" + mine_hex);
 			return;
 		}
 	}
@@ -1078,7 +1103,9 @@ void DoomSystem::traced_step()
 	for (const AccessRecord &a : writes) {
 		if (cbo_zero && ref.stores.empty()) break;
 		bool listed = false;
-		for (const RefStore &s : ref.stores) if (same_addr(a, s.addr)) listed = true;
+		const uint64_t mine = ref.physical ? a.paddr : a.vaddr;
+		for (const RefStore &s : ref.stores)
+			if (mine >= s.addr && mine + a.size <= s.addr + hex_bytes(s.value).size()) listed = true;
 		if (!listed) {
 			fail("DoomV stored to " + hex(ref.physical ? a.paddr : a.vaddr, 16) + ", which the reference did not");
 			return;

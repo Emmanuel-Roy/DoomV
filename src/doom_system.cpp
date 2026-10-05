@@ -26,6 +26,10 @@ DoomSystem::Hart::Hart(Memory &mem, unsigned id, const Hart *first)
 	: id(id), decoder(core, regs, mem, first ? &first->decoder : nullptr), ext(Extensions)
 {
 	regs.write_csr(0xF14, id);   // mhartid
+	if (Registers::VLEN_BITS != Registers::VLEN_DEFAULT) {
+		vector_storage.assign((size_t)32 * Registers::VLEN_BYTES, 0);
+		regs.use_vector_storage(vector_storage.data());
+	}
 	core.drop_fetch_page_ctx = this;
 	core.drop_fetch_page = [](void *ctx, uint64_t vpage) {
 		FetchPage &e = static_cast<Hart *>(ctx)->fetch_cache[vpage & (FETCH_CACHE_SIZE - 1)];
@@ -1071,6 +1075,7 @@ void DoomSystem::step_execute()
 
 	uint64_t pc = regs.get_pc();
 	if (debugger.may_halt() && debugger.should_halt(pc, false)) {
+		if (gdb) return;   // halted for gdb, which carries on from here
 		console_drain();
 		debugger.dump_log(regs, memory, "crash.log");
 		if (has_sig_range) debugger.dump_signature(memory, sig_begin, sig_end, sig_path.c_str());
@@ -1505,6 +1510,7 @@ void DoomSystem::cpu_loop()
 			std::fflush(stdout);
 			progress_next = (memory.instruction_count() / progress_every + 1) * progress_every;
 		}
+		if (gdb) gdb_service();
 		if (debugger.halted) {
 			if (resume_requested.exchange(false)) {
 				resume_from_halt();
@@ -1512,7 +1518,7 @@ void DoomSystem::cpu_loop()
 				// Keep publishing so the dashboard stays live while paused,
 				// but do not spin a 200k-iteration burst doing nothing.
 				publish_snapshot();
-				std::this_thread::sleep_for(std::chrono::milliseconds(10));
+				std::this_thread::sleep_for(std::chrono::milliseconds(gdb ? 1 : 10));
 				continue;
 			}
 		}
@@ -1547,6 +1553,7 @@ void DoomSystem::cpu_loop()
 				uint64_t n = INPUT_PERIOD - (before & (INPUT_PERIOD - 1));
 				if (stop_at) n = std::min<uint64_t>(n, stop_at > before ? stop_at - before : 1);
 				if (snapshot_at > before) n = std::min<uint64_t>(n, snapshot_at - before);
+				if (halt_at > before) n = std::min<uint64_t>(n, halt_at - before);
 				n = std::min<uint64_t>(n, (uint64_t)budget);
 				if (fast_enabled()) run_fast(n);
 				else for (uint64_t k = 0; k < n && !debugger.halted; k++) step();
@@ -1571,6 +1578,11 @@ void DoomSystem::cpu_loop()
 			}
 			if (stop_at && now >= stop_at) {
 				stop_at_limit();
+				break;
+			}
+			if (halt_at && now >= halt_at) {
+				halt_at = 0;
+				debugger.halted = true;
 				break;
 			}
 		}
@@ -2615,6 +2627,10 @@ void DoomSystem::run()
 		if (linux_mode && !stdin_preloaded && !replaying)
 			std::thread(&DoomSystem::console_stdin_loop, this).detach();
 		while (!run_finished) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+		// gdb, waiting on a continue, is told the program exited before the
+		// process goes (the CPU thread does that within a few milliseconds).
+		for (int i = 0; gdb && gdb->connected() && !gdb_exit_reported && i < 500; i++)
+			std::this_thread::sleep_for(std::chrono::milliseconds(1));
 		stopping = true;
 		if (fbdump_thread.joinable()) fbdump_thread.join();
 		if (lockstep_active) lockstep_report();

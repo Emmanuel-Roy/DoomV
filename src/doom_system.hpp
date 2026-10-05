@@ -12,6 +12,7 @@
 #include "extensions.hpp"
 #include "net/usernet.hpp"
 #include "audio/host_audio.hpp"
+#include "gdb_server.hpp"
 #include <memory>
 #include <map>
 #include <cstdio>
@@ -117,6 +118,10 @@ public:
 	// and device reads are compared like everything else. This is the mode
 	// that says DoomV matches the reference deterministically.
 	void set_lockstep_strict() { lockstep_strict = true; }
+	// -gdb=<port>: a gdb remote server on 127.0.0.1:<port>. The machine
+	// starts halted, before its first instruction, and waits for gdb. See
+	// gdb_target.cpp.
+	bool set_gdb(const std::string &address, int port);
 	void set_canvas_dump(const char *path) { gui.set_canvas_dump(path); }
 
 	// Attach a raw image as the virtio-blk backing store. Returns false if
@@ -359,6 +364,8 @@ private:
 		Hart(Memory &mem, unsigned id, const Hart *first);
 		unsigned id;
 		Registers regs;
+		// The vector registers, when VLEN is wider than Registers holds itself.
+		std::vector<uint8_t> vector_storage;
 		RiscvCore core;
 		Decoder decoder;
 		FetchPage fetch_cache[FETCH_CACHE_SIZE];
@@ -402,6 +409,25 @@ private:
 	bool others_reserved() const;
 	unsigned reserved = 0;   // harts holding a reservation; see hart_slot
 	void count_reservations();
+
+	// gdb_target.cpp: gdb's packets, answered on the CPU thread.
+	GdbServer *gdb = nullptr;
+	void gdb_service();
+	void gdb_handle(const std::string &packet);
+	std::string gdb_stop_reply(int signal);
+	std::string gdb_target_xml() const;
+	bool gdb_read_reg(unsigned n, std::string &hex);
+	bool gdb_write_reg(unsigned n, const std::string &hex);
+	bool gdb_translate(uint64_t vaddr, uint64_t &paddr);
+	void gdb_monitor(const std::string &command);
+	unsigned gdb_hart = 0;         // whose registers gdb reads (Hg)
+	bool gdb_running = false;      // gdb is waiting for the machine to stop
+	// The end of the run has been reported to gdb, so the process may go.
+	std::atomic<bool> gdb_exit_reported{false};
+	int gdb_signal = 5;            // what that stop is reported as: SIGTRAP, or SIGINT after Ctrl-C
+	std::vector<uint64_t> gdb_breakpoints;
+	// Halt once the step count reaches this (a gdb single step); 0 for none.
+	uint64_t halt_at = 0;
 
 	// lockstep.cpp
 	void traced_step();

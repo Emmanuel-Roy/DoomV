@@ -47,7 +47,7 @@ constexpr char MAGIC[8] = {'D', 'O', 'O', 'M', 'V', 'S', 'N', 'P'};
 // reads as a machine of one; version 2 has no network card, 3 no
 // real-time clock, 4 no sound card, with two queues to a virtio device
 // where there are now four, 5 no GPU, and 6 no GPU 3D state.
-constexpr uint32_t VERSION = 7;
+constexpr uint32_t VERSION = 8;
 
 class Writer {
 public:
@@ -125,15 +125,22 @@ struct SaveState {
 	// The fields, in the order they are written. Each save_* has a load_* that
 	// reads exactly what it wrote.
 
-	template <class IO> static void registers(IO &io, Registers &r)
+	template <class IO> static void registers(IO &io, Registers &r, uint32_t version)
 	{
 		// Plain data throughout -- the register files, the CSRs, the history
-		// ring crash.log prints -- apart from the lock-step log pointer, which
-		// belongs to this process and is put back.
+		// ring crash.log prints -- apart from the lock-step log pointer and
+		// the vector registers' pointer, which belong to this process and are
+		// put back. Before version 8 the vector pointer did not exist: it is
+		// the last field, and everything before it is what was saved then.
 		static_assert(std::is_trivially_copyable_v<Registers>, "Registers is saved as bytes");
 		auto *const log = r.csr_log;
-		io.bytes(&r, sizeof r);
+		uint8_t *const vreg = r.vreg;
+		const size_t before_vreg = (size_t)((const char *)&r.vreg - (const char *)&r);
+		io.bytes(&r, version >= 8 ? sizeof r : before_vreg);
 		r.csr_log = log;
+		r.vreg = vreg;
+		// Wider than the inline registers: the hart's own storage, after.
+		if (!r.vectors_inline()) io.bytes(r.vreg, (size_t)32 * Registers::VLEN_BYTES);
 	}
 
 	template <class IO> static void core(IO &io, RiscvCore &c)
@@ -526,7 +533,7 @@ struct SaveState {
 	template <class IO> static void system(IO &io, DoomSystem &s, uint32_t version)
 	{
 		for (const auto &h : s.harts) {
-			registers(io, h->regs);
+			registers(io, h->regs, version);
 			io.mark(0x52454700);   // "REG"
 			core(io, h->core);
 			if (version >= 2) hart(io, *h);
@@ -619,6 +626,8 @@ bool SaveState::save(DoomSystem &s, const std::string &dir)
 	w.pod(snd);
 	const uint8_t gpu = memory.gpu.is_enabled();
 	w.pod(gpu);
+	const uint32_t vlen = Registers::VLEN_BITS;
+	w.pod(vlen);
 	// The extensions are each hart's, and the current hart's are live in
 	// Extensions rather than in its Hart.
 	s.cur->ext = Extensions;
@@ -661,6 +670,8 @@ bool SaveState::restore(DoomSystem &s, const std::string &dir)
 	if (snd != (uint8_t)memory.snd.is_enabled()) differ += " -snd";
 	const uint8_t gpu = version >= 6 ? r.get<uint8_t>() : 0;
 	if (gpu != (uint8_t)memory.gpu.is_enabled()) differ += " -gpu";
+	const uint32_t vlen = version >= 8 ? r.get<uint32_t>() : (uint32_t)Registers::VLEN_DEFAULT;
+	if (vlen != (uint32_t)Registers::VLEN_BITS) differ += " -vlen";
 	if (!differ.empty()) {
 		std::cout << "restore: this machine is not the one the snapshot was taken on -- start it with "
 		             "the same -ram, -march, boot files, disks and shared folder. Different:" << differ << "\n";

@@ -75,7 +75,7 @@ void RiscvCore::exec_ZICBOZ(const DecodedOp &instr, Registers &regs, Memory &mem
 		// A fault partway through leaves the earlier chunks zeroed. That is
 		// permitted -- cbo.zero is not required to be atomic -- and the
 		// trap reports the address that actually faulted.
-		if (!translate_or_trap(regs, mem, base + off, AccessType::Store, paddr)) return;
+		if (!translate_or_trap(regs, mem, base + off, AccessType::Store, paddr, 8)) return;
 		mem.write64(paddr, 0);
 	}
 

@@ -14,8 +14,8 @@
 #                               Sv57x4 two-stage translation against every
 #                               guest mode, the Sh* sub-extensions, and
 #                               hypervisor-side pointer masking and stateen
-#   riscv-vector-tests v128x64  vector, at VLEN=128 -- which is DoomV's fixed
-#                               width (Registers::VLEN_BITS), so this avoids
+#   riscv-vector-tests v128x64  vector, at VLEN=128 -- DoomV's default width
+#                               (-vlen), so this avoids
 #                               the VLEN mismatch that made three suites
 #                               disagree with Sail earlier for no good reason
 #
@@ -32,8 +32,12 @@ VER="${TEST_DOWNLOAD_VERSION:-2026-08-20}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 cd "$HERE" || exit 2
 
+# --all-vlens: the vector suite at VLEN 256 and 512 too, for -vlen (1.5 GB).
+SUITES="riscv-tests damo-tests riscv-vector-tests-v128x64"
+[ "${1:-}" = "--all-vlens" ] && SUITES="$SUITES riscv-vector-tests-v256x64 riscv-vector-tests-v512x64"
+
 rc=0
-for t in riscv-tests damo-tests riscv-vector-tests-v128x64; do
+for t in $SUITES; do
 	if [ -d "$t" ] && [ -n "$(ls -A "$t" 2>/dev/null)" ]; then
 		printf '  %-30s present (%s files)\n' "$t" "$(find "$t" -type f | wc -l)"
 		continue

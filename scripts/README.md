@@ -33,6 +33,7 @@ to exit. `python scripts/boot.py <guest> --help` lists everything a guest takes.
 | `--gpu` | A virtio-gpu (Linux and Ubuntu) in place of the simple framebuffer, with OpenGL and Vulkan on this computer's GPU; the guest picks per program (built the first time). |
 | `--sound` | A sound card (Linux and Ubuntu), playing and recording through this computer's default devices. |
 | `--all` | Every device: `--net --gpu --sound`. |
+| `--vlen 256` | The vector registers' width in bits, a power of two from 128 (the default) to 65536. |
 | `--headless` | No window; output goes to the console. |
 | `--no-build` | Use what is already built. |
 

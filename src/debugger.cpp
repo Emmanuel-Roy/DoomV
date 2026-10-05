@@ -28,6 +28,12 @@ void Debugger::add_breakpoint(uint64_t addr)
 	breakpoints.push_back(addr);
 }
 
+void Debugger::remove_breakpoint(uint64_t addr)
+{
+	const auto it = std::find(breakpoints.begin(), breakpoints.end(), addr);
+	if (it != breakpoints.end()) breakpoints.erase(it);
+}
+
 void Debugger::dump_signature(Memory &mem, uint64_t begin, uint64_t end, const char *path)
 {
 	std::ofstream file(path);

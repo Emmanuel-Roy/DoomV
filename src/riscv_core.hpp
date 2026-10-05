@@ -20,6 +20,7 @@ struct AccessRecord {
 	uint64_t vaddr, paddr;
 	uint8_t size;
 	bool store;
+	bool amo = false;   // an AMO: a load and a store, logged as one (mem[RW,...])
 };
 
 class RiscvCore {
@@ -34,6 +35,11 @@ public:
 	uint64_t trap_count = 0;
 	uint64_t last_trap_cause = 0, last_trap_tval = 0, last_trap_epc = 0;
 	bool last_trap_interrupt = false;
+	// The trap enter_trap is about to take faulted on a hypervisor load or
+	// store (hlv/hlvx/hsv), whose address is the guest's virtual address
+	// whatever mode ran it: GVA says so even from HS or M. Set just before
+	// the call, and consumed by it.
+	bool trap_guest_va = false;
 	std::vector<AccessRecord> *access_log = nullptr;
 	// Whether interrupt `bit` would be taken now were it pending: the enable
 	// and delegation half of check_and_take_interrupt. In lock-step the

@@ -13,8 +13,10 @@ they live:
                         profile requires H and the Sh* sub-extensions.
                         43 groups, including Sv39x4/Sv48x4/Sv57x4 two-stage
                         translation against every guest mode.
-  riscv-vector-tests    V and its sub-profiles, at VLEN=128, which is
-                        DoomV's fixed width.
+  riscv-vector-tests    V and its sub-profiles, built for one VLEN each:
+                        v128x64 at DoomV's default, v256x64 and v512x64
+                        (fetch.sh --all-vlens) run DoomV with -vlen and
+                        Sail with its vlen_exp to match.
   riscv-tests           the base ISA plus rv64mi/rv64si, as a broad
                         regression net.
 
@@ -94,6 +96,28 @@ SUITE_MARCH = MARCH + "_zkr_zicfilp_zicfiss_zbc_zbkb_zbkx_zfh"
 WSL_SAIL = "/mnt/z/Code/Dev/DoomV/tools/verification/simulators/sail/src/build/c_emulator/sail_riscv_sim"
 WSL_CFG = "/mnt/z/Code/Dev/DoomV/tools/verification/simulators/sail/rva23s64.json"
 
+# The vector length both run at. riscv-vector-tests come built for one VLEN
+# each (riscv-vector-tests-v256x64 is VLEN=256, ELEN=64), and a test's
+# expected values are for that width only; main() sets this from the
+# suite's name, and Sail gets its config with vlen_exp to match.
+VLEN = 128
+
+
+def use_vlen(vlen: int) -> None:
+    global VLEN, WSL_CFG
+    VLEN = vlen
+    if vlen == 128:
+        return
+    import re
+    cfg = ROOT / "tools" / "verification" / "simulators" / "sail" / "rva23s64.json"
+    text = cfg.read_text()
+    changed = re.sub(r'"vlen_exp":\s*\d+', f'"vlen_exp": {vlen.bit_length() - 1}', text)
+    assert changed != text, "no vlen_exp in the Sail config"
+    out = ROOT / "build" / f"sail-rva23s64-vlen{vlen}.json"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(changed)
+    WSL_CFG = win_to_wsl(out)
+
 
 def win_to_wsl(p: Path) -> str:
     s = str(p.resolve()).replace("\\", "/")
@@ -166,6 +190,8 @@ def doomv_run(elf: Path, syms: dict, timeout: int):
            "-tohost={:x}".format(syms["tohost"])]
     if not self_check:
         cmd.append("-sig={:x}:{:x}".format(beg, end))
+    if VLEN != 128:
+        cmd.append(f"-vlen={VLEN}")
 
     # Shared with the arch-test harness: one signature.log, one lock, and
     # a lock left behind by a killed run is broken rather than waited out.
@@ -238,6 +264,10 @@ def main() -> int:
     if not root.is_dir():
         print(f"no such suite: {root}", file=sys.stderr)
         return 2
+    import re
+    m = re.match(r"riscv-vector-tests-v(\d+)x", args.suite)
+    if m:
+        use_vlen(int(m.group(1)))
 
     elfs = sorted(p for p in root.rglob("*") if p.is_file() and p.suffix not in (".gz", ".txt", ".md"))
     if args.limit:
@@ -245,7 +275,8 @@ def main() -> int:
 
     counts = {"pass": 0, "fail": 0, "skip": 0}
     problems = []
-    refdir = HERE / "ref"
+    # Sail's signatures, kept between runs; per VLEN, as the suites share names.
+    refdir = HERE / "ref" if VLEN == 128 else HERE / "ref" / f"vlen{VLEN}"
     refdir.mkdir(exist_ok=True)
 
     for i, elf in enumerate(elfs, 1):
