@@ -138,6 +138,14 @@ struct ExtensionConfig {
 // that -- reads happen constantly (every decode), writes happen at most
 // once per run.
 inline ExtensionConfig Extensions;
+
+// Smaia/Ssaia: the AIA CSRs (miselect, mireg, mtopei, mtopi and the S and VS
+// copies, mvien, mvip, the hvi* registers). Not a misa letter, so a flag of
+// the machine's beside ExtensionConfig rather than in it -- whose layout
+// snapshots record. On unless a -march leaves "smaia"/"ssaia" out; Sail's
+// RVA23S64 has no AIA, and a hart without it traps on all of them, as Sail's
+// does.
+inline bool ExtAia = true;
 // What the hart supports, as -march chose it. Extensions is what is enabled
 // right now: misa is writable, and clearing a letter turns its extension off
 // until it is set again, so Extensions follows misa and this does not.

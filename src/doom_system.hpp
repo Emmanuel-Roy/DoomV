@@ -130,6 +130,9 @@ public:
 	// starts halted, before its first instruction, and waits for gdb. See
 	// gdb_target.cpp.
 	bool set_gdb(const std::string &address, int port);
+	// -cosim-log=<path>: the machine's devices as seen from the CPU, for a
+	// reference that has none of them (see Memory::cosim). One hart.
+	bool set_cosim_log(const char *path);
 	void set_canvas_dump(const char *path) { gui.set_canvas_dump(path); }
 
 	// Attach a raw image as the virtio-blk backing store. Returns false if
@@ -418,6 +421,11 @@ private:
 	unsigned reserved = 0;   // harts holding a reservation; see hart_slot
 	void count_reservations();
 
+	// -cosim-log: the external-interrupt line Sail cannot compute, logged as
+	// it changes, after each step and each input point.
+	void cosim_after_step();
+	bool cosim_line = false;
+
 	// gdb_target.cpp: gdb's packets, answered on the CPU thread.
 	GdbServer *gdb = nullptr;
 	void gdb_service();
@@ -445,6 +453,7 @@ private:
 	bool lockstep_active = false;
 	bool lockstep_failed = false;
 	bool lockstep_strict = false;
+	bool lockstep_stdin = false;   // -lockstep=-: the trace arrives on stdin
 	std::FILE *trace_file = nullptr;
 	unsigned trace_hart = ~0u;     // whose records -trace last wrote, with several harts
 	struct LockstepState;

@@ -1,0 +1,124 @@
+diff -ruN a/c_emulator/riscv_platform_if.h b/c_emulator/riscv_platform_if.h
+--- a/c_emulator/riscv_platform_if.h	2026-10-05 22:54:42.906877327 -0500
++++ b/c_emulator/riscv_platform_if.h	2026-10-05 22:54:56.215360305 -0500
+@@ -37,8 +37,36 @@
+   virtual void write(PlatformInterface &self, uint64_t offset, uint64_t width, uint64_t value) = 0;
+ };
+ 
++// Co-simulation with DoomV (a DoomV patch; see cosim_claim in
++// model/sys/platform.sail): the devices the model does not have, answered
++// from DoomV's log of its run.
++class Cosim {
++public:
++  virtual ~Cosim() = default;
++  virtual bool claim(uint64_t paddr, uint64_t width) = 0;
++  virtual uint64_t read(uint64_t paddr, uint64_t width) = 0;
++  virtual void write(uint64_t paddr, uint64_t width, uint64_t value) = 0;
++  virtual uint64_t external() = 0;
++};
++
+ class PlatformInterface {
+ public:
++  // Unset, nothing is the log's and no external interrupt is raised.
++  Cosim *cosim = nullptr;
++  bool cosim_claim(uint64_t paddr, uint64_t width) {
++    return cosim != nullptr && cosim->claim(paddr, width);
++  }
++  uint64_t cosim_read(uint64_t paddr, uint64_t width) {
++    return cosim->read(paddr, width);
++  }
++  unit cosim_write(uint64_t paddr, uint64_t width, uint64_t value) {
++    cosim->write(paddr, width, value);
++    return UNIT;
++  }
++  uint64_t cosim_external(unit) {
++    return cosim != nullptr ? cosim->external() : 0;
++  }
++
+   // Unset, no access is claimed and the model is the single hart it was.
+   ClintRemote *clint_remote = nullptr;
+   bool clint_remote_claim(uint64_t offset, uint64_t width, bool store) {
+diff -ruN a/model/sys/interrupt_implementation.sail b/model/sys/interrupt_implementation.sail
+--- a/model/sys/interrupt_implementation.sail	2026-10-05 22:54:50.684521996 -0500
++++ b/model/sys/interrupt_implementation.sail	2026-10-05 22:54:56.215331444 -0500
+@@ -9,9 +9,16 @@
+ // This aggregates the information from the interrupts controllers in
+ // the system, which currently are the CLINT and the SIG.
+ 
+-function external_interrupts_pending(hgeie_val : xlenbits) -> Minterrupts =
++// The external-interrupt lines of a co-simulated machine (a DoomV patch):
++// what DoomV's APLIC drives into the hart -- SEIP, bit 9 -- as DoomV's log
++// says, step by step. Zero without a log.
++val cosim_external = impure {cpp: "cosim_external"} : unit -> bits(64)
++
++function external_interrupts_pending(hgeie_val : xlenbits) -> Minterrupts = {
+   // The CLINT doesn't deal with external interrupts.
+-  if plat_have_sig then sig_external_interrupts_pending(hgeie_val) else Mk_Minterrupts(zeros())
++  let sig = if plat_have_sig then sig_external_interrupts_pending(hgeie_val) else Mk_Minterrupts(zeros());
++  Mk_Minterrupts(sig.bits | truncate(cosim_external(), xlen))
++}
+ 
+ function machine_software_interrupt_pending() -> bits(1) =
+   (if plat_have_clint then clint_machine_software_interrupt_pending() else 0b0)
+diff -ruN a/model/sys/platform.sail b/model/sys/platform.sail
+--- a/model/sys/platform.sail	2026-10-05 22:54:50.748360971 -0500
++++ b/model/sys/platform.sail	2026-10-05 22:54:56.215289164 -0500
+@@ -396,16 +396,35 @@
+   Ok(true)
+ }
+ 
++// Co-simulation with DoomV (a DoomV patch; see the cosim driver in
++// sail_riscv_mh.cpp and tools/verification/lockstep_linux.py).
++//
++// DoomV's Linux machine has devices this model does not: a UART, an RTC, an
++// APLIC, virtio. To follow that machine the model takes what those devices
++// answered from DoomV's own run: cosim_claim says whether an access is one
++// of them, cosim_read returns the value DoomV's device gave the same load,
++// and cosim_write hands over the store DoomV's device took, to be checked.
++// The instructions, and everything else, are the model's own. A driver with
++// no log claims nothing, and the model is exactly as it was.
++val cosim_claim = impure {cpp: "cosim_claim"} : (bits(64), bits(64)) -> bool
++val cosim_read  = impure {cpp: "cosim_read"}  : (bits(64), bits(64)) -> bits(64)
++val cosim_write = impure {cpp: "cosim_write"} : (bits(64), bits(64), bits(64)) -> unit
++
++private function within_cosim forall 'n, 0 < 'n <= max_mem_access . (Physaddr(addr) : physaddr, width : int('n)) -> bool =
++  'n <= 8 & cosim_claim(zero_extend(64, addr), to_bits(64, width))
++
+ // Top-level MMIO dispatch
+ function within_mmio_readable forall 'n, 0 < 'n <= max_mem_access . (addr : physaddr, width : int('n)) -> bool =
+   if get_config_rvfi()
+   then false
+   else within_clint(addr, width) | within_sig(addr, width) | (within_htif_readable(addr, width) & 1 <= 'n)
++       | within_cosim(addr, width)
+ 
+ function within_mmio_writable forall 'n, 0 < 'n <= max_mem_access . (addr : physaddr, width : int('n)) -> bool =
+   if get_config_rvfi()
+   then false
+   else within_clint(addr, width) | within_sig(addr, width) | (within_htif_writable(addr, width) & 'n <= 8)
++       | within_cosim(addr, width)
+ 
+ function mmio_read forall 'n, 0 < 'n <= max_mem_access . (access : MemoryAccessType(mem_payload), paddr : physaddr, width : int('n)) -> MemoryOpResult(bits(8 * 'n)) =
+   if   within_clint(paddr, width)
+@@ -414,6 +433,11 @@
+   then sig_load(access, paddr, width)
+   else if within_htif_readable(paddr, width)
+   then htif_load(access, paddr, width)
++  else if within_cosim(paddr, width) & 'n <= 8
++  then {
++    let Physaddr(a) = paddr;
++    Ok(truncate(cosim_read(zero_extend(64, a), to_bits(64, width)), 8 * 'n))
++  }
+   else Err(paddr, accessFaultFromAccessType(access))
+ 
+ function mmio_write forall 'n, 0 < 'n <= max_mem_access . (paddr : physaddr, width : int('n), data: bits(8 * 'n)) -> MemoryOpResult(bool) =
+@@ -423,4 +447,10 @@
+   then sig_store(paddr, width, data)
+   else if within_htif_writable(paddr, width)
+   then htif_store(paddr, width, data)
++  else if within_cosim(paddr, width) & 'n <= 8
++  then {
++    let Physaddr(a) = paddr;
++    cosim_write(zero_extend(64, a), to_bits(64, width), zero_extend(64, data));
++    Ok(true)
++  }
+   else Err(paddr, E_SAMO_Access_Fault())

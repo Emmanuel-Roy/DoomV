@@ -180,7 +180,7 @@ public:
 	static constexpr uint64_t CLINT_BASE = 0x02000000;
 	static constexpr uint64_t CLINT_SIZE = 0x10000;
 	static constexpr uint64_t APLIC_BASE = 0x0C000000;
-	static constexpr uint64_t APLIC_SIZE = 0x4000;
+	static constexpr uint64_t APLIC_SIZE = 0x8000;   // the domain, then the IDCs
 	static constexpr uint64_t IMSIC_M_BASE = 0x24000000;
 	static constexpr uint64_t IMSIC_S_BASE = 0x28000000;
 	static constexpr uint64_t IMSIC_SIZE   = 0x1000;
@@ -347,6 +347,36 @@ public:
 	// write8s, and only the outermost is the guest's store.
 	std::vector<std::pair<uint64_t, uint8_t>> *store_log = nullptr;
 	int store_depth = 0;
+
+	// -cosim-log: what a reference without DoomV's devices needs to follow
+	// this machine (tools/verification/lockstep_linux.py, Sail's cosim
+	// driver). Every load and store the CPU makes to a device -- anything
+	// but RAM, the framebuffers and the CLINT, which the reference has --
+	// and every write a device makes to RAM, each stamped with the step
+	// before which the reference must see it.
+	std::FILE *cosim = nullptr;
+	int cosim_dma = 0;                 // inside device work: RAM writes are the device's
+	uint64_t cosim_dma_at = 0;         // ... applied before this step
+	bool cosim_device(uint64_t paddr) const
+	{
+		return !(paddr >= RAM_BASE && paddr < RAM_BASE + RAM_SPAN) && !(paddr >= LFB_BASE && paddr < LFB_BASE + LFB_SIZE)
+		    && !(paddr >= CLINT_BASE && paddr < CLINT_BASE + CLINT_SIZE);
+	}
+	void cosim_access(char kind, uint64_t paddr, unsigned size, uint64_t value)
+	{
+		std::fprintf(cosim, "%c %llu %llx %u %llx\n", kind, (unsigned long long)instr_count,
+		             (unsigned long long)paddr, size, (unsigned long long)value);
+	}
+	void cosim_ram_write(uint64_t paddr, const uint8_t *data, size_t len)
+	{
+		std::fprintf(cosim, "M %llu %llx ", (unsigned long long)cosim_dma_at, (unsigned long long)paddr);
+		for (size_t i = 0; i < len; i++) std::fprintf(cosim, "%02x", data[i]);
+		std::fputc('\n', cosim);
+	}
+	// Around device work: a store's (DMA lands after that step) or the
+	// input point's (before the next).
+	void cosim_begin(bool after_this_step) { if (cosim_dma++ == 0) cosim_dma_at = instr_count + (after_this_step ? 1 : 0); }
+	void cosim_end() { cosim_dma--; }
 	bool is_ram(uint64_t paddr, unsigned size) const
 	{
 		const uint64_t span = RAM_SPAN;

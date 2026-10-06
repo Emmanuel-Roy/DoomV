@@ -53,6 +53,27 @@ def disk_device_tree(source, extra_args=""):
     return source
 
 
+def sail_device_tree(source):
+    """The machine Sail can follow: no IMSIC and no AIA CSRs, so the APLIC
+    delivers directly -- to the hart's SEIP, the one external-interrupt input
+    Sail's model has (src/aplic.cpp's direct mode). What
+    tools/verification/lockstep_linux.py boots and lock-steps against Sail."""
+    out, count = re.subn(r"\n\t\timsic_[ms]: interrupt-controller@[0-9a-f]+ \{.*?\n\t\t\};", "", source, flags=re.S)
+    if count != 2:
+        raise ValueError("expected the two IMSIC nodes")
+    out, count = re.subn(r"msi-parent = <&imsic_s>;", "interrupts-extended = <&cpu0_intc 9>;", out)
+    if count != 1:
+        raise ValueError("expected the APLIC's msi-parent")
+    out, count = re.subn(r"reg = <0x0 0x0c000000 0x0 0x4000>;", "reg = <0x0 0x0c000000 0x0 0x8000>;", out)
+    if count != 1:
+        raise ValueError("expected the APLIC's reg")
+    out = out.replace("_smaia_ssaia", "")
+    out, count = re.subn(r'"smaia", "ssaia", ', "", out)
+    if count != 1:
+        raise ValueError("expected smaia and ssaia in riscv,isa-extensions")
+    return out
+
+
 def compile_dtb(dts: Path, source: str):
     dts.write_text(source)
     subprocess.run(["dtc", "-I", "dts", "-O", "dtb", "-o", str(dts.with_suffix(".dtb")), str(dts)], check=True)
@@ -66,6 +87,8 @@ def main():
     for stem, archive, smoke in (("doomv", "initramfs.cpio", False), ("smoke", "smoke.cpio", True)):
         compile_dtb(args.images / f"{stem}.dts",
                     device_tree(source, (args.images / archive).stat().st_size, smoke))
+    compile_dtb(args.images / "doomv-sail.dts",
+                sail_device_tree(device_tree(source, (args.images / "initramfs.cpio").stat().st_size)))
     # Built here rather than by the Ubuntu boot script, so that every device
     # tree this project uses is produced in one place from one source, and so
     # that booting the image needs no WSL round trip for dtc.

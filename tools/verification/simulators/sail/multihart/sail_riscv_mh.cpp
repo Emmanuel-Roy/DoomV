@@ -18,6 +18,14 @@
 //     by one hart cancels any other hart's LR reservation on the bytes it
 //     wrote.
 //
+// With --cosim LOG --cosim-start PC (one hart) it follows a DoomV machine
+// whose devices the model does not have: what DoomV's devices answered is
+// taken from DoomV's log of the same run (-cosim-log), in order, and the
+// external-interrupt line and the devices' writes to RAM are applied at the
+// steps the log names. Everything else is the model's own. The log's steps
+// are counted from the first time the model reaches PC -- DoomV's first
+// instruction -- where the model's clock is also set to DoomV's.
+//
 // Arguments are sail_riscv_sim's, plus --harts N (default 1). With more than
 // one hart the trace gains a line "hart <i>" before each step of a hart other
 // than the one that stepped last, so a reader knows whose records follow.
@@ -34,8 +42,11 @@
 
 #include <jsoncons/json.hpp>
 
+#include <algorithm>
 #include <cinttypes>
 #include <cstdio>
+#include <deque>
+#include <fstream>
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
@@ -168,6 +179,112 @@ void Reservations::mem_write_callback(ModelImpl &model, const char *, sbits padd
   }
 }
 
+// DoomV's log of its devices (-cosim-log), served to the model.
+class CosimLog final : public Cosim {
+public:
+  struct Access { char kind; uint64_t step, addr, size, value; };
+  struct Event { uint64_t step; char kind; uint64_t addr; std::vector<uint8_t> bytes; bool line; };
+
+  bool load(const char *path) {
+    std::ifstream f(path);
+    if (!f) return false;
+    std::string kind;
+    while (f >> kind) {
+      if (kind == "start") {
+        f >> start_step >> start_mtime >> start_phase >> std::hex >> start_mstatus >> start_mepc >> start_mcycle
+          >> start_minstret >> std::dec;
+      } else if (kind == "R" || kind == "W") {
+        Access a{kind[0], 0, 0, 0, 0};
+        f >> a.step >> std::hex >> a.addr >> std::dec >> a.size >> std::hex >> a.value >> std::dec;
+        accesses.push_back(a);
+      } else if (kind == "M") {
+        Event e{0, 'M', 0, {}, false};
+        std::string hex;
+        f >> e.step >> std::hex >> e.addr >> std::dec >> hex;
+        for (size_t i = 0; i + 1 < hex.size(); i += 2) e.bytes.push_back((uint8_t)strtoul(hex.substr(i, 2).c_str(), nullptr, 16));
+        events.push_back(e);
+      } else if (kind == "I") {
+        Event e{0, 'I', 0, {}, false};
+        int v = 0;
+        f >> e.step >> v;
+        e.line = v != 0;
+        events.push_back(e);
+      } else {
+        std::string rest;
+        std::getline(f, rest);
+      }
+    }
+    std::stable_sort(events.begin(), events.end(), [](const Event &a, const Event &b) { return a.step < b.step; });
+    return true;
+  }
+
+  // What DoomV's devices are: anything that is not RAM and not the CLINT
+  // (the model has those; the CLINT is decoded before this is asked).
+  bool claim(uint64_t paddr, uint64_t) override {
+    return synced && !(paddr >= 0x80000000 && paddr < 0x100000000ull) && !(paddr >= 0x50000000 && paddr < 0x51000000);
+  }
+  uint64_t read(uint64_t paddr, uint64_t width) override {
+    if (accesses.empty()) return mismatch("the model read a device at 0x%" PRIx64 " after DoomV's log ended", paddr), 0;
+    const Access a = accesses.front();
+    accesses.pop_front();
+    if (a.kind != 'R' || a.addr != paddr || a.size != width)
+      return mismatch("the model read %" PRIu64 " bytes at 0x%" PRIx64 " where DoomV %s %" PRIu64 " at 0x%" PRIx64
+                      " (DoomV's step %" PRIu64 ")", width, paddr, a.kind == 'R' ? "read" : "wrote", a.size, a.addr, a.step), 0;
+    return a.value;
+  }
+  void write(uint64_t paddr, uint64_t width, uint64_t value) override {
+    if (accesses.empty()) return mismatch("the model wrote a device at 0x%" PRIx64 " after DoomV's log ended", paddr);
+    const Access a = accesses.front();
+    accesses.pop_front();
+    const uint64_t mask = width >= 8 ? ~UINT64_C(0) : (UINT64_C(1) << (8 * width)) - 1;
+    if (a.kind != 'W' || a.addr != paddr || a.size != width || ((a.value ^ value) & mask))
+      mismatch("the model wrote 0x%" PRIx64 " (%" PRIu64 " bytes) at 0x%" PRIx64 " where DoomV %s 0x%" PRIx64
+               " (%" PRIu64 ") at 0x%" PRIx64 " (DoomV's step %" PRIu64 ")", value, width, paddr,
+               a.kind == 'W' ? "wrote" : "read", a.value, a.size, a.addr, a.step);
+  }
+  uint64_t external() override { return seip ? UINT64_C(1) << 9 : 0; }
+
+  // Before the model's next step, which is DoomV's step `step`: what DoomV's
+  // devices did up to it.
+  void apply_up_to(uint64_t step) {
+    while (next < events.size() && events[next].step <= step) {
+      const Event &e = events[next++];
+      if (e.kind == 'I') seip = e.line;
+      else for (size_t i = 0; i < e.bytes.size(); i++) write_mem(e.addr + i, e.bytes[i]);
+    }
+  }
+
+  template <class... A> void mismatch(const char *fmt, A... a) {
+    if (!error.empty()) return;
+    char buf[512];
+    snprintf(buf, sizeof buf, fmt, a...);
+    error = buf;
+  }
+
+  uint64_t start_step = 0, start_mtime = 0, start_phase = 0;
+  uint64_t start_mstatus = 0, start_mepc = 0, start_mcycle = 0, start_minstret = 0;
+  bool synced = false;
+  std::string error;
+  std::deque<Access> accesses;
+
+private:
+  std::vector<Event> events;
+  size_t next = 0;
+  bool seip = false;
+};
+
+// Takes --cosim LOG and --cosim-start PC out of argv.
+void take_cosim(int &argc, char **argv, std::string &log, uint64_t &start) {
+  int out = 1;
+  for (int i = 1; i < argc; i++) {
+    if (strcmp(argv[i], "--cosim") == 0 && i + 1 < argc) log = argv[++i];
+    else if (strcmp(argv[i], "--cosim-start") == 0 && i + 1 < argc) start = strtoull(argv[++i], nullptr, 0);
+    else argv[out++] = argv[i];
+  }
+  argc = out;
+  argv[argc] = nullptr;
+}
+
 // The setters preinit_model applies to the first model, for the rest.
 void configure(ModelImpl &m, const CLIOptions &opts) {
   if (opts.config_enable_experimental_extensions) m.set_enable_experimental_extensions(true);
@@ -217,6 +334,16 @@ size_t take_harts(int &argc, char **argv) {
 
 int inner_main(int argc, char **argv) {
   const size_t nharts = take_harts(argc, argv);
+  std::string cosim_path;
+  uint64_t cosim_start = 0;
+  take_cosim(argc, argv, cosim_path, cosim_start);
+  CosimLog cosim;
+  if (!cosim_path.empty()) {
+    if (nharts != 1 || !cosim.load(cosim_path.c_str())) {
+      fprintf(stderr, "sail_riscv_mh: cannot co-simulate %s (one hart only)\n", cosim_path.c_str());
+      return EXIT_FAILURE;
+    }
+  }
   CLIOptions opts = parse_cli(argc, argv);
   if (opts.gdb_server_port != 0 || opts.rvfi_dii_port != 0) {
     fprintf(stderr, "sail_riscv_mh: the gdb server and RVFI-DII are sail_riscv_sim's alone\n");
@@ -281,6 +408,8 @@ int inner_main(int argc, char **argv) {
     run_info.trace_log
   );
   std::vector<std::shared_ptr<traploop_detector>> loops;
+  if (!cosim_path.empty()) first.platform().cosim = &cosim;
+  int64_t doomv_step = 0;
   for (auto &m : machine.harts) {
     if (nharts > 1) {
       m->platform().clint_remote = &clint;
@@ -311,8 +440,33 @@ int inner_main(int argc, char **argv) {
         fprintf(run_info.trace_log, "hart %zu\n", h);
         last_hart = h;
       }
+      // Co-simulation: at DoomV's first instruction, take on its step count
+      // and clock; from then on, what its devices did is applied before
+      // each step.
+      if (!cosim_path.empty()) {
+        if (!cosim.synced && m.state().zPC.bits == cosim_start) {
+          cosim.synced = true;
+          doomv_step = (int64_t)cosim.start_step;
+          m.state().zmtime = cosim.start_mtime;
+          // What the restore program's mret and its own instructions left
+          // different from DoomV's state at this point.
+          m.state().zmstatus.zbits = cosim.start_mstatus;
+          m.state().zmepc.bits = cosim.start_mepc;
+          m.state().zmcycle = cosim.start_mcycle;
+          m.state().zminstret = cosim.start_minstret;
+          mtime = cosim.start_mtime;
+          insn_cnt = cosim.start_phase;
+        }
+        if (cosim.synced) cosim.apply_up_to((uint64_t)doomv_step);
+      }
       m.call_pre_step_callbacks(waiting[h]);
       waiting[h] = m.try_step(step_no[h], wait_remaining[h] == 0);
+      if (!cosim.error.empty()) {
+        // On stderr: stdout may be the trace, streamed to DoomV's lock-step.
+        fprintf(stderr, "cosim: %s\n", cosim.error.c_str());
+        ended = &m;
+        break;
+      }
       if (std::optional<std::string> e = m.string_of_current_exception()) {
         fprintf(stdout, "%s\n", e->c_str());
         ended = &m;
@@ -327,6 +481,7 @@ int inner_main(int argc, char **argv) {
       m.call_post_step_callbacks(waiting[h]);
       if (!waiting[h]) {
         if (opts.config_print_step) fprintf(run_info.trace_log, "\n");
+        if (cosim.synced) doomv_step++;
         step_no[h]++;
         run_info.total_insns++;
         retired = true;

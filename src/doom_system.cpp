@@ -1555,7 +1555,9 @@ void DoomSystem::cpu_loop()
 				if (snapshot_at > before) n = std::min<uint64_t>(n, snapshot_at - before);
 				if (halt_at > before) n = std::min<uint64_t>(n, halt_at - before);
 				n = std::min<uint64_t>(n, (uint64_t)budget);
-				if (fast_enabled()) run_fast(n);
+				if (memory.cosim) {
+					for (uint64_t k = 0; k < n && !debugger.halted; k++) { step(); cosim_after_step(); }
+				} else if (fast_enabled()) run_fast(n);
 				else for (uint64_t k = 0; k < n && !debugger.halted; k++) step();
 				budget -= (int)n;
 			}
@@ -1568,8 +1570,13 @@ void DoomSystem::cpu_loop()
 			// land on it; the checks are made at the round's end then.
 			const bool rounds = harts.size() > 1;
 			if ((now & (INPUT_PERIOD - 1)) == 0
-			    || (rounds && now / INPUT_PERIOD != before / INPUT_PERIOD))
+			    || (rounds && now / INPUT_PERIOD != before / INPUT_PERIOD)) {
+				// What devices do at an input point -- a frame arriving, a
+				// key -- lands before the next step.
+				if (memory.cosim) memory.cosim_begin(false);
 				service_input(now);
+				if (memory.cosim) { memory.cosim_end(); cosim_after_step(); }
+			}
 			// After the step's input, as a restored run resumes with the step
 			// after it.
 			if (snapshot_at && (now == snapshot_at || (rounds && before < snapshot_at && now > snapshot_at))) {
@@ -2624,7 +2631,7 @@ void DoomSystem::run()
 		// so a headless Linux boot could be watched but never answered --
 		// which leaves anything past a login prompt untestable except by
 		// hand, in a window, by a person. stdin covers that gap.
-		if (linux_mode && !stdin_preloaded && !replaying)
+		if (linux_mode && !stdin_preloaded && !replaying && !lockstep_stdin)
 			std::thread(&DoomSystem::console_stdin_loop, this).detach();
 		while (!run_finished) std::this_thread::sleep_for(std::chrono::milliseconds(1));
 		// gdb, waiting on a continue, is told the program exited before the
@@ -2841,4 +2848,37 @@ void DoomSystem::run()
 	dashboard_thread.join();
 	if (fbdump_thread.joinable()) fbdump_thread.join();
 	console_drain();
+}
+
+bool DoomSystem::set_cosim_log(const char *path)
+{
+	if (hart_count() != 1) {
+		std::cout << "-cosim-log: one hart only" << std::endl;
+		return false;
+	}
+	memory.cosim = std::fopen(path, "w");
+	if (!memory.cosim) return false;
+	// Where the run starts: the step, the clock and its phase, which the
+	// reference takes on when it reaches this machine's first instruction.
+	// And what a reference cannot be given any other way: a program that puts
+	// state back ends in mret, which sets mstatus.MPIE and MPP and leaves its
+	// own mepc, and its instructions count in mcycle and minstret.
+	Registers &regs = cur->regs;
+	std::fprintf(memory.cosim, "start %llu %llu %llu %llx %llx %llx %llx\n",
+	             (unsigned long long)memory.instruction_count(),
+	             (unsigned long long)memory.get_timer().get_mtime(), (unsigned long long)tick_phase,
+	             (unsigned long long)cur->core.read_csr_effective(regs, memory, 0x300),
+	             (unsigned long long)regs.read_csr(0x341), (unsigned long long)regs.read_csr(0xB00),
+	             (unsigned long long)regs.read_csr(0xB02));
+	cosim_line = memory.get_aplic().direct_line(0);
+	if (cosim_line) std::fprintf(memory.cosim, "I %llu 1\n", (unsigned long long)memory.instruction_count());
+	return true;
+}
+
+void DoomSystem::cosim_after_step()
+{
+	const bool line = memory.get_aplic().direct_line(0);
+	if (line == cosim_line) return;
+	cosim_line = line;
+	std::fprintf(memory.cosim, "I %llu %d\n", (unsigned long long)memory.instruction_count(), line ? 1 : 0);
 }

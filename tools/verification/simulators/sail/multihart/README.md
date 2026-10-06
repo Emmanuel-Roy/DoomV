@@ -54,3 +54,22 @@ It needs the same Sail compiler, in `/root/build/sail-bin`.
 `tools/verification/tests/lockstep/multihart/*.S` once per hart count, runs
 this driver for the trace and DoomV with `-harts=N -lockstep-strict` against
 it. See the [README](../../../../../README.md#harts).
+
+## Co-simulation: DoomV's devices as Sail's inputs
+
+`--cosim LOG --cosim-start PC` (one hart) runs the model as the CPU of a
+DoomV machine whose devices Sail does not have -- the Linux machine
+`tools/verification/lockstep_linux.py` lock-steps. [`cosim.patch`](cosim.patch),
+applied after `multihart.patch`, adds four externs to the model:
+`cosim_claim/read/write`, consulted for an access the CLINT, the test
+interrupt generator and HTIF do not decode, and `cosim_external`, OR'd into
+the platform's external-interrupt inputs. The driver serves them from DoomV's
+`-cosim-log`: each device load gets the value DoomV's device gave, each
+device store is checked against DoomV's, in order, and the SEIP line and the
+devices' writes to RAM are applied before the step DoomV's log names. On
+first reaching PC -- DoomV's first instruction, after the restore program
+corun.py builds -- it takes on DoomV's step count, mtime and tick phase, and
+the mstatus, mepc, mcycle and minstret the restore program's own mret and
+instructions left different. Without `--cosim` nothing is claimed and the
+external input is zero: the model is unchanged. `make_cosim_patch.py`
+regenerates the patch from its edits.

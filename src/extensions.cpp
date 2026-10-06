@@ -15,6 +15,7 @@ void parse_march(const std::string &march)
 	Extensions.SSNPM = false;
 	Extensions.H = false;
 	Extensions.SSCOFPMF = Extensions.SSSTATEEN = false;
+	ExtAia = march.find("smaia") != std::string::npos || march.find("ssaia") != std::string::npos;
 
 	size_t pos = 0;
 	if (march.rfind("rv64", 0) == 0) { Extensions.XLEN64 = true; pos = 4; }

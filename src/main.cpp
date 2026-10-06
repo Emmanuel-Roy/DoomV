@@ -92,7 +92,7 @@ int main(int argc, char *argv[])
 	bool headless = false;
 	uint64_t stop_at = 0;
 	uint64_t snapshot_at = 0;
-	std::string snapshot_dir, restore_dir, export_dir;
+	std::string snapshot_dir, restore_dir, export_dir, cosim_path;
 	std::string record_path, replay_path;
 	std::string trace_path, lockstep_path;
 	bool lockstep_strict = false;
@@ -252,6 +252,9 @@ int main(int argc, char *argv[])
 			snapshot_at = std::stoull(arg.substr(12), nullptr, 0);
 		} else if (arg.rfind("-snapshot=", 0) == 0) {
 			snapshot_dir = arg.substr(10);
+		} else if (arg.rfind("-cosim-log=", 0) == 0) {
+			// The devices as the CPU sees them, for a reference without them.
+			cosim_path = arg.substr(11);
 		} else if (arg.rfind("-export-state=", 0) == 0) {
 			// Write the architectural state -- after -restore, the snapshot's --
 			// for another simulator to start from, and exit. See savestate.cpp.
@@ -298,7 +301,7 @@ int main(int argc, char *argv[])
 		parse_march("rv64imafdcv_zicsr_zifencei_zba_zbb_zbs_zicond"
 		            "_zicbom_zicbop_zicboz_zicntr_zihintpause_zihintntl"
 		            "_zimop_zcmop_zawrs_zfa_zfh_svinval_svnapot_svpbmt"
-		            "_sscofpmf_ssstateen_ssnpm_smnpm");
+		            "_sscofpmf_ssstateen_ssnpm_smnpm_smaia_ssaia");
 	}
 	// An initramfs is no longer required: with -disk= the kernel can mount a
 	// real root filesystem instead, which is the whole point of having a
@@ -317,7 +320,7 @@ int main(int argc, char *argv[])
 		const std::string a = argv[i];
 		static const char *const run_only[] = {"-snapshot=", "-snapshotat=", "-restore=", "-stopat=", "-trace=",
 		                                      "-lockstep=", "-lockstep-strict", "-gdb", "-record=", "-replay=",
-		                                      "-export-state=", "-expect=", "-input=", "-fbdump=", "-guidump="};
+		                                      "-export-state=", "-expect=", "-input=", "-fbdump=", "-guidump=", "-cosim-log="};
 		bool skip = a.rfind("-shared=", 0) == 0 || a.rfind("-drives=", 0) == 0;   // written below, as used
 		for (const char *p : run_only) skip = skip || a.rfind(p, 0) == 0;
 		if (skip) continue;
@@ -417,6 +420,10 @@ int main(int argc, char *argv[])
 
 	if (!restore_dir.empty() && !system.restore_snapshot(restore_dir)) return -1;
 	if (!export_dir.empty()) return system.export_state(export_dir) ? 0 : -1;
+	if (!cosim_path.empty() && !system.set_cosim_log(cosim_path.c_str())) {
+		std::cout << "cannot write the cosim log: " << cosim_path << "\n";
+		return -1;
+	}
 
 	system.run();
 	return 0;

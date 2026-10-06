@@ -288,6 +288,7 @@ void Memory::write8(uint64_t addr, uint8_t val)
 	StoreCapture capture(*this, addr, val, 1);
 	if (addr >= RAM_BASE && addr < RAM_BASE + RAM_SPAN) {
 		ram[addr - RAM_BASE] = val;
+		if (cosim_dma && cosim) cosim_ram_write(addr, &val, 1);
 	} else if (addr >= LFB_BASE && addr < LFB_BASE + LFB_SIZE) {
 		lfb[addr - LFB_BASE] = val;
 		lfb_gen.store(lfb_gen.load(std::memory_order_relaxed) + 1, std::memory_order_relaxed);
@@ -322,6 +323,7 @@ void Memory::write_bytes(uint64_t addr, const uint8_t *data, size_t len)
 	const uint64_t span = RAM_SPAN;
 	if (addr >= RAM_BASE && addr - RAM_BASE <= span && len <= span - (addr - RAM_BASE)) {
 		std::memcpy(&ram[addr - RAM_BASE], data, len);
+		if (cosim_dma && cosim) cosim_ram_write(addr, data, len);
 		return;
 	}
 	for (size_t i = 0; i < len; i++) write8(addr + i, data[i]);
@@ -391,6 +393,7 @@ void Memory::write32(uint64_t addr, uint32_t val)
 	// storing, and it stays.
 	if (addr >= RAM_BASE && addr <= RAM_BASE + RAM_SPAN - 4) {
 		std::memcpy(&ram[addr - RAM_BASE], &val, sizeof(val));
+		if (cosim_dma && cosim) cosim_ram_write(addr, (const uint8_t *)&val, 4);
 		if (tohost_addr && addr == tohost_addr + 4) check_tohost();
 		return;
 	}

@@ -267,7 +267,8 @@ uint64_t compute_mip(Registers &regs, Memory &mem)
 	if (mem.get_timer().mtip_pending()) mip |= MIP_MTIP;
 	if ((raw & MIP_STIP) || stip_from_sstc(regs, mem)) mip |= MIP_STIP;
 	if (mem.get_imsic_m().aggregate_pending()) mip |= MIP_MEIP;
-	if ((raw & MIP_SEIP) || mem.get_imsic_s().aggregate_pending()) mip |= MIP_SEIP;
+	if ((raw & MIP_SEIP) || mem.get_imsic_s().aggregate_pending()
+	    || mem.get_aplic().direct_line(mem.current_hart())) mip |= MIP_SEIP;
 
 	if (Extensions.H) {
 		// hvip is the hypervisor's injection register: whatever it sets
@@ -810,6 +811,23 @@ bool RiscvCore::csr_access_permitted(Registers &regs, uint16_t csr, bool writing
 	// mcycle is 0xB00 and minstret 0xB02. 0xB01 would be time's, and time has
 	// no machine counter CSR: absent, as in the reference.
 	if (csr == 0xB01) return false;
+	// The PMP registers past the entries this hart has: absent, as in Sail
+	// (pmp_regs.sail), which decodes pmpaddrN only for N below its count
+	// and, on RV64, pmpcfgN only for even N with 4N below it -- pmpcfg0 and
+	// pmpcfg2 for 16 entries. OpenSBI probes pmpaddr16 to count the entries;
+	// the Linux lock-step against Sail found DoomV answering 0 where Sail
+	// traps.
+	if (csr >= 0x3A0 && csr <= 0x3AF) {
+		const unsigned idx = csr - 0x3A0u;
+		if (4 * idx >= pmp::ENTRIES || (Extensions.XLEN64 && (idx & 1))) return false;
+	}
+	if (csr >= 0x3B0 && csr <= 0x3EF && csr - 0x3B0u >= pmp::ENTRIES) return false;
+	// The AIA CSRs, without Smaia/Ssaia: absent, as in Sail's configuration.
+	if (!ExtAia && (csr == 0x350 || csr == 0x351 || csr == 0x35C || csr == 0xFB0 || csr == 0x308 || csr == 0x309
+	                || csr == 0x150 || csr == 0x151 || csr == 0x15C || csr == 0xDB0
+	                || csr == 0x608 || csr == 0x609 || csr == 0x646 || csr == 0x647
+	                || csr == 0x250 || csr == 0x251 || csr == 0x25C || csr == 0xEB0))
+		return false;
 	// fflags, frm and fcsr exist while F is enabled, and the vector CSRs while
 	// V is; with the extension turned off in misa, they are gone with it.
 	if (csr >= 0x001 && csr <= 0x003 && !Extensions.F) return false;
@@ -1256,11 +1274,17 @@ bool RiscvCore::load_virtual(Registers &regs, Memory &mem, uint64_t vaddr,
 		uint64_t paddr;
 		if (!translate_or_trap(regs, mem, vaddr, AccessType::Load, paddr, size))
 			return false;
+		const bool device = mem.cosim && mem.cosim_device(paddr);
+		if (device) mem.cosim_begin(true);
 		switch (size) {
 		case 1:  out = mem.read8(paddr);  break;
 		case 2:  out = mem.read16(paddr); break;
 		case 4:  out = mem.read32(paddr); break;
 		default: out = mem.read64(paddr); break;
+		}
+		if (device) {
+			mem.cosim_end();
+			mem.cosim_access('R', paddr, size, out);
 		}
 		remember_data_page(regs, mem, e, vpage, key, paddr, pmp::ACC_LOAD);
 		return true;
@@ -1314,6 +1338,13 @@ bool RiscvCore::store_virtual(Registers &regs, Memory &mem, uint64_t vaddr,
 		uint64_t paddr;
 		if (!translate_or_trap(regs, mem, vaddr, AccessType::Store, paddr, size))
 			return false;
+		// A store to a device can set it working -- a virtio notify runs the
+		// request then and there -- and what it writes to RAM is its own.
+		const bool device = mem.cosim && mem.cosim_device(paddr);
+		if (device) {
+			mem.cosim_access('W', paddr, size, value);
+			mem.cosim_begin(true);
+		}
 		switch (size) {
 		case 1:  mem.write8(paddr, (uint8_t)value);   break;
 		// Memory has no write16 -- see memory.hpp, where the MMIO
@@ -1323,6 +1354,7 @@ bool RiscvCore::store_virtual(Registers &regs, Memory &mem, uint64_t vaddr,
 		case 4:  mem.write32(paddr, (uint32_t)value); break;
 		default: mem.write64(paddr, value);           break;
 		}
+		if (device) mem.cosim_end();
 		remember_data_page(regs, mem, e, vpage, key, paddr, pmp::ACC_STORE);
 		return true;
 	}

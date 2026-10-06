@@ -347,6 +347,8 @@ of console output (`2667bf1`, re-verified in `936df17`).
 182. [Narrowing to bf16 never raised underflow, overflow or invalid](#bug182)
 183. [vfwmaccbf16.vf: the scalar, its NaN-boxing and its invalid flag](#bug183)
 184. [Vector loads and stores logged one byte an element](#bug184)
+185. [The PMP registers past the sixteenth answered instead of trapping](#bug185)
+186. [The AIA CSRs were there whatever -march said](#bug186)
 
 <a id="part-vii"></a>
 ### Part VII — Cross-cutting
@@ -7353,3 +7355,25 @@ showed a `vse16.v` as every other byte and the lock-step compared one byte of
 each element; fault-only-first's later elements, translated without a trap,
 were not logged at all. The co-run from a snapshot found it the first time it
 compared a vector store byte for byte. Each element is logged at its width now.
+
+<a id="bug185"></a>
+### 185. The PMP registers past the sixteenth answered instead of trapping
+
+DoomV has 16 PMP entries and answered every PMP register number: pmpaddr16
+through pmpaddr63, and pmpcfg1 and pmpcfg4 to pmpcfg15, read as zero. Sail,
+configured with 16, does not have them (`pmp_regs.sail`: pmpaddrN for N below
+the count, and on RV64 pmpcfgN for even N with 4N below it), so an access is
+an illegal instruction. OpenSBI counts the entries by reading pmpaddr16 and
+looking for a trap; the riscv-tests never go past the sixteenth. The first
+lock-step of a Linux boot against Sail stopped there, 2.1 million
+instructions in. They are absent now, as in Sail.
+
+<a id="bug186"></a>
+### 186. The AIA CSRs were there whatever -march said
+
+miselect, mireg, mtopei, mtopi, their S and VS copies and the hypervisor's
+hvi* registers existed on every DoomV hart, `-march` or not. Sail's
+configuration has no Smaia or Ssaia, so a hart lock-stepped against it has
+to trap on all of them -- the Linux machine Sail can follow has none. They
+now come with `smaia`/`ssaia` in `-march`; DoomV's default Linux ISA names
+both, so an ordinary boot is unchanged.

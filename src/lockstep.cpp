@@ -258,7 +258,10 @@ bool is_epc_csr(unsigned c) { return c == 0x341 || c == 0x141 || c == 0x241; }
 } // namespace
 
 struct DoomSystem::LockstepState {
-	std::ifstream in;
+	std::ifstream file;
+	// The reference's trace: a file, or (-lockstep=-) stdin, for a reference
+	// that writes it as it runs -- a Linux boot's trace is far too big to keep.
+	std::istream *in = &file;
 	uint64_t line_no = 0;
 	enum Format { Unknown, Sail, Spike } format = Unknown;
 	bool have_peek = false;
@@ -289,7 +292,7 @@ struct DoomSystem::LockstepState {
 	bool read_line(std::string &s, uint64_t &n)
 	{
 		if (have_peek) { s = peek; n = peek_line; have_peek = false; return true; }
-		if (!std::getline(in, s)) return false;
+		if (!std::getline(*in, s)) return false;
 		while (!s.empty() && (s.back() == '\r' || s.back() == '\n')) s.pop_back();
 		n = ++line_no;
 		return true;
@@ -584,8 +587,13 @@ bool DoomSystem::set_trace(const char *path)
 bool DoomSystem::set_lockstep(const char *path)
 {
 	lock = new LockstepState();
-	lock->in.open(path);
-	if (!lock->in) return false;
+	if (std::string(path) == "-") {
+		lock->in = &std::cin;
+		lockstep_stdin = true;
+	} else {
+		lock->file.open(path);
+		if (!lock->file) return false;
+	}
 	lockstep_active = true;
 	tracing = true;
 	return true;

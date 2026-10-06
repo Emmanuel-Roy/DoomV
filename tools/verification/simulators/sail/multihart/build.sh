@@ -20,12 +20,14 @@ command -v sail >/dev/null || { echo "sail not found in $SAIL_DIR/bin" >&2; exit
 # again only when the commit or the patch changes, since a fresh tree
 # regenerates and recompiles the whole model. core.autocrlf off: the patch is
 # LF, as the repository is.
-stamp="$(git -c safe.directory='*' -C "$SRC" rev-parse HEAD) $(sha1sum < "$HERE/multihart.patch")"
+stamp="$(git -c safe.directory='*' -C "$SRC" rev-parse HEAD) $(cat "$HERE/multihart.patch" "$HERE/cosim.patch" | sha1sum)"
 if [ "$(cat "$WORK/src.stamp" 2>/dev/null)" != "$stamp" ]; then
   rm -rf "$WORK/src" "$WORK/cmake"
   mkdir -p "$WORK/src"
   git -c safe.directory='*' -c core.autocrlf=false -C "$SRC" archive HEAD | tar -x -C "$WORK/src"
   patch -s -d "$WORK/src" -p1 < "$HERE/multihart.patch"
+  # Co-simulation with DoomV's devices (see README.md); off unless --cosim.
+  patch -s -d "$WORK/src" -p1 < "$HERE/cosim.patch"
   echo "$stamp" > "$WORK/src.stamp"
 fi
 cmp -s "$HERE/sail_riscv_mh.cpp" "$WORK/src/c_emulator/sail_riscv_mh.cpp" ||

@@ -56,6 +56,7 @@ from __future__ import annotations
 import argparse
 import concurrent.futures
 import json
+import os
 import pathlib
 import re
 import shutil
@@ -70,7 +71,8 @@ sys.path.insert(0, str(SUITES))
 import run_suite  # noqa: E402  (Sail's path and config, the suites' march, the ELF symbol reader)
 
 WORK = ROOT / "build" / "corun"
-DOOMV = ROOT / "riscv_doom.exe"
+# DOOMV_EXE: another build -- a copy, for a long run while this one is rebuilt.
+DOOMV = pathlib.Path(os.environ["DOOMV_EXE"]) if os.environ.get("DOOMV_EXE") else ROOT / "riscv_doom.exe"
 WAD = ROOT / "tools" / "doom" / "doombuild" / "DOOM1.WAD"
 SPIKE = "/root/build/spike-build/spike"
 WHISPER = "/root/build/whisper/build-Linux/whisper"
@@ -864,6 +866,22 @@ def snapshot_program(snap: pathlib.Path, out: pathlib.Path, args) -> Program:
     if not (state_dir / "state.json").exists():
         raise RuntimeError("DoomV could not export the snapshot's state: " +
                            ((p.stdout or "") + (p.stderr or "")).strip()[-400:])
+    elf, state, ram_mb = build_restore_elf(state_dir, out, args.timeout)
+    # The snapshot's own hart: its -march, or for a Linux boot DoomV's
+    # default there; --march, given, wins.
+    march = next((a[7:] for a in machine if a.startswith("-march=")), None)
+    if args.march_given:
+        march = args.march
+    elif march is None:
+        march = LINUX_MARCH if any(a.startswith("-kernel=") for a in machine) else args.march
+    march = "_".join(dict.fromkeys(t for t in march.lower().split("_") if t))
+    return Program(snap.name, elf, machine, [f"-restore={snap}"], int(state["pc"], 16),
+                   first_step=int(state["step"]), ram_mb=max(ram_mb, 256), vlen=int(state["vlen"]), march=march)
+
+
+def build_restore_elf(state_dir: pathlib.Path, out: pathlib.Path, timeout: int):
+    """An ELF of the RAM in an -export-state folder and the program that puts
+    the rest of it back: (the ELF, the state, the RAM in MB)."""
     state = json.loads((state_dir / "state.json").read_text())
     ram = (state_dir / "ram.bin").read_bytes()
     base = int(state["ram_base"], 16)
@@ -885,27 +903,17 @@ def snapshot_program(snap: pathlib.Path, out: pathlib.Path, args) -> Program:
     elf = out / "restore.elf"
     code, text = in_wsl(["riscv64-unknown-elf-gcc", "-nostdlib", "-static", "-march=rv64gcv_zicsr_zifencei",
                          "-mabi=lp64d", f"-Wl,-Ttext={at:#x}", "-Wl,--no-relax", "-o", wsl(out / "stub.elf"),
-                         wsl(src)], args.timeout)
+                         wsl(src)], timeout)
     if code != 0:
         raise RuntimeError("cannot assemble the restore program: " + text.strip()[-400:])
     code, text = in_wsl(["riscv64-unknown-elf-objcopy", "-O", "binary", wsl(out / "stub.elf"),
-                         wsl(out / "stub.bin")], args.timeout)
+                         wsl(out / "stub.bin")], timeout)
     stub = (out / "stub.bin").read_bytes()
     if len(stub) > need * 4096:
         raise RuntimeError("the restore program does not fit where it was put")
     stub_syms = run_suite.elf_symbols(out / "stub.elf")
     write_elf(elf, at, segs + [(at, stub)], {k: stub_syms[k] for k in ("tohost", "fromhost")})
-    ram_mb = (len(ram) + 2**20 - 1) // 2**20
-    # The snapshot's own hart: its -march, or for a Linux boot DoomV's
-    # default there; --march, given, wins.
-    march = next((a[7:] for a in machine if a.startswith("-march=")), None)
-    if args.march_given:
-        march = args.march
-    elif march is None:
-        march = LINUX_MARCH if any(a.startswith("-kernel=") for a in machine) else args.march
-    march = "_".join(dict.fromkeys(t for t in march.lower().split("_") if t))
-    return Program(snap.name, elf, machine, [f"-restore={snap}"], int(state["pc"], 16),
-                   first_step=int(state["step"]), ram_mb=max(ram_mb, 256), vlen=int(state["vlen"]), march=march)
+    return elf, state, (len(ram) + 2**20 - 1) // 2**20
 
 
 # ---- one program ---------------------------------------------------------------------

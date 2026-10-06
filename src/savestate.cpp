@@ -48,7 +48,7 @@ constexpr char MAGIC[8] = {'D', 'O', 'O', 'M', 'V', 'S', 'N', 'P'};
 // reads as a machine of one; version 2 has no network card, 3 no
 // real-time clock, 4 no sound card, with two queues to a virtio device
 // where there are now four, 5 no GPU, and 6 no GPU 3D state.
-constexpr uint32_t VERSION = 8;
+constexpr uint32_t VERSION = 9;
 
 class Writer {
 public:
@@ -174,11 +174,18 @@ struct SaveState {
 		if constexpr (std::is_same_v<IO, Reader>) m.refresh();   // `top` follows from the rest
 	}
 
-	template <class IO> static void aplic(IO &io, Aplic &a)
+	template <class IO> static void aplic(IO &io, Aplic &a, uint32_t version)
 	{
 		io.pod(a.domaincfg);
 		io.pod(a.sourcecfg);
 		io.pod(a.target);
+		if (version < 9) return;   // direct delivery came in version 9
+		io.pod(a.ip);
+		io.pod(a.ie);
+		uint32_t n = (uint32_t)a.idc.size();
+		io.pod(n);
+		if constexpr (!std::is_same_v<IO, Writer>) a.idc.resize(n);
+		for (auto &d : a.idc) { io.pod(d.idelivery); io.pod(d.iforce); io.pod(d.ithreshold); }
 	}
 
 	template <class IO> static void uart(IO &io, Uart &u)
@@ -501,7 +508,7 @@ struct SaveState {
 			imsic(io, m.imsic_m[h]);
 			imsic(io, m.imsic_s[h]);
 		}
-		aplic(io, m.aplic);
+		aplic(io, m.aplic, version);
 		uart(io, m.uart);
 		input(io, m.kbd_dev, version);
 		input(io, m.mouse_dev, version);

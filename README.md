@@ -352,6 +352,47 @@ Whisper with `make` in a copy of `simulators/whisper/src`), and QEMU is
 Ubuntu's `qemu-system-riscv`. Traces and a `report.json` per program are in
 `build/corun/`.
 
+<a id="linux-lockstep"></a>
+### Linux, lock-stepped
+
+`tools/verification/lockstep_linux.py` lock-steps a whole Linux boot against
+Sail, every instruction of it, strictly. Sail's model has a hart, RAM and a
+CLINT, and none of DoomV's other devices, so:
+
+- **The machine is one Sail can follow.** The busybox Linux, with the ISA
+  Sail's configuration has and no AIA: Sail has no Smaia/Ssaia, so the APLIC
+  delivers straight to the hart's SEIP in direct mode (`build/linux/
+  doomv-sail.dtb`, made by `prepare_dtb.py` from the same source as the rest).
+  Without `smaia`/`ssaia` in `-march`, DoomV's AIA CSRs trap as Sail's do;
+  its default Linux ISA keeps them.
+- **DoomV's devices are Sail's inputs.** DoomV runs the machine with
+  `-cosim-log`. A patched Sail (`sail_riscv_mh --cosim`, from
+  `tools/verification/simulators/sail/multihart`, `cosim.patch`) answers each
+  device access from that log, in order, and checks it -- an access DoomV did
+  not make, or a store of another value, stops it -- and applies the
+  interrupt line and the devices' writes to RAM at their steps. The
+  instructions are Sail's own.
+- **Sail starts where DoomV does.** At reset, or a snapshot: DoomV exports the
+  state, `corun.py`'s restore program puts it into Sail, and on reaching
+  DoomV's first instruction the driver takes on its step count and clock.
+- **The trace streams.** A boot's trace is hundreds of gigabytes, so Sail
+  writes it to its stdout and DoomV reads it from stdin (`-lockstep=-`).
+
+```
+python tools/verification/lockstep_linux.py --instructions 60000000      # OpenSBI and the start of the kernel
+python tools/verification/lockstep_linux.py --instructions 1300000000    # to the shell, about eight hours
+python tools/verification/lockstep_linux.py --snapshot snap/linux --instructions 5000000
+```
+
+It runs at about 45,000 instructions a second, Sail's speed with its trace
+on. A mismatch stops it with the instruction and the field, and a DoomV
+snapshot one step before it, with the line that restores it. The first run
+stopped 2.1 million instructions in, in OpenSBI's PMP probe: DoomV answered
+`pmpaddr16` with zero where Sail, with 16 entries, has no such register
+([bug 185](docs/BUGS.md#bug185)). Since that fix the first 60 million
+instructions -- all of OpenSBI and the kernel's start, 14,000 device
+accesses -- match Sail strictly.
+
 ### What that process actually found
 
 148 bugs, written up individually in [docs/BUGS.md](docs/BUGS.md). A few
@@ -610,6 +651,8 @@ riscv_doom.exe -opensbi=<f> -kernel=<f> -dtb=<f> -initrd=<f> [options]   # Linux
 | `-replay=<path>` | Deliver a `-record` log's input at exactly those instructions, and ignore the window, stdin and `-input`. Reproduces a recorded run instruction for instruction. |
 | `-snapshotat=<n>` `-snapshot=<dir>` | Save the whole machine to `dir` as the run goes past instruction `n`, and carry on. See [Snapshots](#snapshots). |
 | `-restore=<dir>` | Start from a snapshot instead of from reset. The rest of the command line must describe the same machine -- the one the snapshot's `command.txt` lists. |
+| `-cosim-log=<path>` | Log the machine's devices as the CPU sees them -- every device load and store, every write a device makes to RAM, every change of the external-interrupt line, each at its step -- for a reference that has none of them. See [Linux, lock-stepped](#linux-lockstep). |
+| `-lockstep=-` | Read the reference's trace from stdin, as the reference writes it. |
 | `-export-state=<dir>` | Write the architectural state -- RAM as `ram.bin`, registers and CSRs as `state.json` -- and exit: after `-restore`, the snapshot's. What [the co-run](#corun) starts the other simulators from. |
 | `-trace=<path>` | Write a trace of every instruction, register and CSR write, store and trap, in Sail's trace format. |
 | `-lockstep=<path>` | Run against a reference trace -- Sail's, or an RTL simulation's -- and halt at the first record that does not match. See [Lock-stepping](#lockstep). |
