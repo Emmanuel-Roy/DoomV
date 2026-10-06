@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import pathlib
 import re
 import shutil
@@ -141,12 +142,17 @@ def main():
     sail = subprocess.Popen(sail_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=corun.run_suite._env())
     sail_err = []
     threading.Thread(target=lambda: sail_err.append(sail.stderr.read().decode(errors="replace")), daemon=True).start()
-    lock = subprocess.Popen([str(corun.DOOMV)] + machine + start +
-                            ["-lockstep=-", "-lockstep-strict", f"-stopat={first + args.instructions}"],
-                            cwd=out, stdin=sail.stdout, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-    sail.stdout.close()
-    text = lock.communicate(timeout=args.timeout)[0].decode(errors="replace")
-    (out / "doomv-lockstep.txt").write_text(text)
+    # Straight to the file, with a progress line every 50 million steps: a run
+    # of hours that is stopped part-way still says how far it matched.
+    lock_log = out / "doomv-lockstep.txt"
+    env = dict(os.environ, DOOMV_PROGRESS="50000000")
+    with lock_log.open("wb") as lf:
+        lock = subprocess.Popen([str(corun.DOOMV)] + machine + start +
+                                ["-lockstep=-", "-lockstep-strict", f"-stopat={first + args.instructions}"],
+                                cwd=out, stdin=sail.stdout, stdout=lf, stderr=subprocess.STDOUT, env=env)
+        sail.stdout.close()
+        lock.wait(timeout=args.timeout)
+    text = lock_log.read_text(errors="replace")
     # DoomV stops at its limit, or at a mismatch, with Sail still writing.
     try:
         sail.wait(timeout=10)
