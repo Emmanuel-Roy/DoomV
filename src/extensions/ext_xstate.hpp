@@ -73,6 +73,24 @@ inline void mark_fp_dirty(Registers &regs)
 		regs.write_csr(CSR_VSSTATUS_X, regs.read_csr(CSR_VSSTATUS_X) | MSTATUS_FS_DIRTY);
 }
 
+// FS as Sail keeps it: Dirty once an instruction has written an f register
+// or changed fflags (its fflags_dirty_policy is Fflags_Dirty_Precise) --
+// not for every floating-point instruction. A store, a compare, fmv.x,
+// fclass or a conversion to an integer that raises nothing leaves FS as it
+// was. Marking every one Dirty was found by the Linux lock-step against
+// Sail, 257 million instructions into a boot, as an FS of Dirty where
+// Sail's was Clean. Made at the top of an instruction; decides at its end.
+struct FpDirtyWhenWritten {
+	Registers &regs;
+	const uint64_t writes;
+	const uint8_t fflags;
+	explicit FpDirtyWhenWritten(Registers &r) : regs(r), writes(FpRegWrites), fflags(r.get_fflags()) {}
+	~FpDirtyWhenWritten()
+	{
+		if (FpRegWrites != writes || regs.get_fflags() != fflags) mark_fp_dirty(regs);
+	}
+};
+
 inline void mark_vector_dirty(Registers &regs)
 {
 	regs.write_csr(CSR_MSTATUS_X, regs.read_csr(CSR_MSTATUS_X) | MSTATUS_VS_DIRTY);

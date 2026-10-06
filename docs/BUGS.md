@@ -349,6 +349,7 @@ of console output (`2667bf1`, re-verified in `936df17`).
 184. [Vector loads and stores logged one byte an element](#bug184)
 185. [The PMP registers past the sixteenth answered instead of trapping](#bug185)
 186. [The AIA CSRs were there whatever -march said](#bug186)
+187. [Every floating-point instruction made FS Dirty](#bug187)
 
 <a id="part-vii"></a>
 ### Part VII — Cross-cutting
@@ -7377,3 +7378,17 @@ configuration has no Smaia or Ssaia, so a hart lock-stepped against it has
 to trap on all of them -- the Linux machine Sail can follow has none. They
 now come with `smaia`/`ssaia` in `-march`; DoomV's default Linux ISA names
 both, so an ordinary boot is unchanged.
+
+<a id="bug187"></a>
+### 187. Every floating-point instruction made FS Dirty
+
+DoomV set mstatus.FS to Dirty at the start of every F, D, Zfh, Zfhmin and
+Zfa instruction. Sail sets it when an instruction writes an f register or
+changes fflags -- its configuration's fflags_dirty_policy is
+Fflags_Dirty_Precise -- so a floating-point store, a compare, fmv.x.w,
+fclass or a conversion to an integer that raises nothing leaves a Clean FS
+Clean. Nothing reads FS but a context switch, so no test saw it; the Linux
+lock-step against Sail did, 257 million instructions into the boot, when a
+vsetvli's mstatus write showed FS Dirty where Sail's was Clean. FS now
+follows Sail's rule, for vector instructions too (vfmv.f.s, and the flags a
+vector operation raises).

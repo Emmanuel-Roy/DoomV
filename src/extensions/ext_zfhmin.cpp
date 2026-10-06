@@ -76,6 +76,7 @@ DecodedInstruction Decoder::decode_zfhmin(uint32_t raw_instr) const
 
 void RiscvCore::exec_ZFHMIN(const DecodedOp &instr, Registers &regs, Memory &mem)
 {
+	vcommon::FpDirtyWhenWritten fp_dirty(regs);   // FS: Dirty only if this writes FP state
 	uint8_t flags = 0;
 
 	switch (instr.opcode) {
@@ -153,6 +154,5 @@ void RiscvCore::exec_ZFHMIN(const DecodedOp &instr, Registers &regs, Memory &mem
 	}
 
 	if (flags) regs.or_fflags(flags);
-	vcommon::mark_fp_dirty(regs);
 	regs.set_pc(regs.get_pc() + instr.length);
 }

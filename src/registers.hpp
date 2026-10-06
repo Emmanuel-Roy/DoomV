@@ -25,6 +25,11 @@ struct HistoryEntry {
 	DecodedInstruction decoded;
 };
 
+// Every write of an f register, counted: an instruction that wrote one makes
+// mstatus.FS Dirty (ext_xstate.hpp, FpDirtyWhenWritten). Outside the
+// register file so its layout, which snapshots record, stays as it is.
+inline uint64_t FpRegWrites = 0;
+
 class Registers {
 	// Machine state is saved and restored field by field in savestate.cpp.
 	friend struct SaveState;

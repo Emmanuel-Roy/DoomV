@@ -121,10 +121,10 @@ void RiscvCore::exec_F(const DecodedOp &instr, Registers &regs, Memory &mem)
 {
 	uint64_t pc = regs.get_pc();
 
-	// The decoder already established mstatus.FS is not Off, so the unit is
-	// on and this instruction is about to touch FP state. Mark it Dirty so a
-	// supervisor knows there is something to save on a context switch.
-	vcommon::mark_fp_dirty(regs);
+	// The decoder already established mstatus.FS is not Off. Whether this
+	// instruction makes it Dirty depends on what it writes; see
+	// FpDirtyWhenWritten.
+	vcommon::FpDirtyWhenWritten fp_dirty(regs);
 
 	if (instr.opcode == 0b0000111) { // FLW -- rs1 is an integer base register
 		// Through load_virtual/store_virtual with the access's real width, as an

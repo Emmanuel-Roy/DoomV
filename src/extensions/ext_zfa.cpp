@@ -169,6 +169,7 @@ DecodedInstruction Decoder::decode_zfa(uint32_t raw_instr) const
 
 void RiscvCore::exec_ZFA(const DecodedOp &instr, Registers &regs, Memory &mem)
 {
+	vcommon::FpDirtyWhenWritten fp_dirty(regs);   // FS: Dirty only if this writes FP state
 	(void)mem;
 	uint8_t extra_flags = 0;
 
@@ -294,6 +295,5 @@ void RiscvCore::exec_ZFA(const DecodedOp &instr, Registers &regs, Memory &mem)
 	}
 
 	if (extra_flags) regs.set_fflags((uint8_t)(regs.get_fflags() | extra_flags));
-	vcommon::mark_fp_dirty(regs);
 	regs.set_pc(regs.get_pc() + instr.length);
 }

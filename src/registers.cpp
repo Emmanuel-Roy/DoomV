@@ -29,6 +29,7 @@ double Registers::read_f(int i) const
 void Registers::write_f(int i, double value)
 {
 	f[i] = value;
+	FpRegWrites++;
 }
 
 void Registers::set_priv(PrivMode mode)

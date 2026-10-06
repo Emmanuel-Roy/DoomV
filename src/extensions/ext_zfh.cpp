@@ -119,6 +119,7 @@ DecodedInstruction Decoder::decode_zfh(uint32_t raw_instr) const
 
 void RiscvCore::exec_ZFH(const DecodedOp &instr, Registers &regs, Memory &mem)
 {
+	vcommon::FpDirtyWhenWritten fp_dirty(regs);   // FS: Dirty only if this writes FP state
 	(void)mem;
 	const uint8_t frm = regs.get_frm();
 
@@ -138,7 +139,6 @@ void RiscvCore::exec_ZFH(const DecodedOp &instr, Registers &regs, Memory &mem)
 		uint16_t r = sf::bits(f16_mulAdd(sf::f16(a), sf::f16(b), sf::f16(c)));
 		sf::end(regs);
 		wr_h(regs, instr.rd, r);
-		vcommon::mark_fp_dirty(regs);
 		regs.set_pc(regs.get_pc() + instr.length);
 		return;
 	}
@@ -277,6 +277,5 @@ void RiscvCore::exec_ZFH(const DecodedOp &instr, Registers &regs, Memory &mem)
 		break;
 	}
 
-	vcommon::mark_fp_dirty(regs);
 	regs.set_pc(regs.get_pc() + instr.length);
 }
