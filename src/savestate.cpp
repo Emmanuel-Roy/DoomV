@@ -33,6 +33,7 @@
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <type_traits>
 
@@ -581,9 +582,11 @@ struct SaveState {
 
 	static bool save(DoomSystem &s, const std::string &dir);
 	static bool restore(DoomSystem &s, const std::string &dir);
+	static bool export_state(DoomSystem &s, const std::string &dir);
 };
 
 bool DoomSystem::save_snapshot(const std::string &dir) { return SaveState::save(*this, dir); }
+bool DoomSystem::export_state(const std::string &dir) { return SaveState::export_state(*this, dir); }
 bool DoomSystem::restore_snapshot(const std::string &dir) { return SaveState::restore(*this, dir); }
 
 bool SaveState::save(DoomSystem &s, const std::string &dir)
@@ -611,6 +614,12 @@ bool SaveState::save(DoomSystem &s, const std::string &dir)
 		std::fflush(b.file);
 		fs::copy_file(b.path(), fs::path(dir) / disk_name(i, ".img"), fs::copy_options::overwrite_existing, ec);
 		if (ec) { std::cout << "snapshot: cannot copy " << b.path() << ": " << ec.message() << "\n"; return false; }
+	}
+
+	// How to start this machine again, for the tools that restore it.
+	if (!s.command_line.empty()) {
+		std::ofstream cmd(fs::path(dir) / "command.txt");
+		for (const std::string &a : s.command_line) cmd << a << '\n';
 	}
 
 	Writer w(fs::path(dir) / "state.bin");
@@ -730,5 +739,80 @@ bool SaveState::restore(DoomSystem &s, const std::string &dir)
 	const double took = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
 	std::printf("restored step %llu from %s in %.3f s\n", (unsigned long long)memory.instruction_count(), dir.c_str(), took);
 	std::fflush(stdout);
+	return true;
+}
+
+// -export-state: what another simulator needs to carry on from here. Not a
+// snapshot -- no devices, no caches, nothing DoomV-specific -- only what the
+// architecture defines: RAM, the registers, and the CSRs a restore program
+// can write back. corun.py turns it into an ELF that does that and then
+// returns into the guest at this pc and privilege.
+bool SaveState::export_state(DoomSystem &s, const std::string &dir)
+{
+	if (s.hart_count() != 1) {
+		std::cout << "-export-state: one hart only\n";
+		return false;
+	}
+	std::error_code ec;
+	fs::create_directories(dir, ec);
+	Memory &memory = s.memory;
+	DoomSystem::Hart &h = *s.harts[0];
+	Registers &r = h.regs;
+	{
+		std::ofstream ram(fs::path(dir) / "ram.bin", std::ios::binary);
+		ram.write((const char *)memory.ram_data(), (std::streamsize)Memory::RAM_SPAN);
+		if (!ram) { std::cout << "-export-state: cannot write ram.bin\n"; return false; }
+	}
+	// The CSRs a restore program writes back, by number: the ones this hart
+	// implements and software can set. Views of others (sstatus, sie, sip)
+	// are left out -- their owners carry them.
+	std::vector<uint16_t> csrs = {
+		0x105, 0x106, 0x10A, 0x140, 0x141, 0x142, 0x143, 0x180, 0x14D,          // S
+		0x302, 0x303, 0x304, 0x305, 0x306, 0x30A, 0x320, 0x340, 0x341, 0x342,   // M
+		0x343, 0x344, 0x34A, 0x34B, 0x30C, 0x10C, 0xB00, 0xB02,
+	};
+	for (uint16_t c = 0x3A0; c <= 0x3AE; c += 2) csrs.push_back(c);              // pmpcfg, RV64
+	for (uint16_t c = 0x3B0; c <= 0x3BF; c++) csrs.push_back(c);                 // pmpaddr0-15
+	for (uint16_t c = 0x323; c <= 0x33F; c++) csrs.push_back(c);                 // mhpmevent3-31
+	if (Extensions.H)
+		for (uint16_t c : {0x600, 0x602, 0x603, 0x604, 0x605, 0x606, 0x607, 0x60A, 0x60C, 0x643, 0x645,
+		                   0x64A, 0x680, 0x200, 0x204, 0x205, 0x240, 0x241, 0x242, 0x243, 0x244, 0x280, 0x24D})
+			csrs.push_back(c);
+	std::ofstream j(fs::path(dir) / "state.json");
+	char buf[64];
+	const auto hex = [&](uint64_t v) { std::snprintf(buf, sizeof buf, "\"0x%llx\"", (unsigned long long)v); return std::string(buf); };
+	j << "{\n  \"pc\": " << hex(r.get_pc()) << ",\n  \"priv\": " << (int)r.get_priv()
+	  << ",\n  \"virt\": " << (r.get_virt() ? 1 : 0) << ",\n  \"step\": " << memory.instruction_count()
+	  << ",\n  \"vlen\": " << Registers::VLEN_BITS << ",\n  \"vector\": " << (Extensions.V ? 1 : 0)
+	  << ",\n  \"ram_base\": " << hex(Memory::RAM_BASE) << ",\n  \"ram_size\": " << hex(Memory::RAM_SPAN)
+	  << ",\n  \"mtime\": " << hex(memory.get_timer().get_mtime())
+	  << ",\n  \"mtimecmp\": " << hex(memory.get_timer().get_mtimecmp())
+	  << ",\n  \"mstatus\": " << hex(h.core.read_csr_effective(r, memory, 0x300))
+	  << ",\n  \"fcsr\": " << hex(h.core.read_csr_effective(r, memory, 0x003))
+	  << ",\n  \"vtype\": " << hex(r.get_vtype()) << ",\n  \"vl\": " << hex(r.get_vl())
+	  << ",\n  \"vstart\": " << hex(r.get_vstart())
+	  << ",\n  \"vcsr\": " << hex(Extensions.V ? h.core.read_csr_effective(r, memory, 0x00F) : 0)
+	  << ",\n  \"x\": [";
+	for (int i = 0; i < 32; i++) j << (i ? ", " : "") << hex(r.read_x(i));
+	j << "],\n  \"f\": [";
+	for (int i = 0; i < 32; i++) {
+		const double d = r.read_f(i);
+		uint64_t b;
+		std::memcpy(&b, &d, 8);
+		j << (i ? ", " : "") << hex(b);
+	}
+	j << "],\n  \"v\": [";
+	for (int i = 0; i < 32; i++) {
+		j << (i ? ", " : "") << '"';
+		const uint8_t *v = r.read_v(i);
+		for (int b = 0; b < Registers::VLEN_BYTES; b++) { std::snprintf(buf, sizeof buf, "%02x", v[b]); j << buf; }
+		j << '"';
+	}
+	j << "],\n  \"csrs\": {";
+	for (size_t i = 0; i < csrs.size(); i++)
+		j << (i ? ", " : "") << "\"" << csrs[i] << "\": " << hex(h.core.read_csr_effective(r, memory, csrs[i]));
+	j << "}\n}\n";
+	if (!j) { std::cout << "-export-state: cannot write state.json\n"; return false; }
+	std::cout << "exported the state at step " << memory.instruction_count() << " to " << dir << std::endl;
 	return true;
 }

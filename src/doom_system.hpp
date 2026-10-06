@@ -70,6 +70,14 @@ public:
 	void set_snapshot(uint64_t at, const std::string &dir) { snapshot_at = at; snapshot_dir = dir; }
 	bool save_snapshot(const std::string &dir);
 	bool restore_snapshot(const std::string &dir);
+	// The arguments that describe this machine, written into each snapshot
+	// as command.txt so a tool can start the same machine again to restore
+	// it (tools/verification/corun.py does). Set by main.
+	std::vector<std::string> command_line;
+	// -export-state: the machine's architectural state -- RAM as ram.bin,
+	// registers and CSRs as state.json -- for another simulator to start
+	// from (corun.py builds a program from it that puts it back). One hart.
+	bool export_state(const std::string &dir);
 
 	// Headless: no SDL window, and the process exits as soon as the guest
 	// stops rather than sitting in a render loop nobody is watching. A

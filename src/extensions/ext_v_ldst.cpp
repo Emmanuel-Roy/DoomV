@@ -88,7 +88,7 @@ bool exec_v_ldst(const DecodedOp &instr, Registers &regs, Memory &mem, RiscvCore
 		for (uint64_t i = 0; i < total; i++) {
 			uint64_t addr = base_addr + i * (uint64_t)(inst_eew / 8);
 			uint64_t paddr;
-			if (!core.translate_or_trap(regs, mem, addr, access, paddr)) return false;
+			if (!core.translate_or_trap(regs, mem, addr, access, paddr, inst_eew / 8)) return false;
 			if (is_load) write_velem(regs, instr.rd, inst_eew, i, ld_eew(mem, paddr, inst_eew));
 			else st_eew(mem, paddr, inst_eew, read_velem(regs, instr.rd, inst_eew, i));
 		}
@@ -171,7 +171,11 @@ bool exec_v_ldst(const DecodedOp &instr, Registers &regs, Memory &mem, RiscvCore
 					fof_trimmed = true;
 					return;
 				}
-			} else if (!core.translate_or_trap(regs, mem, field_addr, access, paddr)) {
+				// Translated here, not by translate_or_trap: logged here, for
+				// the trace and the lock-step.
+				if (core.access_log)
+					core.access_log->push_back({field_addr, paddr, (uint8_t)(data_eew / 8), !is_load});
+			} else if (!core.translate_or_trap(regs, mem, field_addr, access, paddr, data_eew / 8)) {
 				faulted = true;
 				fault_elem = i;
 				return;

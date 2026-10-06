@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <string>
+#include <filesystem>
 #include <vector>
 
 // -ram=<size>: bytes, or a K/M/G/T suffix. Any value, rounded up to a page,
@@ -91,7 +92,7 @@ int main(int argc, char *argv[])
 	bool headless = false;
 	uint64_t stop_at = 0;
 	uint64_t snapshot_at = 0;
-	std::string snapshot_dir, restore_dir;
+	std::string snapshot_dir, restore_dir, export_dir;
 	std::string record_path, replay_path;
 	std::string trace_path, lockstep_path;
 	bool lockstep_strict = false;
@@ -251,6 +252,10 @@ int main(int argc, char *argv[])
 			snapshot_at = std::stoull(arg.substr(12), nullptr, 0);
 		} else if (arg.rfind("-snapshot=", 0) == 0) {
 			snapshot_dir = arg.substr(10);
+		} else if (arg.rfind("-export-state=", 0) == 0) {
+			// Write the architectural state -- after -restore, the snapshot's --
+			// for another simulator to start from, and exit. See savestate.cpp.
+			export_dir = arg.substr(14);
 		} else if (arg.rfind("-restore=", 0) == 0) {
 			// Start from a snapshot instead of from reset. The rest of the
 			// command line must describe the same machine.
@@ -306,6 +311,37 @@ int main(int argc, char *argv[])
 
 	SupportedExtensions = Extensions;
 	DoomSystem system;
+	// The machine, for each snapshot's command.txt: every argument except the
+	// ones that say what this run does with it.
+	for (int i = 1; i < argc; i++) {
+		const std::string a = argv[i];
+		static const char *const run_only[] = {"-snapshot=", "-snapshotat=", "-restore=", "-stopat=", "-trace=",
+		                                      "-lockstep=", "-lockstep-strict", "-gdb", "-record=", "-replay=",
+		                                      "-export-state=", "-expect=", "-input=", "-fbdump=", "-guidump="};
+		bool skip = a.rfind("-shared=", 0) == 0 || a.rfind("-drives=", 0) == 0;   // written below, as used
+		for (const char *p : run_only) skip = skip || a.rfind(p, 0) == 0;
+		if (skip) continue;
+		// Paths made absolute, so the machine can be started from anywhere.
+		std::error_code ec;
+		const size_t eq = a.find('=');
+		const std::string value = (a[0] == '-' && eq != std::string::npos) ? a.substr(eq + 1) : (a[0] == '-' ? "" : a);
+		if (!value.empty() && std::filesystem::exists(value, ec))
+			system.command_line.push_back(a.substr(0, a.size() - value.size())
+			                              + std::filesystem::absolute(value, ec).string());
+		else
+			system.command_line.push_back(a);
+	}
+	// The shared folder and the drives default to folders where DoomV runs:
+	// recorded as they are, absolute, or off.
+	{
+		std::error_code ec;
+		const auto abs_or_off = [&](const std::string &d) {
+			return d.empty() || !std::filesystem::is_directory(d, ec) ? std::string()
+			                                                          : std::filesystem::absolute(d, ec).string();
+		};
+		system.command_line.push_back("-shared=" + abs_or_off(shared_dir));
+		system.command_line.push_back("-drives=" + abs_or_off(drives_dir));
+	}
 	if (harts > 1) system.set_harts(harts);
 	// Before init: init is what opens the window.
 	if (headless) system.set_headless();
@@ -380,6 +416,7 @@ int main(int argc, char *argv[])
 	}
 
 	if (!restore_dir.empty() && !system.restore_snapshot(restore_dir)) return -1;
+	if (!export_dir.empty()) return system.export_state(export_dir) ? 0 : -1;
 
 	system.run();
 	return 0;

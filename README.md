@@ -296,6 +296,29 @@ python tools/verification/corun.py --suite riscv-tests              # all of the
 python tools/verification/corun.py --suite riscv-vector-tests-v256x64 rv64vadd_vv-0
 ```
 
+**From a snapshot.** `--snapshot` starts all five from a DoomV snapshot instead
+of from reset -- a program partway through, Linux at its shell, the desktop:
+
+```
+python scripts/boot.py linux --headless --snapshot snap/linux --snapshot-at 1200000000 --stop-at 1200000001
+python tools/verification/corun.py --snapshot snap/linux --limit 20000
+```
+
+DoomV restores the snapshot itself. For the others, DoomV writes out the
+machine's architectural state (`-export-state`: RAM, the x, f and v registers,
+the CSRs), and the co-run builds one ELF of that RAM plus a short M-mode
+program that writes it all back and `mret`s to the snapshot's pc, privilege
+and virtualisation; every simulator can load an ELF. The ISA is the
+snapshot's own, VLEN too, and comparing starts at its pc and runs `--limit`
+instructions. A snapshot made before `command.txt` existed needs its machine's
+arguments after `--`. What the state leaves out is the devices: the others have
+their own, so a guest that touches one parts from Sail there, and the report
+shows where. From a busybox Linux at its shell, 1.2 billion instructions in,
+DoomV and Whisper match Sail for all 20,000 instructions (DoomV in strict
+lock-step as well); Spike and QEMU match until the kernel's idle loop reaches
+a `wfi`, where they wait for an interrupt as the spec allows and Sail's
+returns -- the report says so.
+
 DoomV is held to more than the others. Besides its trace it runs under
 `-lockstep-strict` against Sail's, which compares every CSR, trap, interrupt
 and the clock as well, and when that stops on a difference a snapshot of DoomV
@@ -586,7 +609,8 @@ riscv_doom.exe -opensbi=<f> -kernel=<f> -dtb=<f> -initrd=<f> [options]   # Linux
 | `-record=<path>` | Log every input the guest receives -- keys, pointer, serial bytes -- with the instruction it arrived at. |
 | `-replay=<path>` | Deliver a `-record` log's input at exactly those instructions, and ignore the window, stdin and `-input`. Reproduces a recorded run instruction for instruction. |
 | `-snapshotat=<n>` `-snapshot=<dir>` | Save the whole machine to `dir` as the run goes past instruction `n`, and carry on. See [Snapshots](#snapshots). |
-| `-restore=<dir>` | Start from a snapshot instead of from reset. The rest of the command line must describe the same machine. |
+| `-restore=<dir>` | Start from a snapshot instead of from reset. The rest of the command line must describe the same machine -- the one the snapshot's `command.txt` lists. |
+| `-export-state=<dir>` | Write the architectural state -- RAM as `ram.bin`, registers and CSRs as `state.json` -- and exit: after `-restore`, the snapshot's. What [the co-run](#corun) starts the other simulators from. |
 | `-trace=<path>` | Write a trace of every instruction, register and CSR write, store and trap, in Sail's trace format. |
 | `-lockstep=<path>` | Run against a reference trace -- Sail's, or an RTL simulation's -- and halt at the first record that does not match. See [Lock-stepping](#lockstep). |
 | `-lockstep-strict` | With `-lockstep`, compare everything, counters, time and interrupt timing included, and take nothing from the reference. How DoomV is held to Sail. |
@@ -980,7 +1004,9 @@ any later instruction, it leaves the same `crash.log`, RAM, framebuffers and
 disk as a run that never stopped. `tools/verification/snapshot_check.py` checks
 exactly that, on any `bench.py` workload.
 
-- **Same machine.** `-restore` checks the RAM size, `-march`, `-vlen`, Linux or DOOM,
+- **Same machine.** Each snapshot has a `command.txt`: the arguments that make its
+  machine, paths made absolute, the shared folder and drives as they were.
+  `-restore` checks the RAM size, `-march`, `-vlen`, Linux or DOOM,
   which disks are attached and whether there is a shared folder, and says which
   one differs. The boot files still have to be given, since that is how the
   machine is put together, though what they loaded is replaced.

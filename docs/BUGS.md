@@ -346,6 +346,7 @@ of console output (`2667bf1`, re-verified in `936df17`).
 181. [The lock-step compared a vector register's every element write with its last](#bug181)
 182. [Narrowing to bf16 never raised underflow, overflow or invalid](#bug182)
 183. [vfwmaccbf16.vf: the scalar, its NaN-boxing and its invalid flag](#bug183)
+184. [Vector loads and stores logged one byte an element](#bug184)
 
 <a id="part-vii"></a>
 ### Part VII — Cross-cutting
@@ -7342,3 +7343,13 @@ finite number -- instead of bf16's, `0x7FC0`. And Sail widens the scalar once,
 before the elements, raising invalid for a signaling NaN even when `vl` is 0
 (`zvfbfwma_insts.sail`); DoomV raised it only per element, so with `vl`=0 it
 raised nothing. Both are Sail's now.
+
+<a id="bug184"></a>
+### 184. Vector loads and stores logged one byte an element
+
+The unit-stride, strided, indexed and segment forms translated each element's
+address with `translate_or_trap`'s default size of one byte, so the trace
+showed a `vse16.v` as every other byte and the lock-step compared one byte of
+each element; fault-only-first's later elements, translated without a trap,
+were not logged at all. The co-run from a snapshot found it the first time it
+compared a vector store byte for byte. Each element is logged at its width now.
