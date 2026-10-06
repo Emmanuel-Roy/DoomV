@@ -80,9 +80,11 @@ def cosim_config(out: pathlib.Path) -> pathlib.Path:
     return path
 
 
-def doomv(args_, cwd, timeout, stdin=None):
+def doomv(args_, cwd, timeout):
+    # stdin closed: a headless Linux machine reads its console from stdin, and
+    # one that inherits a detached session's could wait on it for ever.
     return subprocess.run([str(corun.DOOMV)] + args_, cwd=cwd, capture_output=True, text=True, errors="replace",
-                          timeout=timeout, stdin=stdin)
+                          timeout=timeout, stdin=subprocess.DEVNULL)
 
 
 def main():
