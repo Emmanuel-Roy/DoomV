@@ -66,7 +66,10 @@ def vitis_gxx():
     if os.environ.get("VITIS_GXX"):
         return pathlib.Path(os.environ["VITIS_GXX"])
     for base in ("Z:/FPGA", "C:/Xilinx", "C:/AMD"):
-        for gxx in sorted(pathlib.Path(base).glob("*/Vitis/tps/mingw/*/win64.o/nt/bin/g++.exe"), reverse=True):
+        # The newest release, then the newest MinGW in it: 10.0.0 is newer than 8.3.0.
+        def version(p):
+            return [[int(x) if x.isdigit() else 0 for x in part.split(".")] for part in (p.parts[-8], p.parts[-5])]
+        for gxx in sorted(pathlib.Path(base).glob("*/Vitis/tps/mingw/*/win64.o/nt/bin/g++.exe"), key=version, reverse=True):
             return gxx
     return None
 
@@ -111,7 +114,12 @@ def vitis_check(stamped, elf, timeout):
     if not vitis:
         return [("Vitis", None, "no Vitis installation")]
     work = WORK / "vitis"
-    shutil.rmtree(work, ignore_errors=True)
+    # Vitis leaves read-only files behind, which rmtree cannot remove as they are.
+    def writable(func, path, _):
+        os.chmod(path, 0o666)
+        func(path)
+    if work.exists():
+        shutil.rmtree(work, onerror=writable)
     work.mkdir(parents=True)
     src = ROOT / "tools/verification/lockstep_lib"
 
