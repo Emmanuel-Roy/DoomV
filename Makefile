@@ -90,7 +90,7 @@ INCLUDES = -Isrc/include -Isrc -Isrc/softfloat -I$(SOFTFLOAT_DIR)
 LIBS = -Lsrc/lib -lmingw32 -lSDL2main -lSDL2 -lws2_32 -liphlpapi -lopengl32 -lgdi32
 
 # Source files
-SRCS = src/main.cpp src/doom_system.cpp src/memory.cpp src/guest_ram.cpp src/fdt_patch.cpp src/registers.cpp \
+SRCS = src/main.cpp src/machine.cpp src/doom_system.cpp src/memory.cpp src/guest_ram.cpp src/fdt_patch.cpp src/registers.cpp \
        src/riscv_decoder.cpp src/mmu.cpp src/pmp.cpp src/timer.cpp src/imsic.cpp src/aplic.cpp src/uart.cpp src/rtc.cpp src/virtio/virtio_mmio.cpp src/virtio/virtio_blk.cpp src/virtio/virtio_input.cpp src/virtio/virtio_9p.cpp src/virtio/virtio_net.cpp src/virtio/virtio_snd.cpp src/virtio/virtio_gpu.cpp src/virtio/virtio_gpu_virgl.cpp src/virtio/virgl_backend.cpp src/audio/host_audio.cpp src/net/usernet.cpp src/lockstep.cpp src/savestate.cpp src/gdb_server.cpp src/gdb_target.cpp \
        src/debugger.cpp src/gui.cpp \
        src/controls.cpp src/extensions.cpp \
@@ -131,6 +131,27 @@ $(SOFTFLOAT_OBJDIR)/%.o: $(SOFTFLOAT_DIR)/%.c
 HEADERS = $(wildcard src/*.hpp src/extensions/*.hpp src/virtio/*.hpp src/net/*.hpp src/audio/*.hpp src/include/*.h)
 $(OUT): $(SOFTFLOAT_OBJS) $(SRCS) $(HEADERS) $(PGO_DEP)
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -o $(OUT) $(SRCS) $(SOFTFLOAT_OBJS) $(LIBS)
+
+# The in-process lock-step: DoomV as a DLL with a C interface
+# (src/doomv_lockstep.h), for a core's C simulation or its RTL testbench to
+# step against in the same process -- Vitis HLS software and hardware
+# emulation. Static throughout, SDL and the C++ runtime included, so the DLL
+# is all a caller needs beside the header, whichever MinGW compiler built it:
+# Vitis's own g++ links the import library as it is. Not part of `all`; the
+# gate builds and tests it (tools/verification/lockstep_lib.py).
+LIB_DIR = build/lockstep-lib
+LIB_SRCS = $(filter-out src/main.cpp,$(SRCS)) src/lockstep_api.cpp
+LIB_LIBS = -Lsrc/lib -Wl,-Bstatic -lSDL2 -Wl,-Bdynamic -lws2_32 -liphlpapi -lopengl32 -lgdi32            -lsetupapi -lwinmm -limm32 -lversion -lole32 -loleaut32 -lcfgmgr32 -luuid
+lockstep-lib: $(LIB_DIR)/doomv_lockstep.dll
+
+$(LIB_DIR)/doomv_lockstep.dll: $(SOFTFLOAT_OBJS) $(LIB_SRCS) $(HEADERS) src/doomv_lockstep.h $(PGO_DEP)
+	@mkdir -p $(LIB_DIR)
+	$(CXX) $(CXXFLAGS) -shared -DDOOMV_LS_BUILD $(INCLUDES) -o $@ $(LIB_SRCS) $(SOFTFLOAT_OBJS) $(LIB_LIBS) 		-Wl,--out-implib,$(LIB_DIR)/libdoomv_lockstep.dll.a
+	cp src/doomv_lockstep.h $(LIB_DIR)/
+
+# The compiler this Makefile picked, for scripts that build against the library.
+print-cxx:
+	@echo $(CXX)
 
 # Portable file deletion. GNU Make's built-in $(RM) is hardcoded to `rm -f`,
 # which cmd does not have -- so `make clean` used to fail depending on which

@@ -17,7 +17,7 @@ void Timer::set_harts(unsigned n)
 	cur = 0;
 }
 
-void Timer::tick(uint32_t count)
+void Timer::tick(uint64_t count)
 {
 	mtime += count;
 }

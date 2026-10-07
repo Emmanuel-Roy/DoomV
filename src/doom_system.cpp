@@ -198,6 +198,7 @@ static bool filtered_here(const Registers &regs, uint16_t cfg);
 // own mcountinhibit and Smcntrpmf filter let it count, and mtime once.
 void DoomSystem::tick_all_harts()
 {
+	clock_ticks++;
 	for (const auto &h : harts) {
 		Registers &r = h->regs;
 		if (!(r.read_csr(0x320) & 1) && !filtered_here(r, 0x321)) r.bump_csr(0xB00);
@@ -877,10 +878,32 @@ void DoomSystem::step()
 // filtered out in the current mode.
 void DoomSystem::clock_tick()
 {
+	// Several harts stepped in the reference's order: one clock for all.
+	if (multi) { tick_all_harts(); return; }
+	clock_ticks++;
 	Registers &regs = cur->regs;
 	if (regs.keyed(regs.state_gen + ExtensionsEpoch) != counter_key) refresh_counter_enables();
 	if (counts_cycle) regs.bump_csr(0xB00);
 	memory.tick_clock();
+}
+
+// -cycle-clock: the clock where the core's cycle count `to` puts it, from
+// where the last stamp left it. Every hart's mcycle counts the cycles in
+// between, where its mcountinhibit and Smcntrpmf filter let it; mtime ticks
+// once per cycle_clock cycles. A stamp is the cycle count the record's
+// instruction sees, so this runs before the step.
+void DoomSystem::advance_cycles(uint64_t to)
+{
+	const uint64_t delta = to - cycle_now;
+	cycle_now = to;
+	if (!delta) return;
+	for (const auto &h : harts) {
+		Registers &r = h->regs;
+		if (!(r.read_csr(0x320) & 1) && !filtered_here(r, 0x321)) r.csr_add(0xB00, delta);
+	}
+	cycle_rem += delta;
+	memory.tick_clock(cycle_rem / cycle_clock);
+	cycle_rem %= cycle_clock;
 }
 
 // After a step: minstret if the instruction completed and counts, and the
@@ -889,9 +912,11 @@ void DoomSystem::end_step()
 {
 	Registers &regs = cur->regs;
 	if (step_committed && regs.minstret_increment) regs.bump_csr(0xB02);
-	if (multi) {
+	if (multi || cycle_clock) cur->steps++;
+	// The reference's stamps move the clock (advance_cycles).
+	if (cycle_clock) return;
+	if (multi && !follow_records) {
 		// The round moves the clock (run_round).
-		cur->steps++;
 		cur->retired = true;
 		return;
 	}
@@ -917,8 +942,12 @@ void DoomSystem::run_wait()
 	core.wait_request = RiscvCore::Wait::None;
 
 	constexpr uint64_t TW = 1ull << 21, VTW = 1ull << 21;
-	uint32_t remaining = MAX_WAIT_TICKS;
-	clock_tick();
+	// With -cycle-clock no time passes inside the step: the core waited as
+	// long as it did, and the WFI's own cycle stamp, which the clock already
+	// stands at, says so. What is decided here is what ended the wait then --
+	// an interrupt, or the core's limit, which is zero ticks as DoomV sees it.
+	uint32_t remaining = cycle_clock ? 0 : MAX_WAIT_TICKS;
+	if (!cycle_clock) clock_tick();
 	int trap = 0;   // 2 illegal, 22 virtual instruction
 	for (;;) {
 		const bool timed_out = remaining == 0;
@@ -1120,7 +1149,7 @@ void DoomSystem::step_execute()
 	// it executed, such as a page fault or an ecall.
 	step_committed = !result.illegal && core.trap_count == traps_before;
 	if (core.wait_request != RiscvCore::Wait::None) {
-		if (multi) {
+		if (multi && !follow_records) {
 			begin_wait(recorded_instr, (uint8_t)step_insn_len);
 			return;
 		}
@@ -1543,7 +1572,10 @@ void DoomSystem::cpu_loop()
 		int budget = 200000;
 		while (budget > 0 && !debugger.halted) {
 			const uint64_t before = memory.instruction_count();
-			if (harts.size() > 1) {
+			if (follow_records && lockstep_active) {
+				follow_step();
+				budget--;
+			} else if (harts.size() > 1) {
 				run_round();
 				budget -= (int)harts.size();
 			} else if (tracing) {

@@ -7,7 +7,9 @@ run exactly the same thing and cannot drift apart:
   1. a clean build of the emulator, as `make` would do it
   2. strict lock-step against Sail -- every test, 0 values taken from the
      reference
-  3. scripts/verify.py -- differential, archtest, hypervisor, vector,
+  3. the in-process lock-step (the DoomV library a core's simulation links)
+     and the core's clock, held to Sail's traces
+  4. scripts/verify.py -- differential, archtest, hypervisor, vector,
      riscvtests and linux
 
 Around thirteen minutes on a warm checkout, nearly all of it in step 3.
@@ -30,6 +32,7 @@ from pathlib import Path
 from common import ROOT, build_emulator, environment, entrypoint
 
 LOCKSTEP = ROOT / "tools/verification/lockstep_sail.py"
+LOCKSTEP_LIB = ROOT / "tools/verification/lockstep_lib.py"
 VERIFY = ROOT / "scripts/verify.py"
 
 
@@ -65,6 +68,7 @@ def main() -> int:
     if not args.no_build:
         stages.append(("build", None))
     stages.append(("lock-step vs Sail", [sys.executable, str(LOCKSTEP)]))
+    stages.append(("lock-step library", [sys.executable, str(LOCKSTEP_LIB)]))
     stages.append(("verify.py", verify))
 
     results = []

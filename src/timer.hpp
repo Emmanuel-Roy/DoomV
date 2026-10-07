@@ -31,7 +31,7 @@ public:
 	unsigned harts() const { return (unsigned)cmp.size(); }
 	void select(unsigned hart) { cur = hart; }
 
-	void tick(uint32_t count);
+	void tick(uint64_t count);
 
 	uint64_t get_mtime() const { return mtime; }
 	uint64_t get_mtimecmp() const { return cmp[cur]; }

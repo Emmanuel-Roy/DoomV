@@ -80,7 +80,7 @@ QEMU = "qemu-system-riscv64"
 SAIL_FLAGS = ["--trace-instr", "--trace-gpr", "--trace-fpr", "--trace-vreg", "--trace-csr",
               "--trace-mem", "--trace-exception", "--trace-interrupt"]
 SIMS = ("doomv", "spike", "whisper", "qemu")
-# What DoomV gives a Linux boot when no -march says otherwise (src/main.cpp):
+# What DoomV gives a Linux boot when no -march says otherwise (src/machine.cpp):
 # a snapshot of one is of that hart, and the others are given the same.
 LINUX_MARCH = ("rv64imafdcv_zicsr_zifencei_zba_zbb_zbs_zicond_zicbom_zicbop_zicboz_zicntr_zihintpause"
                "_zihintntl_zimop_zcmop_zawrs_zfa_zfh_svinval_svnapot_svpbmt_sscofpmf_ssstateen_ssnpm_smnpm")

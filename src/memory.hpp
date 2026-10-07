@@ -400,6 +400,7 @@ public:
 	// second step (DoomSystem::clock_tick).
 	uint64_t instruction_count() const { return instr_count; }
 	void tick_clock() { timer.tick(1); }
+	void tick_clock(uint64_t n) { timer.tick(n); }
 
 	const uint8_t *framebuffer() const { return fb.data(); }
 

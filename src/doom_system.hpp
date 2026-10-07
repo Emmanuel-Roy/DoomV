@@ -23,6 +23,8 @@
 #include <utility>
 #include <vector>
 
+namespace lockstep { struct RefRecord; }
+
 class DoomSystem {
 	// Machine state is saved and restored field by field in savestate.cpp.
 	friend struct SaveState;
@@ -126,6 +128,35 @@ public:
 	// and device reads are compared like everything else. This is the mode
 	// that says DoomV matches the reference deterministically.
 	void set_lockstep_strict() { lockstep_strict = true; }
+	// -lockstep-follow: step the hart the reference's next record is about,
+	// in the reference's order, instead of round-robin -- a core runs its
+	// harts at once. Before set_lockstep. See follow_step.
+	void set_lockstep_follow() { follow_records = true; }
+	// -cycle-clock=<n>: the clock of a core whose records carry its cycle
+	// count. mtime and mcycle come from the stamps, n cycles to an mtime
+	// tick, instead of from Sail's instruction-counted clock; it follows the
+	// reference's order too. Before set_lockstep. See advance_cycles.
+	void set_cycle_clock(uint64_t cycles_per_tick) { cycle_clock = cycles_per_tick; follow_records = true; }
+	// -lockstep-take=<base>:<size>: loads from this physical range are taken
+	// from the reference's record, strict or not -- a device the reference
+	// has that DoomV only stands in for.
+	void add_lockstep_take(uint64_t base, uint64_t size) { take_ranges.push_back({base, size}); }
+	// -lockstep-stamp=<path>: the reference's trace written back with a
+	// Sail-clock cycle stamp before each record. See lockstep.cpp.
+	bool set_lockstep_stamp(const char *path);
+
+	// The in-process lock-step (doomv_lockstep.h): instead of set_lockstep,
+	// the records are handed over one call at a time. Each returns 0 when
+	// they match, 1 at a mismatch, 2 for a record that cannot be stepped, 3
+	// when the machine has stopped; `message` says what happened.
+	void lockstep_open_api();
+	int lockstep_step_text(const char *text, std::string &message);
+	int lockstep_step_record(lockstep::RefRecord &&r, unsigned hart, std::string &message);
+	uint64_t lockstep_matched() const;
+	uint64_t lockstep_taken() const;
+	uint64_t hart_pc(unsigned h) const { return harts[h]->regs.get_pc(); }
+	uint64_t tohost_value() { return memory.tohost_written(); }
+	uint64_t steps_taken() const { return memory.instruction_count(); }
 	// -gdb=<port>: a gdb remote server on 127.0.0.1:<port>. The machine
 	// starts halted, before its first instruction, and waits for gdb. See
 	// gdb_target.cpp.
@@ -445,8 +476,23 @@ private:
 	// Halt once the step count reaches this (a gdb single step); 0 for none.
 	uint64_t halt_at = 0;
 
+	// -cycle-clock: core cycles per mtime tick (0: Sail's clock), the stamp
+	// the clock stands at, and the cycles since its last mtime tick. A run's
+	// stamps count from 0 where it starts, at reset or at a restored state.
+	uint64_t cycle_clock = 0;
+	uint64_t cycle_now = 0, cycle_rem = 0;
+	void advance_cycles(uint64_t to);
+	bool follow_records = false;
+	std::vector<std::pair<uint64_t, uint64_t>> take_ranges;
+	// Ticks of the clock since the run began, for -lockstep-stamp.
+	uint64_t clock_ticks = 0;
+	std::FILE *stamp_file = nullptr;
+	void stamp(const lockstep::RefRecord &r, uint64_t ticks);
+
 	// lockstep.cpp
 	void traced_step();
+	void follow_step();
+	int lockstep_run_pending(std::string &message);
 	void lockstep_end();
 	void lockstep_report();
 	bool tracing = false;          // -trace or -lockstep: steps go through traced_step

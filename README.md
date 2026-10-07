@@ -397,6 +397,79 @@ thirteen segments of 100 million (`--segment`, each starting from the
 snapshot the one before took, so an interrupted run carries on with
 `--resume`), about 35 minutes each.
 
+<a id="core-lockstep"></a>
+### Lock-stepping a core, in Vitis
+
+DoomV is also the reference a hardware core is checked against -- Ouroboros's
+RVA23 core, written in C++ for Vitis HLS -- one retired instruction at a
+time, in both of Vitis HLS's emulations:
+
+- **Software emulation** (C simulation): the core's C++ is compiled natively,
+  and DoomV runs in the same process.
+- **Hardware emulation** (C/RTL co-simulation): the Verilog Vitis generates
+  runs in XSim, and the testbench hands DoomV what it retired.
+
+Both go through **`doomv_lockstep.dll`**, DoomV as a library with a plain C
+interface ([src/doomv_lockstep.h](src/doomv_lockstep.h)): open a machine with
+riscv_doom's own arguments, then hand it one record per retired step --
+privilege, pc, instruction, the registers and CSRs it wrote, its stores, or
+the trap it took -- and get back a match or the mismatch, as `-lockstep`
+reports it. Records can be structures the testbench fills from the core's
+retirement port, or Sail-format text. The DLL is static throughout, so it
+needs nothing beside it, and Vitis's own MinGW g++ links it as it is:
+
+```
+make lockstep-lib            # build/lockstep-lib/: the DLL, its import library, the header
+```
+```
+# the component's hls_config.cfg
+tb.cflags=-IZ:/Code/Dev/DoomV/build/lockstep-lib
+csim.ldflags=-LZ:/Code/Dev/DoomV/build/lockstep-lib -ldoomv_lockstep
+```
+
+with the DLL's folder on `PATH`; `csim.ldflags` serves co-simulation too.
+
+What a core needs that Sail does not:
+
+- **The core's clock.** A core counts real cycles, so each of its records
+  carries its cycle count (`cycle <n>` before the record in text, a field in
+  the structure), and with **`-cycle-clock=<n>`** DoomV's clock is what that
+  count makes it: before each step, mcycle advances by the cycles since the
+  last record, and mtime by a tick per `<n>` cycles. Time and counter reads
+  then match by construction, and a timer interrupt is due in DoomV at the
+  cycle it is due in the core -- so the lock-step stays strict, interrupts
+  included. A WFI ends by the state at its own stamp: the core's wait is the
+  gap between stamps.
+- **The core's order.** With several harts, the core retires them in
+  whatever order its pipelines do. DoomV steps the hart each record names, in
+  the core's order (`-lockstep-follow`, which `-cycle-clock` and the library
+  imply), instead of its own round-robin.
+- **Devices DoomV only stands in for.** `-lockstep-take=<base>:<size>` takes
+  loads from a range from the core's record, even when strict.
+
+All of it is held to Sail. Sail's clock is a cycle clock that ticks once
+every two instructions, so `-lockstep-stamp=<file>` writes Sail's trace back
+with each record stamped with that count, and DoomV run with
+`-cycle-clock=1` against it has to reproduce Sail's trace exactly -- every
+time read, interrupt and wait -- from the stamps alone.
+`tools/verification/lockstep_lib.py` does that for each test, then hands the
+stamped records to the library both ways, from a testbench built with
+Vitis's g++, and checks that a record with one value changed stops it there.
+With Vitis installed it also synthesises a stand-in for a retirement port
+(`tools/verification/lockstep_lib/vitis`) and runs its testbench, which
+feeds what comes out of the port to the library, in C simulation and in
+co-simulation, where the records DoomV checks are the ones the RTL produced:
+
+```
+python tools/verification/lockstep_lib.py          # a set of tests, and Vitis's two emulations, about 90 s; in the gate
+python tools/verification/lockstep_lib.py --all    # every test lockstep_sail.py runs
+```
+
+Every one-hart test `lockstep_sail.py` runs, 381 of them, matches Sail this
+way, on the cycle clock and through the library; the multi-hart ones follow
+Sail's order through both, leniently, as Sail's clock for several harts
+counts rounds rather than cycles.
+
 ### What that process actually found
 
 148 bugs, written up individually in [docs/BUGS.md](docs/BUGS.md). A few
@@ -448,7 +521,10 @@ for 59.7 and 82.2.
 
 ```
 src/
-  main.cpp             entry point, CLI flags, wires everything together
+  main.cpp             entry point: sets up the machine and runs it
+  machine.*            the command line's options, and the machine they set up
+  lockstep.cpp         commit traces, and lock-stepping against a reference
+  lockstep_api.cpp     doomv_lockstep.h: the lock-step as a library (make lockstep-lib)
   doom_system.*         top-level system: owns decoder, registers, memory, gui
   memory.*              guest RAM, WAD/ELF loader, MMIO bus (framebuffers, input, virtio devices)
   registers.*           x0-31, f0-31, v0-31, PC, CSRs, and the trace history ring
@@ -600,8 +676,9 @@ python scripts/install_hooks.py
 ```
 
 From then on `git push` runs `scripts/ci.py` first and refuses the push if
-anything fails. The gate is the build, strict lock-step against Sail, and every
-suite in `verify.py` — about thirteen minutes, nearly all of it the suites:
+anything fails. The gate is the build, strict lock-step against Sail, the
+lock-step library and the core's clock (with Vitis's emulations where Vitis
+is installed), and every suite in `verify.py` — about thirteen minutes, nearly all of it the suites:
 
 ```
 python scripts/ci.py            # the same thing, by hand
@@ -661,6 +738,10 @@ riscv_doom.exe -opensbi=<f> -kernel=<f> -dtb=<f> -initrd=<f> [options]   # Linux
 | `-trace=<path>` | Write a trace of every instruction, register and CSR write, store and trap, in Sail's trace format. |
 | `-lockstep=<path>` | Run against a reference trace -- Sail's, or an RTL simulation's -- and halt at the first record that does not match. See [Lock-stepping](#lockstep). |
 | `-lockstep-strict` | With `-lockstep`, compare everything, counters, time and interrupt timing included, and take nothing from the reference. How DoomV is held to Sail. |
+| `-cycle-clock=<n>` | With `-lockstep`, the clock of a core whose records carry its cycle count (`cycle <n>` before each): mtime and mcycle come from the stamps, `n` cycles to an mtime tick. Implies `-lockstep-follow`. See [Lock-stepping a core](#core-lockstep). |
+| `-lockstep-follow` | With `-lockstep`, step the hart each reference record names, in the reference's order, instead of round-robin. |
+| `-lockstep-take=<base>:<size>` | With `-lockstep`, loads from this physical range (hex) are taken from the reference's record, even when strict. |
+| `-lockstep-stamp=<path>` | With a one-hart `-lockstep`, write the reference's trace back with a `cycle` line before each record: Sail's clock as a cycle count, for `-cycle-clock=1`. |
 | `-net` | A network card, with user-mode NAT behind it: the guest reaches the internet through the host. See [Networking](#networking). |
 | `-gpu` | A virtio-gpu for a Linux guest, in place of the simple framebuffer: the display, OpenGL (virgl) and Vulkan (Venus) on the host GPU, and the guest's Mesa picks what each program uses. See [GPU](#gpu). |
 | `-snd` | A sound card, playing through the host's default output and recording from its default input. See [Sound](#sound). |
