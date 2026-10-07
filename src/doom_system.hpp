@@ -144,6 +144,9 @@ public:
 	// -lockstep-stamp=<path>: the reference's trace written back with a
 	// Sail-clock cycle stamp before each record. See lockstep.cpp.
 	bool set_lockstep_stamp(const char *path);
+	// -lockstep-record=<path>: the reference's records, as they are stepped,
+	// written out in Sail's trace format. See lockstep.cpp.
+	bool set_lockstep_record(const char *path);
 
 	// The in-process lock-step (doomv_lockstep.h): instead of set_lockstep,
 	// the records are handed over one call at a time. Each returns 0 when
@@ -487,6 +490,7 @@ private:
 	// Ticks of the clock since the run began, for -lockstep-stamp.
 	uint64_t clock_ticks = 0;
 	std::FILE *stamp_file = nullptr;
+	std::FILE *ref_record_file = nullptr;
 	void stamp(const lockstep::RefRecord &r, uint64_t ticks);
 
 	// lockstep.cpp

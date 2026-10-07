@@ -102,7 +102,7 @@ bool setup_machine(int argc, const char *const *argv, std::unique_ptr<DoomSystem
 	std::string trace_path, lockstep_path;
 	bool lockstep_strict = false;
 	bool lockstep_follow = false;
-	std::string stamp_path;
+	std::string stamp_path, record_path_ls;
 	uint64_t cycle_clock = 0;
 	std::vector<std::pair<uint64_t, uint64_t>> lockstep_takes;
 	unsigned harts = 1;
@@ -244,6 +244,10 @@ bool setup_machine(int argc, const char *const *argv, std::unique_ptr<DoomSystem
 			trace_path = arg.substr(7);
 		} else if (arg == "-lockstep-strict") {
 			lockstep_strict = true;
+		} else if (arg.rfind("-lockstep-record=", 0) == 0) {
+			// Write the reference's records out as they are stepped, in
+			// Sail's format: in-process, the trace of what a core retired.
+			record_path_ls = arg.substr(17);
 		} else if (arg.rfind("-lockstep-stamp=", 0) == 0) {
 			// Write the reference's trace back, each record stamped with
 			// the cycle count of Sail's clock: a trace for -cycle-clock=1.
@@ -363,7 +367,7 @@ bool setup_machine(int argc, const char *const *argv, std::unique_ptr<DoomSystem
 	for (int i = 1; i < argc; i++) {
 		const std::string a = argv[i];
 		static const char *const run_only[] = {"-snapshot=", "-snapshotat=", "-restore=", "-stopat=", "-trace=",
-		                                      "-lockstep=", "-lockstep-strict", "-lockstep-follow", "-lockstep-stamp=", "-cycle-clock=", "-lockstep-take=", "-gdb", "-record=", "-replay=",
+		                                      "-lockstep=", "-lockstep-strict", "-lockstep-follow", "-lockstep-stamp=", "-lockstep-record=", "-cycle-clock=", "-lockstep-take=", "-gdb", "-record=", "-replay=",
 		                                      "-export-state=", "-expect=", "-input=", "-fbdump=", "-guidump=", "-cosim-log="};
 		bool skip = a.rfind("-shared=", 0) == 0 || a.rfind("-drives=", 0) == 0;   // written below, as used
 		for (const char *p : run_only) skip = skip || a.rfind(p, 0) == 0;
@@ -471,6 +475,11 @@ bool setup_machine(int argc, const char *const *argv, std::unique_ptr<DoomSystem
 	for (const auto &t : lockstep_takes) system.add_lockstep_take(t.first, t.second);
 	if (!stamp_path.empty() && (harts > 1 || cycle_clock || lockstep_path.empty())) {
 		std::cout << "-lockstep-stamp stamps a one-hart -lockstep= run on Sail's clock\n";
+		status = -1;
+		return false;
+	}
+	if (!record_path_ls.empty() && !system.set_lockstep_record(record_path_ls.c_str())) {
+		std::cout << "cannot write " << record_path_ls << "\n";
 		status = -1;
 		return false;
 	}

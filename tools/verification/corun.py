@@ -46,8 +46,31 @@ What is compared, and what is not:
     not know is dropped, and the report lists what was dropped, since a
     simulator without an extension traps where Sail does not.
 
+A core, in Vitis (--lockstep sw-emu or hw-emu): the device under test is a
+Vitis HLS component -- Ouroboros's core, or until there is one the stand-in
+for a core's retirement port in lockstep_lib/vitis -- in Vitis HLS's
+software emulation (C simulation: its C++, compiled natively) or hardware
+emulation (C/RTL co-simulation: the Verilog Vitis generates, in XSim). Its
+testbench steps DoomV in the same process (doomv_lockstep.dll), strictly, on
+the core's clock (--cycle-clock): DoomV is always there. The others, any of
+Sail, Spike, Whisper and QEMU (--sims), run the same program beside it, and
+each is compared with what the core retired -- so where the core parts from
+DoomV, the report also says which of the others agree with it there. On a
+mismatch, the DoomV snapshot before the instruction, as ever.
+
+    python tools/verification/corun.py --lockstep sw-emu --suite riscv-tests --count 20
+    python tools/verification/corun.py --lockstep hw-emu --sims sail build/lockstep-elf/clock
+    python tools/verification/corun.py --lockstep sw-emu --component <dir> --cycle-clock 4 prog.elf
+
+The component is a folder with an hls_config.cfg, its testbench keeping to
+vitis_dut.py's contract. Its emulation is built once -- the C simulation's
+program, or the synthesised RTL -- and run per program; co-simulations run
+one at a time. The stand-in needs a recorded run to replay: Sail's trace,
+with Sail's clock as cycle stamps (DoomV's -lockstep-stamp), so Sail runs
+for it whether or not it is in --sims.
+
 Where they run: Sail, Spike, Whisper and QEMU in WSL (Ubuntu), DoomV on
-Windows. Spike and Whisper are built under /root/build in WSL (simulators/
+Windows, Vitis on Windows. Spike and Whisper are built under /root/build in WSL (simulators/
 spike/build.sh; Whisper with `make` in a copy of simulators/whisper/src),
 QEMU is Ubuntu's qemu-system-riscv.
 """
@@ -69,6 +92,8 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 SUITES = ROOT / "tools" / "verification" / "tests" / "suites"
 sys.path.insert(0, str(SUITES))
 import run_suite  # noqa: E402  (Sail's path and config, the suites' march, the ELF symbol reader)
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import vitis_dut  # noqa: E402  (a core in Vitis's emulation, as the device under test)
 
 WORK = ROOT / "build" / "corun"
 # DOOMV_EXE: another build -- a copy, for a long run while this one is rebuilt.
@@ -80,6 +105,9 @@ QEMU = "qemu-system-riscv64"
 SAIL_FLAGS = ["--trace-instr", "--trace-gpr", "--trace-fpr", "--trace-vreg", "--trace-csr",
               "--trace-mem", "--trace-exception", "--trace-interrupt"]
 SIMS = ("doomv", "spike", "whisper", "qemu")
+# With --lockstep the core is the reference the others are compared with, and
+# Sail is one of them.
+CORE_SIMS = ("sail", "spike", "whisper", "qemu", "doomv")
 # What DoomV gives a Linux boot when no -march says otherwise (src/machine.cpp):
 # a snapshot of one is of that hart, and the others are given the same.
 LINUX_MARCH = ("rv64imafdcv_zicsr_zifencei_zba_zbb_zbs_zicond_zicbom_zicbop_zicboz_zicntr_zihintpause"
@@ -678,11 +706,20 @@ def lockstep_and_snapshot(prog, out, limit, sail: Run, timeout):
         return result
     at = text.index("lockstep: MISMATCH")
     detail = text[at:].strip()
-    m = re.search(r"\(instruction (\d+)\)", detail)
-    pcm = re.search(r"DoomV:\s*\n\s*\[\d+\] \[[A-Z]+\]: 0x([0-9A-Fa-f]+)", detail)
     result.update(status="mismatch", detail=detail)
+    result.update(snapshot_before(prog, out, detail, timeout))
+    return result
+
+
+def snapshot_before(prog, out, detail, timeout) -> dict:
+    """For a lock-step MISMATCH report: a DoomV snapshot one step before the
+    instruction that went wrong, checked by restoring it."""
+    result = {}
+    m = re.search(r"\(instruction (\d+)\)", detail)
+    pcm = re.search(r"DoomV:\s*\n(?:\s*cycle \d+\n)?\s*\[\d+\] \[[A-Z]+\]: 0x([0-9A-Fa-f]+)", detail)
     if not m:
         return result
+    base = [str(DOOMV)] + prog.machine
     count = int(m.group(1))
     bad_pc = int(pcm.group(1), 16) if pcm else None
     # The lock-step stops with the bad instruction executed: count includes it.
@@ -929,6 +966,8 @@ def corun(item, args) -> dict:
     shutil.rmtree(out, ignore_errors=True)
     out.mkdir(parents=True)
     prog = snapshot_program(pathlib.Path(item), out, args) if args.snapshot else elf_program(item, args)
+    if args.lockstep:
+        return corun_core(item, prog, out, args)
     entry = prog.entry
     run_suite.use_vlen(prog.vlen)
     config = run_suite.WSL_CFG
@@ -979,27 +1018,133 @@ def corun(item, args) -> dict:
     return report
 
 
+def run_core(prog, out, args, sail_future) -> tuple:
+    """The core in Vitis's emulation, stepping DoomV in its process: (its
+    trace as a Run, the lock-step's verdict)."""
+    r = Run("core", log=out / "core.log")
+    lock = {"status": "not run"}
+    values = {}
+    if args.component == vitis_dut.STAND_IN:
+        # The stand-in replays a recorded run: Sail's, stamped with Sail's clock.
+        sail = sail_future.result()
+        if sail.error or not sail.log or not sail.log.exists():
+            r.error = "the stand-in has no run to replay: Sail " + (sail.error or "wrote no trace")
+            return r, {"status": "error", "detail": r.error}
+        stamped = out / "stand-in.log"
+        cmd = [str(DOOMV)] + prog.machine + [f"-lockstep={sail.log}", "-lockstep-strict",
+                                             f"-lockstep-stamp={stamped}", f"-stopat={args.limit}"]
+        p = subprocess.run(cmd, cwd=out, capture_output=True, text=True, errors="replace", timeout=args.timeout)
+        text = (p.stdout or "") + (p.stderr or "")
+        if "MISMATCH" in text or not stamped.exists():
+            r.error = "the stand-in cannot record a run here: DoomV and Sail differ (corun without --lockstep says where)"
+            return r, {"status": "error", "detail": r.error}
+        values["DOOMV_LS_TRACE"] = str(stamped)
+    ls_args = prog.machine + ["-lockstep-strict", f"-cycle-clock={args.cycle_clock}", f"-lockstep-record={r.log}"]
+    values.update(DOOMV_LS_ARGS=vitis_dut.quote(ls_args), DOOMV_LS_ELF=str(prog.elf), DOOMV_LS_LIMIT=str(args.limit))
+    r.command = [f"{k}={v}" for k, v in values.items()] + [f"({args.lockstep}: {args.component})"]
+    code, text = args.dut.run(values, out)
+    (out / "core.out").write_text(text)
+    if r.log.exists():
+        r.steps = parse_sail_format(r.log)
+    if code is None:
+        r.error = "timed out"
+        return r, {"status": "timed out"}
+    if "lockstep: MISMATCH" in text:
+        at = text.index("lockstep: MISMATCH")
+        end = text.find("machine state in crash.log", at)
+        detail = (text[at:end + len("machine state in crash.log")] if end >= 0 else text[at:at + 3000]).strip()
+        lock = {"status": "mismatch", "detail": detail}
+        lock.update(snapshot_before(prog, out, detail, args.timeout))
+    elif code == 0:
+        said = [l.strip() for l in text.splitlines() if "matched" in l and "DoomV" in l]
+        lock = {"status": "match", "summary": said[-1] if said else f"{len(r.steps)} records matched"}
+    else:
+        lock = {"status": "error", "detail": f"exit {code}: " + text.strip()[-800:]}
+    return r, lock
+
+
+def corun_core(item, prog, out, args) -> dict:
+    """--lockstep: the core against DoomV, strictly, and the others against the core."""
+    entry = prog.entry
+    run_suite.use_vlen(prog.vlen)
+    config = run_suite.WSL_CFG
+    jobs = {
+        "doomv": lambda: run_doomv(prog, out, args.limit, args.timeout),
+        "spike": lambda: run_spike(prog, out, prog.march, args.limit, args.timeout),
+        "whisper": lambda: run_whisper(prog, out, prog.march, args.limit, args.timeout),
+        "qemu": lambda: run_qemu(prog, out, prog.march, args.limit, args.timeout),
+    }
+    with concurrent.futures.ThreadPoolExecutor(len(args.sims) + 2) as pool:
+        need_sail = "sail" in args.sims or args.component == vitis_dut.STAND_IN
+        sail_future = pool.submit(run_sail, prog, out, config, args.limit, args.timeout) if need_sail else None
+        futures = {k: pool.submit(f) for k, f in jobs.items() if k in args.sims}
+        if sail_future and "sail" in args.sims:
+            futures["sail"] = sail_future
+        core_future = pool.submit(run_core, prog, out, args, sail_future)
+        runs = {}
+        for k, f in futures.items():
+            try:
+                runs[k] = f.result()
+            except Exception as e:   # one simulator's failure is a result, not the end of the run
+                runs[k] = Run(k, error=f"{type(e).__name__}: {e}")
+        try:
+            core, lock = core_future.result()
+        except Exception as e:
+            core, lock = Run("core", error=f"{type(e).__name__}: {e}"), {"status": "error"}
+    ref = f"the core ({args.lockstep})"
+    report = {"elf": str(item), "entry": f"0x{entry:x}", "vlen": prog.vlen, "march": prog.march, "sims": {},
+              "from_snapshot": False, "first_step": 0, "reference": ref, "ref_short": "core",
+              "lockstep_label": f"DoomV in {ref} (strict, in-process)"}
+    a0 = sync(core.steps, entry) or 0
+    report["sail"] = {"steps": len(core.steps) - a0 if core.steps else 0, "error": core.error}
+    for name in args.sims:
+        r = runs[name]
+        entry_rep = {"dropped": r.dropped, "log": str(r.log) if r.log else None}
+        if r.error and not r.steps:
+            entry_rep.update(status="error", error=r.error)
+        elif not core.steps:
+            entry_rep.update(status="no reference")
+        else:
+            matched, d = compare(core, r, entry, prog.tohost, args.limit)
+            if d is None:
+                entry_rep.update(status="match", steps=matched, capped=r.capped)
+            else:
+                entry_rep.update(status="diverged", steps=matched, at_step=d.step, pc=f"0x{d.pc:x}", what=d.what,
+                                 sail=d.sail, theirs=d.other)
+                i = a0 + d.step
+                if 0 <= i < len(core.steps):
+                    entry_rep["instruction"] = core.steps[i].text
+                    entry_rep["context"] = [f"0x{s.pc:x}  {s.text}" for s in core.steps[max(a0, i - 4):i + 1]]
+        report["sims"][name] = entry_rep
+    report["lockstep"] = lock
+    (out / "report.json").write_text(json.dumps(report, indent=2))
+    return report
+
+
 def print_report(rep: dict):
     where = f"from step {rep['first_step']}, pc {rep['entry']}" if rep.get("from_snapshot") else f"entry {rep['entry']}"
     print(f"\n== {pathlib.Path(rep['elf']).name}   ({where}, VLEN {rep['vlen']})")
     s = rep["sail"]
-    print(f"   sail      {'error: ' + s['error'] if s['error'] and not s['steps'] else str(s['steps']) + ' steps (the reference)'}")
+    ref, short = rep.get("reference", "Sail"), rep.get("ref_short", "sail")
+    print(f"   {short:9} {'error: ' + s['error'] if s['error'] and not s['steps'] else str(s['steps']) + ' steps (the reference)'}")
     for name, r in rep["sims"].items():
         drop = f"   [not given: {', '.join(r['dropped'])}]" if r.get("dropped") else ""
         if r["status"] == "match":
             capped = " (its log stopped there, at the size limit)" if r.get("capped") else ""
-            print(f"   {name:9} matches Sail, {r['steps']} steps{capped}{drop}")
+            print(f"   {name:9} matches {ref}, {r['steps']} steps{capped}{drop}")
         elif r["status"] == "diverged":
-            print(f"   {name:9} DIVERGES at step {r['at_step']}, pc {r['pc']} ({r.get('instruction', '')}): "
-                  f"{r['what']}  sail {r['sail']}  {name} {r['theirs']}{drop}")
+            insn = f" ({r['instruction']})" if r.get("instruction") else ""
+            print(f"   {name:9} DIVERGES at step {r['at_step']}, pc {r['pc']}{insn}: "
+                  f"{r['what']}  {short} {r['sail']}  {name} {r['theirs']}{drop}")
         else:
             print(f"   {name:9} {r['status']}: {r.get('error', '')}{drop}")
     ls = rep.get("lockstep")
+    label = rep.get("lockstep_label", "DoomV vs Sail (strict)")
     if ls:
         if ls["status"] == "match":
-            print(f"   lock-step DoomV vs Sail (strict): {ls.get('summary', 'match')}")
+            print(f"   lock-step {label}: {ls.get('summary', 'match')}")
         elif ls["status"] == "mismatch":
-            print("   lock-step DoomV vs Sail (strict): MISMATCH")
+            print(f"   lock-step {label}: MISMATCH")
             print("      " + ls["detail"].splitlines()[0])
             if len(ls["detail"].splitlines()) > 1:
                 print("      " + ls["detail"].splitlines()[1].strip())
@@ -1014,7 +1159,7 @@ def print_report(rep: dict):
                       f"{ls['snapshot']} -- {tag}")
                 print(f"      restore: {ls['restore']}")
         else:
-            print(f"   lock-step DoomV vs Sail: {ls['status']}")
+            print(f"   lock-step {label}: {ls['status']}" + (f": {ls['detail']}" if ls.get("detail") else ""))
 
 
 def main():
@@ -1028,8 +1173,16 @@ def main():
     ap.add_argument("--march", help="the ISA every simulator is given (default: what the suites use with "
                                      "Sail; from a snapshot, the snapshot's own)")
     ap.add_argument("--vlen", type=int, default=128, help="vector length for all of them (default 128)")
-    ap.add_argument("--sims", default=",".join(SIMS), help="which to run beside Sail (default all: "
-                                                           + ",".join(SIMS) + ")")
+    ap.add_argument("--sims", help="which to run beside Sail (default all: " + ",".join(SIMS) + "); with "
+                                   "--lockstep, beside the core and DoomV (any of " + ",".join(CORE_SIMS)
+                                   + "; default sail,spike,whisper,qemu)")
+    ap.add_argument("--lockstep", choices=("sw-emu", "hw-emu"),
+                    help="the device under test is a core in Vitis HLS's software emulation (C simulation) or "
+                         "hardware emulation (co-simulation in XSim), stepping DoomV in its process")
+    ap.add_argument("--component", type=pathlib.Path, default=vitis_dut.STAND_IN,
+                    help="with --lockstep: the Vitis HLS component (default: the stand-in, lockstep_lib/vitis)")
+    ap.add_argument("--cycle-clock", type=int, default=1,
+                    help="with --lockstep: the core's cycles per mtime tick (default 1, the stand-in's: Sail's clock)")
     ap.add_argument("--no-lockstep", action="store_true", help="skip DoomV's strict lock-step and snapshot")
     ap.add_argument("--timeout", type=int, default=600, help="seconds each simulator may take (default 600)")
     ap.add_argument("--jobs", type=int, default=2, help="programs at a time, each running all simulators")
@@ -1046,11 +1199,20 @@ def main():
         args.march = run_suite.SUITE_MARCH
     if args.limit is None:
         args.limit = 20_000 if args.snapshot else 2_000_000
+    if args.sims is None:
+        args.sims = "sail,spike,whisper,qemu" if args.lockstep else ",".join(SIMS)
     args.sims = [s for s in args.sims.split(",") if s]
     # Each extension once: the suites' string names zfh twice, which Whisper crashes on.
     args.march = "_".join(dict.fromkeys(t for t in args.march.lower().split("_") if t))
-    if set(args.sims) - set(SIMS):
-        ap.error("unknown simulator: " + ", ".join(sorted(set(args.sims) - set(SIMS))))
+    known = CORE_SIMS if args.lockstep else SIMS
+    if set(args.sims) - set(known):
+        ap.error("unknown simulator: " + ", ".join(sorted(set(args.sims) - set(known))))
+    if args.lockstep and args.snapshot:
+        ap.error("--lockstep runs programs from reset: a core cannot be started from a snapshot yet")
+    if args.lockstep:
+        args.component = args.component.resolve()
+        if not (args.component / "hls_config.cfg").is_file():
+            ap.error(f"no hls_config.cfg in {args.component}")
     if args.vlen < 128 or args.vlen & (args.vlen - 1):
         ap.error("--vlen must be a power of two, 128 or more")
     m = re.match(r"riscv-vector-tests-v(\d+)x", args.suite or "")
@@ -1076,6 +1238,13 @@ def main():
         if not args.snapshot and not e.is_file():
             ap.error(f"no such file: {e}")
     WORK.mkdir(parents=True, exist_ok=True)
+    if args.lockstep:
+        # Built once: the C simulation's program, or the synthesised RTL.
+        print(f"preparing {args.component.name} for {args.lockstep} ...", flush=True)
+        args.dut = vitis_dut.VitisDut(args.lockstep, args.component, WORK / f"_core-{args.lockstep}", args.timeout)
+        if not args.dut.prepare():
+            print("cannot prepare the core: " + args.dut.error)
+            return 2
 
     reports = []
     with concurrent.futures.ThreadPoolExecutor(max(1, args.jobs)) as pool:
@@ -1084,7 +1253,7 @@ def main():
             reports.append(rep)
 
     if len(reports) > 1:
-        print("\n== summary (against Sail)")
+        print(f"\n== summary (against {reports[0].get('reference', 'Sail')})")
         for name in args.sims:
             counts = {}
             for rep in reports:
@@ -1098,6 +1267,9 @@ def main():
     print(f"\nTraces and reports: {WORK}")
     bad = any(r["sims"].get("doomv", {}).get("status") == "diverged"
               or r.get("lockstep", {}).get("status") == "mismatch" for r in reports)
+    if args.lockstep:
+        # The core is what is under test: it has to match DoomV, every program.
+        bad = any(r.get("lockstep", {}).get("status") != "match" for r in reports)
     return 1 if bad else 0
 
 

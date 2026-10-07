@@ -346,6 +346,41 @@ DoomV, the first time it ran, is in [docs/BUGS.md](docs/BUGS.md#part-xv):
 from the wider vector suites -- two vector floating-point bugs that had been
 there at VLEN 128 all along.
 
+**A core, in Vitis (`--lockstep`).** With `--lockstep sw-emu` or
+`--lockstep hw-emu` the device under test is a core in Vitis HLS's software
+emulation (its C++ compiled natively) or hardware emulation (the Verilog
+Vitis generates, co-simulated in XSim), and the co-run is built around it:
+
+- **DoomV is always there**, in the core's own process: its testbench hands
+  every record the core retires to [DoomV's library](#core-lockstep), which
+  checks it strictly on the core's clock (`--cycle-clock`). On a mismatch the
+  report says where and in what, with the same verified DoomV snapshot from
+  just before it.
+- **The others are options**: any of Sail, Spike, Whisper and QEMU
+  (`--sims`, all four by default) run the same program beside it, and each
+  is compared with what the core retired. Where the core parts from DoomV,
+  that says at once whether the others side with DoomV or with the core.
+
+```
+python tools/verification/corun.py --lockstep sw-emu --suite riscv-tests --count 20
+python tools/verification/corun.py --lockstep hw-emu --sims sail rv64ui-p-add --suite riscv-tests
+python tools/verification/corun.py --lockstep sw-emu --component <dir> --cycle-clock 4 prog.elf
+```
+
+The core is a Vitis HLS component (`--component`: a folder with an
+`hls_config.cfg`), built once per co-run -- the C simulation's program, or
+the synthesised RTL -- and run per program; co-simulations go one at a time,
+the others alongside. Its testbench keeps a short contract, in
+[`vitis_dut.py`](tools/verification/vitis_dut.py): the program, DoomV's
+arguments and a step limit come in through the environment, and it returns 0
+only if every record matched. Until Ouroboros's core exists, the default
+component is a stand-in for a core's retirement port
+(`tools/verification/lockstep_lib/vitis`), which replays a recorded run --
+Sail's, so Sail runs for it either way -- through synthesised hardware;
+`DOOMV_LS_STANDIN_FAULT=<n>` gives it a bug at record `n`, to see the
+harness catch one. Both emulations pass on the riscv-tests with all four
+others matching, and the gate runs it, the bug included.
+
 Where each runs: Sail, Spike, Whisper and QEMU in WSL, DoomV on Windows.
 Spike and Whisper are built under `/root/build` (`simulators/spike/build.sh`;
 Whisper with `make` in a copy of `simulators/whisper/src`), and QEMU is
@@ -460,8 +495,11 @@ With Vitis installed it also synthesises a stand-in for a retirement port
 feeds what comes out of the port to the library, in C simulation and in
 co-simulation, where the records DoomV checks are the ones the RTL produced:
 
+To run a core this way against the other simulators too, program by
+program, see `corun.py --lockstep` under [Every simulator at once](#corun).
+
 ```
-python tools/verification/lockstep_lib.py          # a set of tests, and Vitis's two emulations, about 90 s; in the gate
+python tools/verification/lockstep_lib.py          # a set of tests, Vitis's two emulations and corun --lockstep, about 2 min; in the gate
 python tools/verification/lockstep_lib.py --all    # every test lockstep_sail.py runs
 ```
 
@@ -741,6 +779,7 @@ riscv_doom.exe -opensbi=<f> -kernel=<f> -dtb=<f> -initrd=<f> [options]   # Linux
 | `-cycle-clock=<n>` | With `-lockstep`, the clock of a core whose records carry its cycle count (`cycle <n>` before each): mtime and mcycle come from the stamps, `n` cycles to an mtime tick. Implies `-lockstep-follow`. See [Lock-stepping a core](#core-lockstep). |
 | `-lockstep-follow` | With `-lockstep`, step the hart each reference record names, in the reference's order, instead of round-robin. |
 | `-lockstep-take=<base>:<size>` | With `-lockstep`, loads from this physical range (hex) are taken from the reference's record, even when strict. |
+| `-lockstep-record=<path>` | With `-lockstep` or in-process, write the reference's records out as they are stepped, in Sail's trace format: for a core's testbench, the trace of what the core retired. |
 | `-lockstep-stamp=<path>` | With a one-hart `-lockstep`, write the reference's trace back with a `cycle` line before each record: Sail's clock as a cycle count, for `-cycle-clock=1`. |
 | `-net` | A network card, with user-mode NAT behind it: the guest reaches the internet through the host. See [Networking](#networking). |
 | `-gpu` | A virtio-gpu for a Linux guest, in place of the simple framebuffer: the display, OpenGL (virgl) and Vulkan (Venus) on the host GPU, and the guest's Mesa picks what each program uses. See [GPU](#gpu). |

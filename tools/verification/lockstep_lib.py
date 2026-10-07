@@ -24,6 +24,11 @@ testbench reading what the RTL retired) -- checked against Sail's own traces:
    emulation, the C++ in the testbench's process) and in C/RTL co-simulation
    (hardware emulation, the generated Verilog in XSim) -- on clock.S's
    stamped records. --no-vitis skips it.
+7. With Vitis, corun.py --lockstep sw-emu: the stand-in as the device under
+   test, with Sail beside it, on a few tests -- every one matching -- and
+   once as a core with a bug (DOOMV_LS_STANDIN_FAULT), which has to stop at
+   it, with Sail agreeing with DoomV there and the snapshot before it
+   verified.
 
 The multi-hart tests follow the reference's order (-lockstep-follow, and in
 the library, which always does), leniently: Sail's multi-hart clock counts
@@ -48,6 +53,7 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "tools" / "verification"))
 import lockstep_sail  # noqa: E402  (Sail's runner, the test ELFs)
+from vitis_dut import STAND_IN, clean_dir, component_config, vitis_gxx, vitis_root  # noqa: E402
 
 run_suite = lockstep_sail.run_suite
 WORK = ROOT / "build" / "lockstep-lib-test"
@@ -60,18 +66,6 @@ WAD = ROOT / "tools" / "doom" / "doombuild" / "DOOM1.WAD"
 DEFAULT_TESTS = ["clock", "rv64ui-p-add", "rv64mi-p-scall", "rv64mi-p-illegal",
                  "rv64si-p-wfi", "rv64ui-v-add", "rv64uf-p-fadd", "rv64ud-p-fmadd", "rv64ua-p-amoadd_d"]
 MULTIHART_TESTS = ["smp_atomics", "smp_ipi", "smp_timer"]
-
-
-def vitis_gxx():
-    if os.environ.get("VITIS_GXX"):
-        return pathlib.Path(os.environ["VITIS_GXX"])
-    for base in ("Z:/FPGA", "C:/Xilinx", "C:/AMD"):
-        # The newest release, then the newest MinGW in it: 10.0.0 is newer than 8.3.0.
-        def version(p):
-            return [[int(x) if x.isdigit() else 0 for x in part.split(".")] for part in (p.parts[-8], p.parts[-5])]
-        for gxx in sorted(pathlib.Path(base).glob("*/Vitis/tps/mingw/*/win64.o/nt/bin/g++.exe"), key=version, reverse=True):
-            return gxx
-    return None
 
 
 def build_feed():
@@ -97,16 +91,6 @@ def build_feed():
     return env
 
 
-def vitis_root():
-    gxx = vitis_gxx()
-    if not gxx:
-        return None
-    for parent in gxx.parents:
-        if parent.name == "Vitis" and (parent / "bin").exists():
-            return parent
-    return None
-
-
 def vitis_check(stamped, elf, timeout):
     """Vitis HLS's software and hardware emulation, each handing the
     retirement port's records to DoomV. [(check, ok, detail)]."""
@@ -114,30 +98,8 @@ def vitis_check(stamped, elf, timeout):
     if not vitis:
         return [("Vitis", None, "no Vitis installation")]
     work = WORK / "vitis"
-    # Vitis leaves read-only files behind, which rmtree cannot remove as they are.
-    def writable(func, path, _):
-        os.chmod(path, 0o666)
-        func(path)
-    if work.exists():
-        shutil.rmtree(work, onerror=writable)
-    work.mkdir(parents=True)
-    src = ROOT / "tools/verification/lockstep_lib"
-
-    def fwd(path):
-        return str(path).replace("\\", "/")
-
-    # Vitis's Tcl does not survive spaces in paths; the checkout's are
-    # assumed to have none.
-    (work / "hls_config.cfg").write_text(f"""part=xck26-sfvc784-2LV-c
-
-[hls]
-syn.file={fwd(src / "vitis/retire_port.cpp")}
-syn.top=retire_port
-tb.file={fwd(src / "vitis/retire_tb.cpp")}
-tb.cflags=-I{fwd(LIB)} -I{fwd(src)}
-csim.ldflags=-L{fwd(LIB)} -ldoomv_lockstep
-clock=10.000ns
-""")
+    clean_dir(work)
+    component_config(STAND_IN, work / "hls_config.cfg")
     syms = run_suite.elf_symbols(elf)
     env = dict(os.environ)
     env["DOOMV_LS_TRACE"] = str(stamped)
@@ -172,6 +134,24 @@ clock=10.000ns
         results.append(("Vitis " + check, ok, detail))
         if not ok:
             break
+    return results
+
+
+def corun_check(timeout):
+    """corun.py --lockstep sw-emu, as it is meant to be used. [(check, ok, detail)]."""
+    corun = [sys.executable, str(ROOT / "tools/verification/corun.py"), "--lockstep", "sw-emu", "--sims", "sail",
+             "--suite", "riscv-tests"]
+    results = []
+    code, out = run(corun + ["rv64ui-p-add", "rv64mi-p-scall", "rv64uf-p-fadd"], ROOT, timeout * 4)
+    ok = code == 0 and out.count("matches the core (sw-emu)") == 3 and "lock-step match 3" in out
+    results.append(("corun --lockstep sw-emu", ok, "3 tests: the core matches DoomV, and Sail matches the core"
+                    if ok else out.strip()[-2000:]))
+    env = dict(os.environ, DOOMV_LS_STANDIN_FAULT="200")
+    code, out = run(corun + ["rv64ui-p-add"], ROOT, timeout * 4, env)
+    ok = (code == 1 and "MISMATCH" in out and "sail      DIVERGES at step 200" in out
+          and "verified: restoring it runs the failing instruction next" in out)
+    results.append(("corun --lockstep sw-emu, a core with a bug", ok,
+                    "stopped at it, Sail with DoomV, the snapshot before it verified" if ok else out.strip()[-2000:]))
     return results
 
 
@@ -288,7 +268,10 @@ def main():
         stamped = WORK / "clock" / "stamped.log"
         if not stamped.exists():
             one("clock", own["clock"][0], 1, feed_env, args.timeout)
-        for check, ok, detail in vitis_check(stamped, own["clock"][0], args.timeout):
+        checks = vitis_check(stamped, own["clock"][0], args.timeout)
+        if vitis_root():
+            checks += corun_check(args.timeout)
+        for check, ok, detail in checks:
             status = "skip" if ok is None else "pass" if ok else "FAIL"
             failed += ok is False
             print(f"{status} clock: {check}: " + detail.replace("\n", "\n    "), flush=True)

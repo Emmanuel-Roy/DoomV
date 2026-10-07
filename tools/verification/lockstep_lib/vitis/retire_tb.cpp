@@ -3,6 +3,10 @@
 // in co-simulation -- back into records, each handed to DoomV
 // (doomv_lockstep.h) as it would be from a core's retirement port, on the
 // machine DOOMV_LS_ARGS describes. 0 when every record matches.
+//
+// DOOMV_LS_STANDIN_FAULT=<n> makes it a core with a bug: the first register
+// value record n writes comes out of the port with its low bit flipped, as
+// a fault in the core's datapath would -- to see the harness catch one.
 #include "doomv_lockstep.h"
 #include "retire_port.hpp"
 #include "sail_records.hpp"
@@ -126,6 +130,15 @@ int main()
 	}
 
 	// Through the retirement port.
+	if (const char *fault = std::getenv("DOOMV_LS_STANDIN_FAULT")) {
+		const size_t n = (size_t)std::strtoull(fault, nullptr, 0);
+		for (size_t i = n; i < records.size(); i++) {
+			bool flipped = false;
+			for (doomv_ls_write &w : records[i].writes)
+				if (w.kind == 'x' && w.index) { w.value ^= 1; flipped = true; break; }
+			if (flipped) break;
+		}
+	}
 	std::vector<uint64_t> words;
 	for (const Record &rec : records) put(words, rec, vbytes);
 	hls::stream<retire_word> in("in"), out("out");
@@ -149,6 +162,8 @@ int main()
 		Record rec = get(back, at, vbytes);
 		status = doomv_ls_step(ls, &rec.finish());
 	}
+	// The program's own end: it wrote tohost, and the machine stopped there.
+	if (status == DOOMV_LS_STOPPED && doomv_ls_tohost(ls)) status = DOOMV_LS_MATCH;
 	if (status == DOOMV_LS_MATCH)
 		std::printf("retire_tb: %llu records from the retirement port matched DoomV\n",
 		            (unsigned long long)doomv_ls_matched(ls));

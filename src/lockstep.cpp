@@ -255,8 +255,8 @@ bool starts(const std::string &s, const char *p) { return s.rfind(p, 0) == 0; }
 bool is_epc_csr(unsigned c) { return c == 0x341 || c == 0x141 || c == 0x241; }
 
 // What a record says, as Sail's trace would put it: its own lines, or for a
-// record handed over in-process, lines made from its fields.
-std::vector<std::string> describe(const RefRecord &r)
+// record handed over in-process, lines made from its fields, numbered `n`.
+std::vector<std::string> describe(const RefRecord &r, uint64_t n)
 {
 	std::vector<std::string> out;
 	if (!r.lines.empty()) {
@@ -270,7 +270,10 @@ std::vector<std::string> describe(const RefRecord &r)
 	};
 	if (r.has_cycle) out.push_back("cycle " + std::to_string(r.cycle));
 	if (r.has_insn)
-		out.push_back("[" + priv_name(r.priv, r.virt) + "]: " + hex(r.pc, 16) + " (" + hex(r.insn, (int)r.insn_digits) + ")");
+		out.push_back("[" + std::to_string(n) + "] [" + priv_name(r.priv, r.virt) + "]: " + hex(r.pc, 16) + " ("
+		              + hex(r.insn, (int)r.insn_digits) + ")");
+	if (r.kind == RefRecord::Exception)
+		out.push_back("trapping from " + priv_name(r.priv, r.virt) + " to handle " + sail_trap_name(r.cause, false));
 	if (r.kind != RefRecord::Commit)
 		out.push_back(std::string("handling ") + (r.kind == RefRecord::Interrupt ? "int#" : "exc#")
 		              + sail_trap_name(r.cause, r.kind == RefRecord::Interrupt)
@@ -324,6 +327,9 @@ struct DoomSystem::LockstepState {
 	// the order the records began. The front is the hart to step next.
 	bool track_order = false;
 	std::deque<unsigned> order;
+	// -lockstep-record: records written so far, and whose.
+	uint64_t recorded = 0;
+	unsigned recorded_hart = 0;
 	// In-process (doomv_lockstep.h): the records arrive as text in memory,
 	// or built, and a mismatch is reported to the caller, not printed.
 	bool api = false;
@@ -701,6 +707,15 @@ void DoomSystem::stamp(const lockstep::RefRecord &r, uint64_t ticks)
 	for (const auto &l : r.lines) { std::fputs(l.second.c_str(), stamp_file); std::fputc('\n', stamp_file); }
 }
 
+// -lockstep-record: the reference's records written out as they are stepped,
+// in Sail's format -- for an in-process reference, a core's simulation, the
+// trace of what it retired, for other simulators to be compared with.
+bool DoomSystem::set_lockstep_record(const char *path)
+{
+	ref_record_file = std::fopen(path, "w");
+	return ref_record_file != nullptr;
+}
+
 bool DoomSystem::set_lockstep(const char *path)
 {
 	lock = new LockstepState();
@@ -770,6 +785,18 @@ void DoomSystem::traced_step()
 			lock->skipped++;
 		}
 		have_ref = true;
+		// -lockstep-record: what the reference retired, as a trace.
+		if (ref_record_file && !ref.split_tail) {
+			if (harts.size() > 1 && lock->recorded_hart != cur->id) {
+				std::fprintf(ref_record_file, "hart %u\n", cur->id);
+				lock->recorded_hart = cur->id;
+			}
+			for (const std::string &l : describe(ref, lock->recorded++)) {
+				std::fputs(l.c_str(), ref_record_file);
+				std::fputc('\n', ref_record_file);
+			}
+			std::fflush(ref_record_file);
+		}
 	}
 
 	std::vector<std::string> actual;   // DoomV's record of the step, in the trace format
@@ -782,7 +809,7 @@ void DoomSystem::traced_step()
 		else o << "hart " << cur->id << "'s record, ";
 		o << "after " << lock->matched << " matching records (instruction " << memory.instruction_count() << ")\n"
 		  << "  " << why << "\n  reference:\n";
-		const std::vector<std::string> ref_lines = describe(ref);
+		const std::vector<std::string> ref_lines = describe(ref, lock->matched);
 		for (size_t i = 0; i < ref_lines.size() && i < 16; i++) o << "    " << ref_lines[i] << "\n";
 		o << "  DoomV:\n";
 		if (cycle_clock) o << "    cycle " << cycle_now << "\n";
