@@ -52,6 +52,9 @@ MARCH = (
     "rv64imafdcvh_zicsr_zifencei_zba_zbb_zbs_zicond_zihintpause_zihintntl"
     "_zimop_zcmop_zicbom_zicbop_zicboz_zawrs_zfa_zfh_svinval"
     "_svnapot_svpbmt_sscofpmf_ssstateen_ssnpm_smnpm_sspm"
+    # The vector unit's extensions and the deeper page tables, all of which
+    # Sail's configuration has; DoomV switches each separately.
+    "_zvfh_zvfhmin_zvfbfmin_zvfbfwma_zvbb_zvkb_zvbc_zvkg_zvkned_zvknha_zvknhb_zvksed_zvksh_sv48_sv57_svadu"
 )
 
 

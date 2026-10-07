@@ -1,4 +1,5 @@
 #include "extensions.hpp"
+#include <set>
 
 void parse_march(const std::string &march)
 {
@@ -64,6 +65,38 @@ void parse_march(const std::string &march)
 		size_t p = march.find("zfh");
 		if (p != std::string::npos && march.compare(p, 6, "zfhmin") != 0)
 			Extensions.ZFH = true;
+	}
+	// The vector unit's extensions and the deeper page tables, by exact name:
+	// several of them are prefixes of others (zvfh of zvfhmin, zvknh of
+	// zvknha), which the substring tests above cannot tell apart. The
+	// umbrella names expand as the specification defines them.
+	{
+		std::set<std::string> tokens;
+		for (size_t p = march.find('_'); p != std::string::npos;) {
+			const size_t q = march.find('_', p + 1);
+			tokens.insert(march.substr(p + 1, q == std::string::npos ? std::string::npos : q - p - 1));
+			p = q;
+		}
+		const auto has = [&](const char *t) { return tokens.count(t) != 0; };
+		ExtensionConfig &e = Extensions;
+		const bool zvkn = has("zvkn") || has("zvknc") || has("zvkng");
+		const bool zvks = has("zvks") || has("zvksc") || has("zvksg");
+		e.ZVFH = has("zvfh");
+		e.ZVFHMIN = has("zvfhmin") || e.ZVFH;
+		e.ZVFBFWMA = has("zvfbfwma");
+		e.ZVFBFMIN = has("zvfbfmin") || e.ZVFBFWMA;
+		e.ZVBB = has("zvbb");
+		e.ZVKB = has("zvkb") || e.ZVBB || zvkn || zvks;
+		e.ZVBC = has("zvbc") || has("zvknc") || has("zvksc");
+		e.ZVKG = has("zvkg") || has("zvkng") || has("zvksg");
+		e.ZVKNED = has("zvkned") || zvkn;
+		e.ZVKNHB = has("zvknhb") || zvkn;
+		e.ZVKNHA = has("zvknha") || e.ZVKNHB;
+		e.ZVKSED = has("zvksed") || zvks;
+		e.ZVKSH = has("zvksh") || zvks;
+		e.SV57 = has("sv57");
+		e.SV48 = has("sv48") || e.SV57;
+		e.SVADU = has("svadu");
 	}
 	if (march.find("svinval") != std::string::npos) Extensions.SVINVAL = true;
 	if (march.find("svnapot") != std::string::npos) Extensions.SVNAPOT = true;

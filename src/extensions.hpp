@@ -90,6 +90,34 @@ struct ExtensionConfig {
 	bool SSCOFPMF = true;
 	bool SSSTATEEN = true;
 
+	// The vector unit's own extensions, beside V. Each is a -march switch, so
+	// a core that leaves one out can be held to a DoomV that does too; on
+	// unless a -march leaves them out, as Sail's configuration has them all.
+	// They act only with V on. The floating-point ones are about element
+	// widths, so they are checked as an instruction runs (exec_V); the rest
+	// by their encodings, as they decode (riscv_decoder.cpp).
+	bool ZVFH = true;       // half-precision vector arithmetic (implies Zvfhmin)
+	bool ZVFHMIN = true;    // the two f16 <-> f32 conversions
+	bool ZVFBFMIN = true;   // the bf16 conversions
+	bool ZVFBFWMA = true;   // vfwmaccbf16 (implies Zvfbfmin)
+	bool ZVBB = true;       // vector bit manipulation (implies Zvkb)
+	bool ZVKB = true;       // its crypto subset: vandn, vbrev8, vrev8, vrol, vror
+	bool ZVBC = true;       // vclmul, vclmulh
+	bool ZVKG = true;       // vghsh, vgmul
+	bool ZVKNED = true;     // AES
+	bool ZVKNHA = true;     // SHA-256
+	bool ZVKNHB = true;     // SHA-256 and SHA-512 (implies Zvknha)
+	bool ZVKSED = true;     // SM4
+	bool ZVKSH = true;      // SM3
+
+	// Virtual memory beyond Sv39: the deeper page tables (satp and hgatp
+	// accept their modes only when on; Sv57 implies Sv48), and Svadu --
+	// envcfg.ADUE, the walker setting A and D itself, is writable only with
+	// it. On unless a -march leaves them out, as with the vector ones.
+	bool SV48 = true;
+	bool SV57 = true;
+	bool SVADU = true;
+
 	// Zkr: the entropy source. One CSR, `seed`, and no instructions -- but
 	// it is not a plain register. Reading it *consumes* entropy, so a
 	// read-only access to it is illegal rather than harmless, and which

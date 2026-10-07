@@ -556,6 +556,14 @@ uint64_t compute_misa()
 // bisecting crash.log: it halted on an illegal instruction at
 // pc=0xffffffff80001146 (canonical high-half kernel VA) with
 // satp.MODE=0xa (Sv57) already active.
+// The translation modes this hart has: Bare and Sv39 always, Sv48 and Sv57
+// as -march says (Extensions.SV48, SV57). The same numbers name the G-stage
+// modes, Sv39x4 to Sv57x4, which follow the same switches.
+static bool paging_mode_enabled(uint64_t mode)
+{
+	return mode == 0 || mode == 8 || (mode == 9 && Extensions.SV48) || (mode == 10 && Extensions.SV57);
+}
+
 void write_satp_warl(Registers &regs, uint16_t csr, uint64_t value)
 {
 	// The value already there -- a csrr satp comes through here too -- moves
@@ -571,8 +579,7 @@ void write_satp_warl(Registers &regs, uint16_t csr, uint64_t value)
 	// fall back to a mode that worked. It is the wrong answer now: the
 	// walk is written against the level count, the deeper modes translate,
 	// and refusing them would report less than the hart can do.
-	uint64_t mode = value >> 60;
-	if (mode != 0 && mode != 8 && mode != 9 && mode != 10)
+	if (!paging_mode_enabled(value >> 60))
 		return; // reject the whole write, not just the MODE field -- matches real WARL clamping
 	regs.write_csr(csr, value);
 }
@@ -596,8 +603,7 @@ void write_hgatp_warl(Registers &regs, uint64_t value)
 	// The root of translation just moved, so every cached translation
 	// describes a page table that is no longer the one in force.
 	mmu_tlb_flush();
-	uint64_t mode = value >> 60;
-	if (mode != 0 && mode != 8 && mode != 9 && mode != 10) return;
+	if (!paging_mode_enabled(value >> 60)) return;
 	regs.write_csr(hyp::CSR_HGATP_ADDR, value & ~0x3ull);
 }
 
@@ -2336,8 +2342,11 @@ void RiscvCore::exec_32ZICSR(const DecodedOp &instr, Registers &regs, Memory &me
 		constexpr uint64_t DELEGATING = (1ull << 63)   // STCE
 		                              | (1ull << 62)   // PBMTE
 		                              | (1ull << 61);  // ADUE
+		// ADUE only with Svadu: without it the walker never sets A and D,
+		// and the bit reads zero (Svade alone).
+		constexpr uint64_t ADUE = 1ull << 61;
 		if (csr == CSR_MENVCFG || (Extensions.H && csr == 0x60A))
-			updated &= COMMON | DELEGATING;
+			updated &= COMMON | (Extensions.SVADU ? DELEGATING : DELEGATING & ~ADUE);
 		else if (csr == 0x10A)
 			updated &= COMMON;
 	}

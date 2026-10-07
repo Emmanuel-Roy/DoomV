@@ -17,6 +17,34 @@ using namespace vcommon;
 
 namespace {
 
+// Whether the extension a vector instruction needs at the current SEW is on
+// (see exec_V). Floating point at SEW=16 is half precision, which is Zvfh,
+// except for what the conversions say otherwise: a widening conversion's
+// source and a narrowing one's destination are SEW wide, the other side
+// twice that, so an int8 <-> f16 conversion is at SEW=8 and an f16 <-> f32
+// one at SEW=16 is Zvfhmin's, or bf16's (Zvfbfmin).
+bool element_width_enabled(const DecodedOp &instr, const Registers &regs)
+{
+	const ExtensionConfig &e = Extensions;
+	const unsigned sew = decode_vtype(regs.get_vtype()).sew;
+	const uint8_t funct6 = op_v_funct6(instr.funct7);
+	if (instr.opcode == 0b1110111)   // vsha2*: SEW=64 is SHA-512
+		return !(funct6 >= 0x2d && funct6 <= 0x2f && sew == 64) || e.ZVKNHB;
+	if (instr.opcode != 0b1010111 || (instr.funct3 != 0b001 && instr.funct3 != 0b101)) return true;
+	if (funct6 == 0x3b) return sew != 16 || e.ZVFBFWMA;   // vfwmaccbf16
+	if (funct6 == 0x12 && instr.funct3 == 0b001) {        // VFUNARY0: the conversions, by vs1
+		switch (instr.rs1) {
+		case 0x0C: case 0x14: return sew != 16 || e.ZVFHMIN;    // vfwcvt.f.f.v, vfncvt.f.f.w
+		case 0x0D: case 0x1D: return sew != 16 || e.ZVFBFMIN;   // vfwcvtbf16.f.f.v, vfncvtbf16.f.f.w
+		case 0x0A: case 0x0B:                                   // vfwcvt.f.x(u).v: int8 -> f16
+		case 0x10: case 0x11: case 0x16: case 0x17:             // vfncvt.x(u).f.w, rtz: f16 -> int8
+			return sew != 8 || e.ZVFH;
+		default: return sew != 16 || e.ZVFH;
+		}
+	}
+	return sew != 16 || e.ZVFH;
+}
+
 // funct6 -> base mnemonic for the common OPIVV/OPIVX/OPIVI integer family
 // (vadd, vsub, ...). Category suffix (.vv/.vx/.vi) is appended by the
 // caller. Returns "???" for funct6 values this table doesn't name (mostly
@@ -291,6 +319,16 @@ DecodedInstruction Decoder::decode_v(uint32_t raw_instr) const
 void RiscvCore::exec_V(const DecodedOp &instr, Registers &regs, Memory &mem)
 {
 	uint64_t pc = regs.get_pc();
+
+	// The extensions that depend on the element width, so on vtype as it is
+	// now rather than on the encoding (the decoder has the others): half
+	// precision (Zvfhmin's two conversions, Zvfh the rest), bf16 (Zvfbfmin's
+	// conversions, Zvfbfwma's multiply-add), and SHA-512 (Zvknhb). With one
+	// off, the instruction is illegal, before it touches any state.
+	if (!element_width_enabled(instr, regs)) {
+		raise_illegal_instruction(regs, instr.raw);
+		return;
+	}
 
 	// Reaching here means the decoder already checked mstatus.VS is not
 	// Off, so the unit is on and this instruction is about to touch vector

@@ -69,8 +69,19 @@ HERE_WSL="$(win_to_wsl "$HERE")"
 wsl_run() { MSYS2_ARG_CONV_EXCL='*' wsl -d "$DISTRO" -u root -- "$@"; }
 
 # DoomV's -march resets every extension it does not name, so each test has to
-# spell out the full set it needs, not just its own additions.
+# spell out the full set it needs, not just its own additions. The signatures
+# here are Sail's, whose configuration has the deeper page tables, Svadu and
+# -- with V -- the vector unit's own extensions, so march_for adds those.
 march_for() {
+	local m
+	m="$(march_base "$1")_sv48_sv57_svadu"
+	case "$m" in
+	rv64imafdcv*) m="${m}_zvfh_zvfhmin_zvfbfmin_zvfbfwma_zvbb_zvkb_zvbc_zvkg_zvkned_zvknha_zvknhb_zvksed_zvksh" ;;
+	esac
+	echo "$m"
+}
+
+march_base() {
 	case "$1" in
 	vtest_v)  echo "rv64imafdcv_zicsr_zifencei" ;;
 	vtest_zb) echo "rv64imafdc_zicsr_zifencei_zba_zbb_zbs_zicond" ;;

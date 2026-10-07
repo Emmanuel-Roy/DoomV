@@ -408,6 +408,38 @@ static bool extension_enabled(Extension e)
 	}
 }
 
+// For a V instruction, whether the vector extension its encoding belongs to
+// is on: the crypto families in OP-VE, and Zvbb, Zvkb and Zvbc in OP-V's
+// own space (ext_v.cpp's dispatch has the same splits). The floating-point
+// widths depend on SEW and are checked as the instruction runs.
+static bool vector_extension_enabled(uint32_t raw)
+{
+	const ExtensionConfig &e = Extensions;
+	const uint32_t opcode = raw & 0x7F, funct3 = (raw >> 12) & 7, funct6 = raw >> 26, vs1 = (raw >> 15) & 31;
+	if (opcode == 0b1110111) {
+		switch (funct6) {
+		case 0x20: case 0x2b: return e.ZVKSH;                    // vsm3me, vsm3c
+		case 0x21: return e.ZVKSED;                              // vsm4k
+		case 0x22: case 0x2a: return e.ZVKNED;                   // vaeskf1, vaeskf2
+		case 0x2c: return e.ZVKG;                                // vghsh
+		case 0x2d: case 0x2e: case 0x2f: return e.ZVKNHA;        // vsha2ms, vsha2ch, vsha2cl
+		case 0x28: case 0x29:
+			if (vs1 == 16) return e.ZVKSED;                      // vsm4r
+			if (vs1 == 17) return e.ZVKG;                        // vgmul
+			return e.ZVKNED;                                     // the AES rounds, vaesz
+		default: return true;
+		}
+	}
+	if (opcode != 0b1010111) return true;
+	const bool opiv = funct3 == 0b000 || funct3 == 0b100 || funct3 == 0b011;
+	if (opiv && (funct6 == 0x01 || funct6 == 0x14 || funct6 == 0x15)) return e.ZVKB;   // vandn, vror, vrol
+	if (opiv && funct6 == 0x35) return e.ZVBB;                                          // vwsll
+	if (funct3 == 0b010 && funct6 == 0x12 && vs1 >= 8)                                   // the unary ones
+		return (vs1 == 8 || vs1 == 9) ? e.ZVKB : e.ZVBB;                                 // vbrev8, vrev8 : the rest
+	if ((funct3 == 0b010 || funct3 == 0b110) && (funct6 == 0x0c || funct6 == 0x0d)) return e.ZVBC;
+	return true;
+}
+
 void Decoder::sync_extensions()
 {
 	std::fill(cache.begin(), cache.end(), CacheEntry{});
@@ -464,7 +496,9 @@ DispatchResult Decoder::decode_and_dispatch(uint64_t pc, uint32_t raw_word)
 		// Whether it may execute, decided now for as long as the entry lives:
 		// the cache is emptied when the extension set changes. The decode of a
 		// disabled extension's instruction is only ever used for its length.
-		if (!extension_enabled(instr.ext)) instr.ext = Extension::ILLEGAL;
+		if (!extension_enabled(instr.ext)
+		    || (instr.ext == Extension::V && !is_compressed && !vector_extension_enabled(raw_word)))
+			instr.ext = Extension::ILLEGAL;
 		instr.fast_op = classify_fast(instr);   // FOP_SLOW for anything ILLEGAL
 		// The name stays behind: only the operation is cached.
 		entry.addr = pc;
