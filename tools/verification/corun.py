@@ -58,6 +58,7 @@ each is compared with what the core retired -- so where the core parts from
 DoomV, the report also says which of the others agree with it there. On a
 mismatch, the DoomV snapshot before the instruction, as ever.
 
+    python tools/verification/corun.py --lockstep sw-emu --sims none --suite riscv-tests     # DoomV alone
     python tools/verification/corun.py --lockstep sw-emu --suite riscv-tests --count 20
     python tools/verification/corun.py --lockstep hw-emu --sims sail build/lockstep-elf/clock
     python tools/verification/corun.py --lockstep sw-emu --component <dir> --cycle-clock 4 prog.elf
@@ -1175,7 +1176,7 @@ def main():
     ap.add_argument("--vlen", type=int, default=128, help="vector length for all of them (default 128)")
     ap.add_argument("--sims", help="which to run beside Sail (default all: " + ",".join(SIMS) + "); with "
                                    "--lockstep, beside the core and DoomV (any of " + ",".join(CORE_SIMS)
-                                   + "; default sail,spike,whisper,qemu)")
+                                   + "; default sail,spike,whisper,qemu; none for DoomV alone)")
     ap.add_argument("--lockstep", choices=("sw-emu", "hw-emu"),
                     help="the device under test is a core in Vitis HLS's software emulation (C simulation) or "
                          "hardware emulation (co-simulation in XSim), stepping DoomV in its process")
@@ -1201,7 +1202,8 @@ def main():
         args.limit = 20_000 if args.snapshot else 2_000_000
     if args.sims is None:
         args.sims = "sail,spike,whisper,qemu" if args.lockstep else ",".join(SIMS)
-    args.sims = [s for s in args.sims.split(",") if s]
+    # "none": with --lockstep, the core and DoomV in its process, and nothing else.
+    args.sims = [s for s in args.sims.split(",") if s and s != "none"]
     # Each extension once: the suites' string names zfh twice, which Whisper crashes on.
     args.march = "_".join(dict.fromkeys(t for t in args.march.lower().split("_") if t))
     known = CORE_SIMS if args.lockstep else SIMS

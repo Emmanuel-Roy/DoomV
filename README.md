@@ -357,11 +357,13 @@ Vitis generates, co-simulated in XSim), and the co-run is built around it:
   report says where and in what, with the same verified DoomV snapshot from
   just before it.
 - **The others are options**: any of Sail, Spike, Whisper and QEMU
-  (`--sims`, all four by default) run the same program beside it, and each
+  (`--sims`, all four by default; `--sims none` for DoomV alone) run the
+  same program beside it, and each
   is compared with what the core retired. Where the core parts from DoomV,
   that says at once whether the others side with DoomV or with the core.
 
 ```
+python tools/verification/corun.py --lockstep sw-emu --sims none --suite riscv-tests
 python tools/verification/corun.py --lockstep sw-emu --suite riscv-tests --count 20
 python tools/verification/corun.py --lockstep hw-emu --sims sail rv64ui-p-add --suite riscv-tests
 python tools/verification/corun.py --lockstep sw-emu --component <dir> --cycle-clock 4 prog.elf
