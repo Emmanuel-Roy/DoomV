@@ -389,9 +389,13 @@ on. A mismatch stops it with the instruction and the field, and a DoomV
 snapshot one step before it, with the line that restores it. The first run
 stopped 2.1 million instructions in, in OpenSBI's PMP probe: DoomV answered
 `pmpaddr16` with zero where Sail, with 16 entries, has no such register
-([bug 185](docs/BUGS.md#bug185)). Since that fix the first 60 million
-instructions -- all of OpenSBI and the kernel's start, 14,000 device
-accesses -- match Sail strictly.
+([bug 185](docs/BUGS.md#bug185)). Fixed with it, and with FS kept as Sail keeps it ([bug 187](docs/BUGS.md#bug187)),
+**the whole boot matches Sail strictly: all 1.3 billion instructions from
+reset to the shell prompt**, OpenSBI and the kernel and busybox, 15,000
+device loads and 15,000 device stores served from DoomV's log. It ran as
+thirteen segments of 100 million (`--segment`, each starting from the
+snapshot the one before took, so an interrupted run carries on with
+`--resume`), about 35 minutes each.
 
 ### What that process actually found
 
