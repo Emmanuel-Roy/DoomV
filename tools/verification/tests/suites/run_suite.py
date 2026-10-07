@@ -93,8 +93,13 @@ SUITE_MARCH = MARCH + "_zkr_zicfilp_zicfiss_zbc_zbkb_zbkx_zfh"
 # and guessing produced a landing-pad rule that armed on `jalr ra, off(ra)`
 # and broke a passing group. A probe against this Sail settled it in one
 # run.
-WSL_SAIL = "/mnt/z/Code/Dev/DoomV/tools/verification/simulators/sail/src/build/c_emulator/sail_riscv_sim"
-WSL_CFG = "/mnt/z/Code/Dev/DoomV/tools/verification/simulators/sail/rva23s64.json"
+#
+# This checkout's own: simulators/sail/build.sh builds the model inside the
+# submodule, so a second checkout -- the one inside Ouroboros -- has its own.
+_SAIL = (ROOT / "tools" / "verification" / "simulators" / "sail").as_posix()   # Z:/Code/...
+_SAIL = "/mnt/" + _SAIL[0].lower() + _SAIL[2:]
+WSL_SAIL = _SAIL + "/src/build/c_emulator/sail_riscv_sim"
+WSL_CFG = _SAIL + "/rva23s64.json"
 
 # The vector length both run at. riscv-vector-tests come built for one VLEN
 # each (riscv-vector-tests-v256x64 is VLEN=256, ELEN=64), and a test's
