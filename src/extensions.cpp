@@ -78,7 +78,7 @@ void parse_march(const std::string &march)
 			p = q;
 		}
 		const auto has = [&](const char *t) { return tokens.count(t) != 0; };
-		ExtensionConfig &e = Extensions;
+		ExtensionSwitches &e = ExtSwitch;
 		const bool zvkn = has("zvkn") || has("zvknc") || has("zvkng");
 		const bool zvks = has("zvks") || has("zvksc") || has("zvksg");
 		e.ZVFH = has("zvfh");
@@ -144,4 +144,29 @@ void parse_march(const std::string &march)
 	// transitively F. Vector FP ops reuse the same host-float helpers F/D
 	// already built, so this isn't just a spec formality here.
 	if (Extensions.V) { Extensions.D = true; Extensions.F = true; }
+}
+
+std::string march_with_switches(const std::string &march, const ExtensionSwitches &s)
+{
+	static const std::set<std::string> names = {
+		"zvfh", "zvfhmin", "zvfbfmin", "zvfbfwma", "zvbb", "zvkb", "zvbc", "zvkg", "zvkned", "zvknha", "zvknhb",
+		"zvksed", "zvksh", "zvkn", "zvknc", "zvkng", "zvks", "zvksc", "zvksg", "sv48", "sv57", "svadu", "zacas", "zabha"};
+	std::string out;
+	size_t start = 0;
+	for (;;) {
+		const size_t end = march.find('_', start);
+		const std::string tok = march.substr(start, end == std::string::npos ? std::string::npos : end - start);
+		if (out.empty()) out = tok;
+		else if (!names.count(tok)) out += "_" + tok;
+		if (end == std::string::npos) break;
+		start = end + 1;
+	}
+	const std::pair<bool, const char *> on[] = {
+		{s.ZVFH, "zvfh"}, {s.ZVFHMIN, "zvfhmin"}, {s.ZVFBFMIN, "zvfbfmin"}, {s.ZVFBFWMA, "zvfbfwma"},
+		{s.ZVBB, "zvbb"}, {s.ZVKB, "zvkb"}, {s.ZVBC, "zvbc"}, {s.ZVKG, "zvkg"}, {s.ZVKNED, "zvkned"},
+		{s.ZVKNHA, "zvknha"}, {s.ZVKNHB, "zvknhb"}, {s.ZVKSED, "zvksed"}, {s.ZVKSH, "zvksh"},
+		{s.SV48, "sv48"}, {s.SV57, "sv57"}, {s.SVADU, "svadu"}, {s.ZACAS, "zacas"}, {s.ZABHA, "zabha"}};
+	for (const auto &f : on)
+		if (f.first) out += std::string("_") + f.second;
+	return out;
 }

@@ -150,6 +150,12 @@ void RiscvCore::exec_H(const DecodedOp &instr, Registers &regs, Memory &mem)
 	                : is_hlvx ? AccessType::Fetch
 	                          : AccessType::Load;
 
+	// -misaligned=trap, as for an ordinary load or store (load_virtual).
+	if (Machine.misaligned_trap && (addr & (width - 1))) {
+		trap_guest_va = true;
+		enter_trap(regs, is_store ? 6 : 4, addr);
+		return;
+	}
 	if (!mmu_translate(regs, mem, addr, type, paddr, cause, tval, /*as_guest=*/true)) {
 		// hlvx borrows the *permission* of a fetch, not its identity. It is
 		// still a load instruction, so a failure has to be reported as a

@@ -147,6 +147,9 @@ public:
 	// -lockstep-record=<path>: the reference's records, as they are stepped,
 	// written out in Sail's trace format. See lockstep.cpp.
 	bool set_lockstep_record(const char *path);
+	// -lockstep-take-hpm: reads of mhpmcounter3-31 and hpmcounter3-31 are the
+	// reference's, strict or not -- a core's counters of its own events.
+	void set_lockstep_take_hpm() { lockstep_take_hpm = true; }
 
 	// The in-process lock-step (doomv_lockstep.h): instead of set_lockstep,
 	// the records are handed over one call at a time. Each returns 0 when
@@ -486,6 +489,7 @@ private:
 	uint64_t cycle_now = 0, cycle_rem = 0;
 	void advance_cycles(uint64_t to);
 	bool follow_records = false;
+	bool lockstep_take_hpm = false;
 	std::vector<std::pair<uint64_t, uint64_t>> take_ranges;
 	// Ticks of the clock since the run began, for -lockstep-stamp.
 	uint64_t clock_ticks = 0;

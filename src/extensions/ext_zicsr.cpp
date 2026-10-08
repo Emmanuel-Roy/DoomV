@@ -557,11 +557,31 @@ uint64_t compute_misa()
 // pc=0xffffffff80001146 (canonical high-half kernel VA) with
 // satp.MODE=0xa (Sv57) already active.
 // The translation modes this hart has: Bare and Sv39 always, Sv48 and Sv57
-// as -march says (Extensions.SV48, SV57). The same numbers name the G-stage
+// as -march says (ExtSwitch.SV48, SV57). The same numbers name the G-stage
 // modes, Sv39x4 to Sv57x4, which follow the same switches.
 static bool paging_mode_enabled(uint64_t mode)
 {
-	return mode == 0 || mode == 8 || (mode == 9 && Extensions.SV48) || (mode == 10 && Extensions.SV57);
+	return mode == 0 || mode == 8 || (mode == 9 && ExtSwitch.SV48) || (mode == 10 && ExtSwitch.SV57);
+}
+
+// The PPN bits satp and hgatp keep: those the physical address width
+// covers, at most the field's 44.
+static unsigned ppn_bits()
+{
+	return Machine.physaddr_bits - 12 < 44 ? Machine.physaddr_bits - 12 : 44;
+}
+
+// satp, vsatp and hgatp share a layout on RV64: MODE in 63:60, the ASID or
+// VMID from bit 44 up, the PPN in 43:0. Bits of the ASID/VMID past the
+// implemented `id_bits`, and of the PPN past `ppn` bits, read as zero (Sail's
+// legalize_satp and legalize_hgatp). vsatp's PPN is guest-physical, so it
+// keeps all 44.
+static uint64_t legal_atp_fields(uint64_t value, unsigned id_bits, unsigned ppn)
+{
+	const uint64_t mode = value & (0xFull << 60);
+	const uint64_t id = (value >> 44) & 0xFFFF & ((1ull << id_bits) - 1);
+	const uint64_t ppn_v = value & ((1ull << ppn) - 1);
+	return mode | (id << 44) | ppn_v;
 }
 
 void write_satp_warl(Registers &regs, uint16_t csr, uint64_t value)
@@ -581,7 +601,7 @@ void write_satp_warl(Registers &regs, uint16_t csr, uint64_t value)
 	// and refusing them would report less than the hart can do.
 	if (!paging_mode_enabled(value >> 60))
 		return; // reject the whole write, not just the MODE field -- matches real WARL clamping
-	regs.write_csr(csr, value);
+	regs.write_csr(csr, legal_atp_fields(value, Machine.asidlen, csr == 0x280 ? 44 : ppn_bits()));
 }
 
 void write_satp(Registers &regs, uint64_t value)
@@ -598,13 +618,19 @@ void write_satp(Registers &regs, uint64_t value)
 //
 // PPN[1:0] additionally read as zero: the root of a G-stage table is
 // 16KiB-aligned, not 4KiB, because the top level is four pages wide.
+//
+// Unlike satp's, a write with a mode this hart lacks is not ignored: the
+// VMID and PPN take the written value and only MODE keeps its old one, as
+// Sail's legalize_hgatp has it. VMID bits past -vmidlen read zero, and PPN
+// bits past the physical address width.
 void write_hgatp_warl(Registers &regs, uint64_t value)
 {
 	// The root of translation just moved, so every cached translation
 	// describes a page table that is no longer the one in force.
 	mmu_tlb_flush();
-	if (!paging_mode_enabled(value >> 60)) return;
-	regs.write_csr(hyp::CSR_HGATP_ADDR, value & ~0x3ull);
+	if (!paging_mode_enabled(value >> 60))
+		value = (value & ~(0xFull << 60)) | (regs.read_csr(hyp::CSR_HGATP_ADDR) & (0xFull << 60));
+	regs.write_csr(hyp::CSR_HGATP_ADDR, legal_atp_fields(value, Machine.vmidlen, ppn_bits()) & ~0x3ull);
 }
 
 uint64_t read_sstatus(Registers &regs)
@@ -825,9 +851,9 @@ bool RiscvCore::csr_access_permitted(Registers &regs, uint16_t csr, bool writing
 	// traps.
 	if (csr >= 0x3A0 && csr <= 0x3AF) {
 		const unsigned idx = csr - 0x3A0u;
-		if (4 * idx >= pmp::ENTRIES || (Extensions.XLEN64 && (idx & 1))) return false;
+		if (4 * idx >= pmp::count() || (Extensions.XLEN64 && (idx & 1))) return false;
 	}
-	if (csr >= 0x3B0 && csr <= 0x3EF && csr - 0x3B0u >= pmp::ENTRIES) return false;
+	if (csr >= 0x3B0 && csr <= 0x3EF && csr - 0x3B0u >= pmp::count()) return false;
 	// The AIA CSRs, without Smaia/Ssaia: absent, as in Sail's configuration.
 	if (!ExtAia && (csr == 0x350 || csr == 0x351 || csr == 0x35C || csr == 0xFB0 || csr == 0x308 || csr == 0x309
 	                || csr == 0x150 || csr == 0x151 || csr == 0x15C || csr == 0xDB0
@@ -1259,9 +1285,22 @@ static void remember_data_page(Registers &regs, Memory &mem, RiscvCore::DataPage
 	e.backing = backing;
 }
 
+// -misaligned=trap: a misaligned load or store raises address-misaligned,
+// with the address, before translation -- Sail's vmem_read/vmem_write with
+// memory.misaligned.exceptions.load_store set to AlignmentException. Without
+// it (the default, Sail's None) the access is done, split where it must be.
+static inline bool misaligned_traps(uint64_t vaddr, unsigned size)
+{
+	return Machine.misaligned_trap && (vaddr & (size - 1)) != 0;
+}
+
 bool RiscvCore::load_virtual(Registers &regs, Memory &mem, uint64_t vaddr,
                              unsigned size, uint64_t &out)
 {
+	if (misaligned_traps(vaddr, size)) {
+		enter_trap(regs, 4, vaddr);   // load address misaligned
+		return false;
+	}
 	// The wide path first: one translation, one memory read, which is what
 	// every aligned access takes.
 	if (((vaddr + size - 1) >> 12) == (vaddr >> 12)) {
@@ -1323,6 +1362,10 @@ bool RiscvCore::load_virtual(Registers &regs, Memory &mem, uint64_t vaddr,
 bool RiscvCore::store_virtual(Registers &regs, Memory &mem, uint64_t vaddr,
                               unsigned size, uint64_t value)
 {
+	if (misaligned_traps(vaddr, size)) {
+		enter_trap(regs, 6, vaddr);   // store/AMO address misaligned
+		return false;
+	}
 	if (((vaddr + size - 1) >> 12) == (vaddr >> 12)) {
 		const uint64_t vpage = vaddr >> 12;
 		const uint64_t key = data_cache_key(regs);
@@ -2346,7 +2389,7 @@ void RiscvCore::exec_32ZICSR(const DecodedOp &instr, Registers &regs, Memory &me
 		// and the bit reads zero (Svade alone).
 		constexpr uint64_t ADUE = 1ull << 61;
 		if (csr == CSR_MENVCFG || (Extensions.H && csr == 0x60A))
-			updated &= COMMON | (Extensions.SVADU ? DELEGATING : DELEGATING & ~ADUE);
+			updated &= COMMON | (ExtSwitch.SVADU ? DELEGATING : DELEGATING & ~ADUE);
 		else if (csr == 0x10A)
 			updated &= COMMON;
 	}

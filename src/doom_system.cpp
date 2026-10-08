@@ -1589,7 +1589,7 @@ void DoomSystem::cpu_loop()
 				n = std::min<uint64_t>(n, (uint64_t)budget);
 				if (memory.cosim) {
 					for (uint64_t k = 0; k < n && !debugger.halted; k++) { step(); cosim_after_step(); }
-				} else if (fast_enabled()) run_fast(n);
+				} else if (fast_enabled() && !Machine.misaligned_trap) run_fast(n);   // fast loads do not trap
 				else for (uint64_t k = 0; k < n && !debugger.halted; k++) step();
 				budget -= (int)n;
 			}

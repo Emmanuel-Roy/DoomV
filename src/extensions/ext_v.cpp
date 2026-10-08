@@ -25,7 +25,7 @@ namespace {
 // one at SEW=16 is Zvfhmin's, or bf16's (Zvfbfmin).
 bool element_width_enabled(const DecodedOp &instr, const Registers &regs)
 {
-	const ExtensionConfig &e = Extensions;
+	const ExtensionSwitches &e = ExtSwitch;
 	const unsigned sew = decode_vtype(regs.get_vtype()).sew;
 	const uint8_t funct6 = op_v_funct6(instr.funct7);
 	if (instr.opcode == 0b1110111)   // vsha2*: SEW=64 is SHA-512

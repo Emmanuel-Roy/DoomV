@@ -23,9 +23,9 @@ static bool amo_encoding_valid(uint8_t amo_op, uint8_t funct3, uint8_t rd, uint8
 	const bool known = lrsc || cas || ss || amo_op == 0b00001 || amo_op == 0b00000 || amo_op == 0b00100
 	                || amo_op == 0b01100 || amo_op == 0b01000 || amo_op == 0b10000 || amo_op == 0b10100
 	                || amo_op == 0b11000 || amo_op == 0b11100;
-	if (!known || (cas && !Extensions.ZACAS)) return false;
+	if (!known || (cas && !ExtSwitch.ZACAS)) return false;
 	switch (funct3) {
-	case 0b000: case 0b001: return Extensions.ZABHA && !lrsc && !ss;
+	case 0b000: case 0b001: return ExtSwitch.ZABHA && !lrsc && !ss;
 	case 0b010: return true;
 	case 0b011: return Extensions.XLEN64;
 	case 0b100: return cas && Extensions.XLEN64 && !(rd & 1) && !(rs2 & 1);

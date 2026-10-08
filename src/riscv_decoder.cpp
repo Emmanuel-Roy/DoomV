@@ -414,7 +414,7 @@ static bool extension_enabled(Extension e)
 // widths depend on SEW and are checked as the instruction runs.
 static bool vector_extension_enabled(uint32_t raw)
 {
-	const ExtensionConfig &e = Extensions;
+	const ExtensionSwitches &e = ExtSwitch;
 	const uint32_t opcode = raw & 0x7F, funct3 = (raw >> 12) & 7, funct6 = raw >> 26, vs1 = (raw >> 15) & 31;
 	if (opcode == 0b1110111) {
 		switch (funct6) {

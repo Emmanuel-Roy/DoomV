@@ -1162,6 +1162,14 @@ void DoomSystem::traced_step()
 	for (const AccessRecord &a : access)
 		if (!a.store && !memory.is_ram(a.paddr, a.size)) from_reference = true;
 	}
+	// -lockstep-take-hpm: the programmable counters (mhpmcounter3-31 and
+	// their hpmcounter views) count what the core's microarchitecture does --
+	// misses, mispredictions -- which only the core knows, so their reads are
+	// its, strict or not. mcycle, minstret and the time are not among them.
+	if (lockstep_take_hpm && step_insn_len == 4 && (step_insn & 0x7F) == 0x73 && ((step_insn >> 12) & 3) != 0) {
+		const uint32_t c = step_insn >> 20;
+		if ((c >= 0xB03 && c <= 0xB1F) || (c >= 0xC03 && c <= 0xC1F)) from_reference = true;
+	}
 	// -lockstep-take: devices the reference has and DoomV only stands in for.
 	for (const AccessRecord &a : access)
 		for (const auto &r : take_ranges)

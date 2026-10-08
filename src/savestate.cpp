@@ -25,6 +25,7 @@
 // Not supported yet: a shared folder with files open (fids hold host file
 // handles and directory listings), and input scripts, which run from their
 // start. A snapshot is refused rather than taken wrong.
+#include <array>
 #include "doom_system.hpp"
 #include "extensions.hpp"
 #include "mmu.hpp"
@@ -48,7 +49,7 @@ constexpr char MAGIC[8] = {'D', 'O', 'O', 'M', 'V', 'S', 'N', 'P'};
 // reads as a machine of one; version 2 has no network card, 3 no
 // real-time clock, 4 no sound card, with two queues to a virtio device
 // where there are now four, 5 no GPU, and 6 no GPU 3D state.
-constexpr uint32_t VERSION = 9;
+constexpr uint32_t VERSION = 10;
 
 class Writer {
 public:
@@ -563,6 +564,14 @@ struct SaveState {
 		io.mark(0x53595300);   // "SYS"
 	}
 
+	// The machine's parameters as the snapshot records them, in a fixed order.
+	static constexpr size_t MACHINE_FIELDS = 8;
+	static std::array<uint32_t, MACHINE_FIELDS> machine_fields(const MachineConfig &m)
+	{
+		return {m.pmp_count, m.pmp_usable, m.pmp_grain, m.asidlen, m.vmidlen, m.physaddr_bits, m.cbo_block,
+		        (uint32_t)m.misaligned_trap};
+	}
+
 	// What must match between the run that saved and the one restoring: the
 	// machine's shape, which comes from the command line.
 	struct Shape {
@@ -644,6 +653,10 @@ bool SaveState::save(DoomSystem &s, const std::string &dir)
 	w.pod(gpu);
 	const uint32_t vlen = Registers::VLEN_BITS;
 	w.pod(vlen);
+	// Version 10: the -march switches beside ExtensionConfig, and the
+	// machine's parameters, one 32-bit field each.
+	w.pod(ExtSwitch);
+	for (uint32_t v : machine_fields(Machine)) w.pod(v);
 	// The extensions are each hart's, and the current hart's are live in
 	// Extensions rather than in its Hart.
 	s.cur->ext = Extensions;
@@ -688,6 +701,32 @@ bool SaveState::restore(DoomSystem &s, const std::string &dir)
 	if (gpu != (uint8_t)memory.gpu.is_enabled()) differ += " -gpu";
 	const uint32_t vlen = version >= 8 ? r.get<uint32_t>() : (uint32_t)Registers::VLEN_DEFAULT;
 	if (vlen != (uint32_t)Registers::VLEN_BITS) differ += " -vlen";
+	// Before version 10 these were not recorded. Such a snapshot is of the
+	// machine DoomV then was, whatever its command line spells: the vector
+	// unit's extensions and the deeper page tables on, Zacas and Zabha
+	// absent -- the switches' defaults -- so it comes back as that machine.
+	if (version >= 10) {
+		const ExtensionSwitches switches = r.get<ExtensionSwitches>();
+		if (std::memcmp(&switches, &ExtSwitch, sizeof switches) != 0) differ += " -march";
+	} else {
+		const ExtensionSwitches then{};
+		if (std::memcmp(&ExtSwitch, &then, sizeof then) != 0) {
+			ExtSwitch = then;
+			// And the command line the next snapshot records says so, so
+			// that it rebuilds this machine and not the one -march now means.
+			bool named = false;
+			for (std::string &a : s.command_line)
+				if (a.rfind("-march=", 0) == 0) { a = "-march=" + march_with_switches(a.substr(7), then); named = true; }
+			if (!named && s.linux_mode)
+				s.command_line.push_back("-march=" + march_with_switches(DEFAULT_LINUX_MARCH, then));
+			std::cout << "restore: a snapshot from before -march switched the vector unit's extensions, Sv48, "
+			             "Sv57, Svadu, Zacas and Zabha: restored as DoomV then was, with Zacas and Zabha absent "
+			             "and the others on\n";
+		}
+	}
+	std::array<uint32_t, MACHINE_FIELDS> fields = machine_fields(MachineConfig{});
+	if (version >= 10) for (uint32_t &v : fields) v = r.get<uint32_t>();
+	if (fields != machine_fields(Machine)) differ += " machine parameters (-pmp, -asidlen, ...)";
 	if (!differ.empty()) {
 		std::cout << "restore: this machine is not the one the snapshot was taken on -- start it with "
 		             "the same -ram, -march, boot files, disks and shared folder. Different:" << differ << "\n";

@@ -16,14 +16,22 @@ inline uint8_t cfg_byte(Registers &regs, unsigned entry)
 	return (uint8_t)(word >> ((entry % 8) * 8));
 }
 
+// pmpaddr as it reads, and as regions are matched -- Sail's pmpReadAddrReg:
+// with a grain G, a NAPOT entry's low G-1 bits read as ones, and any other
+// entry's low G bits as zeros.
 inline uint64_t addr_of(Registers &regs, unsigned entry)
 {
-	return regs.read_csr((uint16_t)(CSR_PMPADDR0 + entry));
+	const uint64_t addr = regs.read_csr((uint16_t)(CSR_PMPADDR0 + entry));
+	const unsigned g = grain();
+	if (g == 0) return addr;
+	const bool napot = ((cfg_byte(regs, entry) & CFG_A_MASK) >> CFG_A_SHIFT) == A_NAPOT;
+	if (napot) return g >= 2 ? addr | ((1ull << (g - 1)) - 1) : addr;
+	return addr & ~((g >= 64 ? ~0ull : (1ull << g) - 1));
 }
 
 inline bool locked(Registers &regs, unsigned entry)
 {
-	return entry < ENTRIES && (cfg_byte(regs, entry) & CFG_L) != 0;
+	return entry < usable() && (cfg_byte(regs, entry) & CFG_L) != 0;
 }
 
 // pmpaddr holds the address shifted right by two: bit 0 of the register is
@@ -92,16 +100,16 @@ unsigned cache_gen = 0;      // bumped by every pmpcfg/pmpaddr write
 unsigned cache_built = ~0u;  // generation the cache was built from
 // And whose PMP it is: with several harts, each has its own entries.
 const Registers *cache_regs = nullptr;
-Decoded cache[ENTRIES];
+Decoded cache[MAX_ENTRIES];
 // The enabled entries' indices, in priority order. A boot leaves most of the
 // sixteen off, and every access used to test all of them.
-unsigned active[ENTRIES];
+unsigned active[MAX_ENTRIES];
 unsigned n_active = 0;
 
 inline void rebuild_cache(Registers &regs)
 {
 	n_active = 0;
-	for (unsigned i = 0; i < ENTRIES; i++) {
+	for (unsigned i = 0; i < count(); i++) {
 		cache[i].on = region_of(regs, i, cache[i].lo, cache[i].hi);
 		cache[i].cfg = cfg_byte(regs, i);
 		if (cache[i].on) active[n_active++] = i;
@@ -134,8 +142,8 @@ uint64_t read_cfg(Registers &regs, uint16_t csr)
 
 uint64_t read_addr(Registers &regs, uint16_t csr)
 {
-	if (addr_index(csr) >= ENTRIES) return 0;   // unimplemented: hardwired zero
-	return regs.read_csr(csr);
+	if (addr_index(csr) >= usable()) return 0;   // unimplemented: hardwired zero
+	return addr_of(regs, addr_index(csr));
 }
 
 void write_cfg(Registers &regs, uint16_t csr, uint64_t value)
@@ -151,7 +159,7 @@ void write_cfg(Registers &regs, uint16_t csr, uint64_t value)
 		uint8_t oldb = (uint8_t)(old >> (i * 8));
 		uint8_t newb = (uint8_t)(value >> (i * 8));
 
-		if (entry >= ENTRIES) { newb = 0; }
+		if (entry >= usable()) { newb = oldb; }
 		else if (oldb & CFG_L) {
 			// Locked entries ignore writes entirely, including from
 			// M-mode. This is the rule that makes PMP a guarantee rather
@@ -169,6 +177,9 @@ void write_cfg(Registers &regs, uint16_t csr, uint64_t value)
 			// over later.
 			if ((newb & CFG_W) && !(newb & CFG_R)) newb &= (uint8_t)~CFG_W;
 			newb &= (uint8_t)(CFG_L | CFG_A_MASK | CFG_X | CFG_W | CFG_R);
+			// "When G >= 1, the NA4 mode is not selectable": it turns the
+			// entry off, as Sail's legalization does.
+			if (grain() >= 1 && ((newb & CFG_A_MASK) >> CFG_A_SHIFT) == A_NA4) newb &= (uint8_t)~CFG_A_MASK;
 		}
 		out |= (uint64_t)newb << (i * 8);
 	}
@@ -179,22 +190,22 @@ void write_addr(Registers &regs, uint16_t csr, uint64_t value)
 {
 	cache_gen++;   // see the note on Decoded above
 	unsigned entry = addr_index(csr);
-	if (entry >= ENTRIES) return;
+	if (entry >= usable()) return;
 
 	// The entry's own lock freezes its address...
 	if (locked(regs, entry)) return;
 	// ...and so does the next entry's lock, when that entry is TOR: this
 	// address is then the *bottom* of that locked region, so letting it
 	// move would resize a region that is supposed to be immutable.
-	if (entry + 1 < ENTRIES && locked(regs, entry + 1)) {
+	if (entry + 1 < usable() && locked(regs, entry + 1)) {
 		uint8_t next = cfg_byte(regs, entry + 1);
 		if (((next & CFG_A_MASK) >> CFG_A_SHIFT) == A_TOR) return;
 	}
 
 	// Only the bits covering the implemented physical address width are
-	// writable. DoomV's physical addresses are 56 bits (Sv39's limit), so
-	// pmpaddr holds 54.
-	regs.write_csr(csr, value & ((1ull << 54) - 1));
+	// writable: physaddr_bits - 2 of them, at most 54 (Sail's pmpWriteAddr).
+	const unsigned bits = Machine.physaddr_bits - 2 < 54 ? Machine.physaddr_bits - 2 : 54;
+	regs.write_csr(csr, value & ((1ull << bits) - 1));
 }
 
 bool check(Registers &regs, uint64_t paddr, unsigned size, int access, uint8_t priv)
@@ -205,6 +216,8 @@ bool check(Registers &regs, uint64_t paddr, unsigned size, int access, uint8_t p
 	// what the references do.
 	uint64_t first = paddr;
 	uint64_t last  = paddr + (size ? size - 1 : 0);
+	// No PMP at all: nothing is checked, for any mode (Sail's pmpCheck).
+	if (count() == 0) return true;
 
 	if (cache_built != cache_gen || cache_regs != &regs) rebuild_cache(regs);
 
@@ -227,6 +240,7 @@ bool check(Registers &regs, uint64_t paddr, unsigned size, int access, uint8_t p
 
 bool page_permits(Registers &regs, uint64_t page, int access, uint8_t priv)
 {
+	if (count() == 0) return true;
 	if (cache_built != cache_gen || cache_regs != &regs) rebuild_cache(regs);
 	const uint64_t end = page + 0x1000;
 	// The first enabled entry touching the page decides. If it covers the

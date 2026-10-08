@@ -17,6 +17,7 @@
 // leaves empty -- so unlike the hint extensions, disabling Zicbom really
 // does make these illegal rather than reverting them to some base meaning.
 #include "riscv_decoder.hpp"
+#include "extensions.hpp"
 #include "riscv_core.hpp"
 #include "registers.hpp"
 #include "memory.hpp"
@@ -47,7 +48,9 @@ DecodedInstruction Decoder::decode_zicbom(uint32_t raw_instr) const
 // The block these operate on, matching Zicboz and what the device tree
 // advertises. The address in rs1 may point anywhere inside the block; the
 // block is the unit that gets checked.
-constexpr uint64_t CBOM_BLOCK_SIZE = 64;
+// The machine's cache-block size, -cbo-block= (64 unless changed; Sail's
+// platform.cache_block_size_exp).
+#define CBOM_BLOCK_SIZE ((uint64_t)Machine.cbo_block)
 
 void RiscvCore::exec_ZICBOM(const DecodedOp &instr, Registers &regs, Memory &mem)
 {

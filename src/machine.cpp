@@ -102,6 +102,7 @@ bool setup_machine(int argc, const char *const *argv, std::unique_ptr<DoomSystem
 	std::string trace_path, lockstep_path;
 	bool lockstep_strict = false;
 	bool lockstep_follow = false;
+	bool lockstep_take_hpm = false;
 	std::string stamp_path, record_path_ls;
 	uint64_t cycle_clock = 0;
 	std::vector<std::pair<uint64_t, uint64_t>> lockstep_takes;
@@ -146,6 +147,59 @@ bool setup_machine(int argc, const char *const *argv, std::unique_ptr<DoomSystem
 			gdb_port = std::atoi(v.c_str() + (colon == std::string::npos ? 0 : colon + 1));
 			if (gdb_port <= 0 || gdb_port > 65535) {
 				std::cout << "-gdb takes a TCP port, e.g. -gdb=1234, or an address and port\n";
+				status = -1;
+				return false;
+			}
+		} else if (arg.rfind("-pmp=", 0) == 0 || arg.rfind("-pmp-grain=", 0) == 0 || arg.rfind("-asidlen=", 0) == 0
+		           || arg.rfind("-vmidlen=", 0) == 0 || arg.rfind("-physaddr-bits=", 0) == 0
+		           || arg.rfind("-cbo-block=", 0) == 0 || arg.rfind("-misaligned=", 0) == 0) {
+			// The machine's parameters (MachineConfig), as Sail's
+			// configuration sets them; the defaults are Sail's.
+			const std::string v = arg.substr(arg.find('=') + 1);
+			const auto number = [&](unsigned &out) {
+				char *end = nullptr;
+				const unsigned long n = std::strtoul(v.c_str(), &end, 0);
+				out = (unsigned)n;
+				return !v.empty() && end && (*end == 0 || *end == ':');
+			};
+			bool ok = true;
+			unsigned n = 0;
+			if (arg.rfind("-pmp=", 0) == 0) {
+				// -pmp=N or -pmp=N:U -- N of 0, 16 or 64 entries, the first U usable.
+				ok = number(n) && (n == 0 || n == 16 || n == 64);
+				unsigned u = n;
+				const size_t colon = v.find(':');
+				if (ok && colon != std::string::npos) {
+					char *end = nullptr;
+					u = (unsigned)std::strtoul(v.c_str() + colon + 1, &end, 0);
+					ok = end && *end == 0 && u <= n;
+				}
+				Machine.pmp_count = n;
+				Machine.pmp_usable = u;
+			} else if (arg.rfind("-pmp-grain=", 0) == 0) {
+				ok = number(n) && n <= 52;
+				Machine.pmp_grain = n;
+			} else if (arg.rfind("-asidlen=", 0) == 0) {
+				ok = number(n) && n <= 16;
+				Machine.asidlen = n;
+			} else if (arg.rfind("-vmidlen=", 0) == 0) {
+				ok = number(n) && n <= 14;
+				Machine.vmidlen = n;
+			} else if (arg.rfind("-physaddr-bits=", 0) == 0) {
+				// RAM starts at 2 GiB, so 32 bits at least; 56 is what the
+				// page tables can name.
+				ok = number(n) && n >= 32 && n <= 56;
+				Machine.physaddr_bits = n;
+			} else if (arg.rfind("-cbo-block=", 0) == 0) {
+				ok = number(n) && n >= 8 && n <= 4096 && (n & (n - 1)) == 0;
+				Machine.cbo_block = n;
+			} else {
+				ok = v == "split" || v == "trap";
+				Machine.misaligned_trap = v == "trap";
+			}
+			if (!ok) {
+				std::cout << "bad " << arg << ": -pmp=0|16|64[:usable] -pmp-grain=0..52 -asidlen=0..16 -vmidlen=0..14 "
+				             "-physaddr-bits=32..56 -cbo-block=8..4096 (a power of two) -misaligned=split|trap\n";
 				status = -1;
 				return false;
 			}
@@ -252,6 +306,10 @@ bool setup_machine(int argc, const char *const *argv, std::unique_ptr<DoomSystem
 			// Write the reference's trace back, each record stamped with
 			// the cycle count of Sail's clock: a trace for -cycle-clock=1.
 			stamp_path = arg.substr(16);
+		} else if (arg == "-lockstep-take-hpm") {
+			// Reads of the programmable counters are the reference's: a
+			// core's counts of its own microarchitectural events.
+			lockstep_take_hpm = true;
 		} else if (arg == "-lockstep-follow") {
 			// Step the hart the reference's next record is about, in its
 			// order, instead of round-robin: a core runs its harts at once.
@@ -344,11 +402,7 @@ bool setup_machine(int argc, const char *const *argv, std::unique_ptr<DoomSystem
 	// -march is still an override, which is what the differential and
 	// conformance harnesses use to test one extension at a time.
 	if (linux_boot && march.empty()) {
-		parse_march("rv64imafdcv_zicsr_zifencei_zba_zbb_zbs_zicond"
-		            "_zicbom_zicbop_zicboz_zicntr_zihintpause_zihintntl"
-		            "_zimop_zcmop_zawrs_zfa_zfh_svinval_svnapot_svpbmt"
-		            "_sscofpmf_ssstateen_ssnpm_smnpm_smaia_ssaia"
-		            "_zvfh_zvfhmin_zvfbfmin_zvfbfwma_zvbb_zvkb_zvbc_zvkg_zvkned_zvknha_zvknhb_zvksed_zvksh_sv48_sv57_svadu_zacas_zabha");
+		parse_march(DEFAULT_LINUX_MARCH);
 	}
 	// An initramfs is no longer required: with -disk= the kernel can mount a
 	// real root filesystem instead, which is the whole point of having a
@@ -368,7 +422,7 @@ bool setup_machine(int argc, const char *const *argv, std::unique_ptr<DoomSystem
 	for (int i = 1; i < argc; i++) {
 		const std::string a = argv[i];
 		static const char *const run_only[] = {"-snapshot=", "-snapshotat=", "-restore=", "-stopat=", "-trace=",
-		                                      "-lockstep=", "-lockstep-strict", "-lockstep-follow", "-lockstep-stamp=", "-lockstep-record=", "-cycle-clock=", "-lockstep-take=", "-gdb", "-record=", "-replay=",
+		                                      "-lockstep=", "-lockstep-strict", "-lockstep-follow", "-lockstep-take-hpm", "-lockstep-stamp=", "-lockstep-record=", "-cycle-clock=", "-lockstep-take=", "-gdb", "-record=", "-replay=",
 		                                      "-export-state=", "-expect=", "-input=", "-fbdump=", "-guidump=", "-cosim-log="};
 		bool skip = a.rfind("-shared=", 0) == 0 || a.rfind("-drives=", 0) == 0;   // written below, as used
 		for (const char *p : run_only) skip = skip || a.rfind(p, 0) == 0;
@@ -472,6 +526,7 @@ bool setup_machine(int argc, const char *const *argv, std::unique_ptr<DoomSystem
 	}
 	if (lockstep_strict) system.set_lockstep_strict();
 	if (lockstep_follow) system.set_lockstep_follow();
+	if (lockstep_take_hpm) system.set_lockstep_take_hpm();
 	if (cycle_clock) system.set_cycle_clock(cycle_clock);
 	for (const auto &t : lockstep_takes) system.add_lockstep_take(t.first, t.second);
 	if (!stamp_path.empty() && (harts > 1 || cycle_clock || lockstep_path.empty())) {

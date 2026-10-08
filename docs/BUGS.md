@@ -7392,3 +7392,39 @@ lock-step against Sail did, 257 million instructions into the boot, when a
 vsetvli's mstatus write showed FS Dirty where Sail's was Clean. FS now
 follows Sail's rule, for vector instructions too (vfmv.f.s, and the flags a
 vector operation raises).
+
+<a id="bug188"></a>
+### 188. A byte or halfword AMO ran as a word one
+
+DoomV read only whether an AMO's width field said doubleword, and took
+anything else for a word. `amoadd.b` and `amoswap.h` -- Zabha's, illegal on a
+hart without it -- read, changed and wrote four bytes, and LR or SC at byte
+width did the same. Sail decodes the width (`amo_encoding_valid`): without
+Zabha those encodings are illegal instructions, and LR, SC and `ssamoswap`
+exist at word and doubleword width only. Found writing Zabha; the widths are
+now decoded, and Zabha and Zacas implemented, as Sail has them.
+
+<a id="bug189"></a>
+### 189. hgatp ignored a whole write when the mode was unsupported
+
+On a write with a MODE the hart lacks, DoomV left hgatp as it was. That is
+satp's rule; hgatp's, in the privileged specification and in Sail's
+`legalize_hgatp`, is the ordinary WARL one: VMID and PPN take the written
+value and only MODE keeps its old one. Every test so far wrote such a mode
+with a zero VMID and PPN, which leaves the register the same either way.
+The machine-parameter test (`machine_params.S`) writes one with both set.
+
+<a id="bug190"></a>
+### 190. Snapshots from before bd7e3bb no longer restored
+
+Snapshots store ExtensionConfig byte for byte, in the machine-shape check and
+per hart. Commit bd7e3bb added the vector unit's switches to it, and 45ffcf5
+Zacas and Zabha, without changing the snapshot version, so every snapshot
+taken before them -- Linux and desktop snapshots included -- failed to
+restore or would have read misaligned. The switches moved to a struct of
+their own beside it (as ExtAia already was, for the same reason); snapshot
+version 10 records them and the machine's parameters after the fields
+version 9 had, and an older snapshot is restored as the machine DoomV then
+was, its command line rewritten to say so. Checked: a version 9 Linux
+snapshot, run 500,000 instructions on the build before the change and on
+this one, leaves the same crash.log.

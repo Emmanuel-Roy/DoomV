@@ -18,6 +18,7 @@
 // and the distinction matters to software: a page fault invites the
 // supervisor to fix a mapping and retry, while an access fault says the
 // physical region is not reachable at this privilege at all.
+#include "extensions.hpp"
 #include <cstdint>
 
 class Registers;
@@ -40,11 +41,16 @@ enum : uint8_t {
 	              // trailing ones in pmpaddr
 };
 
-// How many entries this hart implements. 16 is the common choice and is
-// what the architectural tests assume when they walk every entry; the
-// remaining 48 read as zero and ignore writes, which is architecturally
-// legal (unimplemented entries are hardwired to zero).
-constexpr unsigned ENTRIES = 16;
+// How many entries this hart has: the machine's -pmp=N[:U] (MachineConfig,
+// Sail's memory.pmp.count and usable_count). N is 0, 16 or 64: the pmpcfg and
+// pmpaddr CSRs that exist; entries from U on read as zero and ignore writes.
+// With none at all, nothing is checked. The grain (-pmp-grain=G) makes every
+// region at least 2^(G+2) bytes: pmpaddr's low bits read back fixed, and NA4
+// cannot be chosen when G >= 1.
+constexpr unsigned MAX_ENTRIES = 64;
+inline unsigned count() { return Machine.pmp_count; }
+inline unsigned usable() { return Machine.pmp_usable; }
+inline unsigned grain() { return Machine.pmp_grain; }
 
 // CSR numbers. pmpcfg is even-indexed only on RV64: each CSR holds eight
 // bytes, so pmpcfg0 covers entries 0-7 and pmpcfg2 covers 8-15. pmpcfg1

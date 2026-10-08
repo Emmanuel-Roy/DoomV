@@ -21,6 +21,7 @@
 // the DT value and issues exactly that many bytes' worth of cbo.zero per
 // page, so a mismatch would leave part of each page uncleared.
 #include "riscv_decoder.hpp"
+#include "extensions.hpp"
 #include "riscv_core.hpp"
 #include "registers.hpp"
 #include "memory.hpp"
@@ -32,7 +33,9 @@
 namespace {
 // 64 bytes: the value the device tree advertises, and the one Zic64b names
 // as the profile-standard block size.
-constexpr uint64_t CBOZ_BLOCK_SIZE = 64;
+// The machine's cache-block size, -cbo-block= (64 unless changed; Sail's
+// platform.cache_block_size_exp).
+#define CBOZ_BLOCK_SIZE ((uint64_t)Machine.cbo_block)
 }
 
 DecodedInstruction Decoder::decode_zicboz(uint32_t raw_instr) const
