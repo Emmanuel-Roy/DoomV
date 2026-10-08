@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """DoomV's extension switches, each held to Sail with it on and off.
 
-DoomV switches the vector unit's extensions beside V (Zvfh, Zvfhmin,
+DoomV switches Zacas, Zabha and the vector unit's extensions beside V (Zvfh, Zvfhmin,
 Zvfbfmin, Zvfbfwma, Zvbb, Zvkb, Zvbc, Zvkg, Zvkned, Zvknha, Zvknhb, Zvksed,
 Zvksh) and the deeper page tables and Svadu (Sv48, Sv57, Svadu) with
 -march, so that a core built without one can be held to a DoomV without it.
@@ -51,6 +51,8 @@ CASES = {
     "sv57": VM57,
     "sv48": VM57 + VM48,
     "svadu": [("svadu", "Svadu")],
+    "zacas": [("zacas", "Zacas")],
+    "zabha": [("zabha", "Zabha")],
 }
 
 

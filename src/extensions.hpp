@@ -90,6 +90,13 @@ struct ExtensionConfig {
 	bool SSCOFPMF = true;
 	bool SSSTATEEN = true;
 
+	// The A extension's additions, both off unless a -march names them (Sail's
+	// configuration has both). Zacas: amocas.w, .d, and .q on an even register
+	// pair. Zabha: the AMOs at byte and halfword width, and with Zacas,
+	// amocas.b and .h. See ext_a.cpp.
+	bool ZACAS = false;
+	bool ZABHA = false;
+
 	// The vector unit's own extensions, beside V. Each is a -march switch, so
 	// a core that leaves one out can be held to a DoomV that does too; on
 	// unless a -march leaves them out, as Sail's configuration has them all.

@@ -100,7 +100,7 @@ def run_doomv_signature(elf, begin, end, halt_addr):
 	try:
 		sig_path = os.path.join(DOOMV_DIR, "signature.log")
 		if os.path.exists(sig_path): os.remove(sig_path)
-		cmd = [DOOMV, DUMMY_WAD, elf, "-march=rv64imafdc_zicsr_zifencei_sv48_sv57_svadu",
+		cmd = [DOOMV, DUMMY_WAD, elf, "-march=rv64imafdc_zicsr_zifencei_sv48_sv57_svadu_zacas_zabha",
 		       f"-break=0x{halt_addr:x}", f"-sig={begin:x}:{end:x}"]
 		# DoomV is a GUI app whose run() loop never returns on its own --
 		# the CPU thread hits the breakpoint and writes signature.log

@@ -83,6 +83,8 @@ void parse_march(const std::string &march)
 		const bool zvks = has("zvks") || has("zvksc") || has("zvksg");
 		e.ZVFH = has("zvfh");
 		e.ZVFHMIN = has("zvfhmin") || e.ZVFH;
+		e.ZACAS = has("zacas");
+		e.ZABHA = has("zabha");
 		e.ZVFBFWMA = has("zvfbfwma");
 		e.ZVFBFMIN = has("zvfbfmin") || e.ZVFBFWMA;
 		e.ZVBB = has("zvbb");

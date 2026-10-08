@@ -74,7 +74,7 @@ wsl_run() { MSYS2_ARG_CONV_EXCL='*' wsl -d "$DISTRO" -u root -- "$@"; }
 # -- with V -- the vector unit's own extensions, so march_for adds those.
 march_for() {
 	local m
-	m="$(march_base "$1")_sv48_sv57_svadu"
+	m="$(march_base "$1")_sv48_sv57_svadu_zacas_zabha"
 	case "$m" in
 	rv64imafdcv*) m="${m}_zvfh_zvfhmin_zvfbfmin_zvfbfwma_zvbb_zvkb_zvbc_zvkg_zvkned_zvknha_zvknhb_zvksed_zvksh" ;;
 	esac

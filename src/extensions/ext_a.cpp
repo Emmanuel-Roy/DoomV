@@ -9,6 +9,30 @@
 #include "memory.hpp"
 #include "extensions.hpp"
 
+// Which A-space encodings are instructions on this hart, as Sail's
+// amo_encoding_valid has it. Words and doublewords are A's (doublewords on
+// RV64 only); bytes and halfwords are Zabha's, for the AMOs and -- with
+// Zacas too -- amocas, never LR, SC or ssamoswap; amocas needs Zacas, and
+// its quadword form (RV64) takes even register pairs, an odd one being
+// illegal as Sail's configuration sets it.
+static bool amo_encoding_valid(uint8_t amo_op, uint8_t funct3, uint8_t rd, uint8_t rs2)
+{
+	const bool lrsc = amo_op == 0b00010 || amo_op == 0b00011;
+	const bool cas = amo_op == 0b00101;
+	const bool ss = amo_op == 0b01001;
+	const bool known = lrsc || cas || ss || amo_op == 0b00001 || amo_op == 0b00000 || amo_op == 0b00100
+	                || amo_op == 0b01100 || amo_op == 0b01000 || amo_op == 0b10000 || amo_op == 0b10100
+	                || amo_op == 0b11000 || amo_op == 0b11100;
+	if (!known || (cas && !Extensions.ZACAS)) return false;
+	switch (funct3) {
+	case 0b000: case 0b001: return Extensions.ZABHA && !lrsc && !ss;
+	case 0b010: return true;
+	case 0b011: return Extensions.XLEN64;
+	case 0b100: return cas && Extensions.XLEN64 && !(rd & 1) && !(rs2 & 1);
+	default: return false;
+	}
+}
+
 DecodedInstruction Decoder::decode_a(uint32_t raw_instr) const
 {
 	DecodedInstruction instr{};
@@ -30,28 +54,27 @@ DecodedInstruction Decoder::decode_a(uint32_t raw_instr) const
 	instr.funct3 = funct3;
 	instr.funct7 = funct7;
 
-	// funct7[6:2] selects the op, funct3 selects width (010=.W, 011=.D), funct7[1:0] are aq/rl
+	// funct7[6:2] selects the op, funct3 the width -- 000 .B, 001 .H (Zabha),
+	// 010 .W, 011 .D, 100 .Q (amocas.q only) -- and funct7[1:0] are aq/rl.
+	const unsigned w = funct3 <= 4 ? funct3 : 0;
 	instr.op_64 = (funct3 == 0b011);
 	uint8_t amo_op = funct7 >> 2;
 	switch (amo_op) {
-	case 0b00010: instr.mnemonic = instr.op_64 ? "LR.D"      : "LR.W";      break;
-	case 0b00011: instr.mnemonic = instr.op_64 ? "SC.D"      : "SC.W";      break;
-	case 0b00001: instr.mnemonic = instr.op_64 ? "AMOSWAP.D" : "AMOSWAP.W"; break;
-	case 0b00000: instr.mnemonic = instr.op_64 ? "AMOADD.D"  : "AMOADD.W";  break;
-	case 0b00100: instr.mnemonic = instr.op_64 ? "AMOXOR.D"  : "AMOXOR.W";  break;
-	case 0b01100: instr.mnemonic = instr.op_64 ? "AMOAND.D"  : "AMOAND.W";  break;
-	case 0b01000: instr.mnemonic = instr.op_64 ? "AMOOR.D"   : "AMOOR.W";   break;
-	case 0b10000: instr.mnemonic = instr.op_64 ? "AMOMIN.D"  : "AMOMIN.W";  break;
-	case 0b10100: instr.mnemonic = instr.op_64 ? "AMOMAX.D"  : "AMOMAX.W";  break;
-	case 0b11000: instr.mnemonic = instr.op_64 ? "AMOMINU.D" : "AMOMINU.W"; break;
-	case 0b11100: instr.mnemonic = instr.op_64 ? "AMOMAXU.D" : "AMOMAXU.W"; break;
-	// Zicfiss's shadow-stack swap. It is an AMO because switching stacks
-	// has to be atomic against a trap arriving mid-swap, and it sits in
-	// this space rather than the Zimop one because it needs two operands
-	// and a result.
-	case 0b01001: instr.mnemonic = instr.op_64 ? "SSAMOSWAP.D" : "SSAMOSWAP.W"; break;
+	case 0b00010: { static const char *const n[5] = {"LR.B", "LR.H", "LR.W", "LR.D", "LR.Q"}; instr.mnemonic = n[w]; break; }
+	case 0b00011: { static const char *const n[5] = {"SC.B", "SC.H", "SC.W", "SC.D", "SC.Q"}; instr.mnemonic = n[w]; break; }
+	case 0b00001: { static const char *const n[5] = {"AMOSWAP.B", "AMOSWAP.H", "AMOSWAP.W", "AMOSWAP.D", "AMOSWAP.Q"}; instr.mnemonic = n[w]; break; }
+	case 0b00000: { static const char *const n[5] = {"AMOADD.B", "AMOADD.H", "AMOADD.W", "AMOADD.D", "AMOADD.Q"}; instr.mnemonic = n[w]; break; }
+	case 0b00100: { static const char *const n[5] = {"AMOXOR.B", "AMOXOR.H", "AMOXOR.W", "AMOXOR.D", "AMOXOR.Q"}; instr.mnemonic = n[w]; break; }
+	case 0b01100: { static const char *const n[5] = {"AMOAND.B", "AMOAND.H", "AMOAND.W", "AMOAND.D", "AMOAND.Q"}; instr.mnemonic = n[w]; break; }
+	case 0b01000: { static const char *const n[5] = {"AMOOR.B", "AMOOR.H", "AMOOR.W", "AMOOR.D", "AMOOR.Q"}; instr.mnemonic = n[w]; break; }
+	case 0b10000: { static const char *const n[5] = {"AMOMIN.B", "AMOMIN.H", "AMOMIN.W", "AMOMIN.D", "AMOMIN.Q"}; instr.mnemonic = n[w]; break; }
+	case 0b10100: { static const char *const n[5] = {"AMOMAX.B", "AMOMAX.H", "AMOMAX.W", "AMOMAX.D", "AMOMAX.Q"}; instr.mnemonic = n[w]; break; }
+	case 0b11000: { static const char *const n[5] = {"AMOMINU.B", "AMOMINU.H", "AMOMINU.W", "AMOMINU.D", "AMOMINU.Q"}; instr.mnemonic = n[w]; break; }
+	case 0b11100: { static const char *const n[5] = {"AMOMAXU.B", "AMOMAXU.H", "AMOMAXU.W", "AMOMAXU.D", "AMOMAXU.Q"}; instr.mnemonic = n[w]; break; }
+	case 0b00101: { static const char *const n[5] = {"AMOCAS.B", "AMOCAS.H", "AMOCAS.W", "AMOCAS.D", "AMOCAS.Q"}; instr.mnemonic = n[w]; break; }
+	case 0b01001: { static const char *const n[5] = {"SSAMOSWAP.B", "SSAMOSWAP.H", "SSAMOSWAP.W", "SSAMOSWAP.D", "SSAMOSWAP.Q"}; instr.mnemonic = n[w]; break; }
 	}
-	if (instr.op_64 && !Extensions.XLEN64) instr.ext = Extension::ILLEGAL; // .D forms don't exist on RV32
+	if (!amo_encoding_valid(amo_op, funct3, rd, rs2)) instr.ext = Extension::ILLEGAL;
 
 	return instr;
 }
@@ -113,7 +136,7 @@ void RiscvCore::exec_32A(const DecodedOp &instr, Registers &regs, Memory &mem)
 	// both misaligned and unmapped reports the access fault, not the page
 	// fault -- the misalignment is decided from the effective address
 	// alone and never reaches the page tables.
-	unsigned width = is64 ? 8 : 4;
+	const unsigned width = 1u << instr.funct3;   // 1, 2, 4, 8 or 16 bytes (decode allows only legal ones)
 	if (addr & (width - 1)) {
 		constexpr uint64_t CAUSE_LOAD_ACCESS  = 5;
 		constexpr uint64_t CAUSE_STORE_ACCESS = 7;
@@ -124,6 +147,14 @@ void RiscvCore::exec_32A(const DecodedOp &instr, Registers &regs, Memory &mem)
 
 	uint64_t paddr;
 	if (!translate_or_trap(regs, mem, addr, amo_access, paddr, width)) return;
+
+	// Zacas and Zabha: compare-and-swap at any width, and the byte and
+	// halfword AMOs. The rest -- words and doublewords -- are below as ever.
+	if (amo_op == 0b00101 || width < 4) {
+		exec_amo_narrow_or_cas(instr, regs, mem, paddr, width);
+		regs.set_pc(pc + instr.length);
+		return;
+	}
 
 	if (amo_op == 0b00011) { // SC.W/SC.D
 		if (reservation_valid && (reservation_addr & ~(RESERVATION_SET - 1)) == (paddr & ~(RESERVATION_SET - 1))) {
@@ -189,4 +220,66 @@ void RiscvCore::exec_32A(const DecodedOp &instr, Registers &regs, Memory &mem)
 
 	regs.write_x(instr.rd, loaded); // rd gets the pre-op value for every real AMO op
 	regs.set_pc(pc + instr.length);
+}
+
+// amocas at every width, and the AMOs at byte and halfword width (Zabha),
+// as Sail's AMO clause does them. amocas compares the loaded value with rd's
+// (a register pair for .Q, x0 reading as zero) and stores rs2 only if they
+// are equal; every one leaves the loaded value, sign-extended, in rd.
+void RiscvCore::exec_amo_narrow_or_cas(const DecodedOp &instr, Registers &regs, Memory &mem, uint64_t paddr,
+                                       unsigned width)
+{
+	const uint8_t amo_op = instr.funct7 >> 2;
+	const auto x = [&](unsigned r) -> uint64_t { return r ? regs.read_x((int)r) : 0; };
+	if (width == 16) {
+		const uint64_t lo = mem.read64(paddr), hi = mem.read64(paddr + 8);
+		const uint64_t cmp_lo = x(instr.rd), cmp_hi = instr.rd ? x(instr.rd + 1u) : 0;
+		if (lo == cmp_lo && hi == cmp_hi) {
+			mem.write64(paddr, x(instr.rs2));
+			mem.write64(paddr + 8, instr.rs2 ? x(instr.rs2 + 1u) : 0);
+		}
+		if (instr.rd) {
+			regs.write_x(instr.rd, lo);
+			regs.write_x(instr.rd + 1, hi);
+		}
+		return;
+	}
+	const unsigned bits = width * 8;
+	const uint64_t mask = bits == 64 ? ~0ull : (1ull << bits) - 1;
+	const auto sext = [&](uint64_t v) -> uint64_t {
+		return bits == 64 ? v : (uint64_t)((int64_t)(v << (64 - bits)) >> (64 - bits));
+	};
+	uint64_t loaded = 0;
+	switch (width) {
+	case 1: loaded = mem.read8(paddr); break;
+	case 2: loaded = mem.read16(paddr); break;
+	case 4: loaded = mem.read32(paddr); break;
+	default: loaded = mem.read64(paddr); break;
+	}
+	const uint64_t src = x(instr.rs2) & mask;
+	const int64_t ls = (int64_t)sext(loaded), ss = (int64_t)sext(src);
+	bool store = true;
+	uint64_t result = src;
+	switch (amo_op) {
+	case 0b00101: store = loaded == (x(instr.rd) & mask); break;          // AMOCAS
+	case 0b00001: result = src; break;                                    // AMOSWAP
+	case 0b00000: result = (loaded + src) & mask; break;                  // AMOADD
+	case 0b00100: result = loaded ^ src; break;                           // AMOXOR
+	case 0b01100: result = loaded & src; break;                           // AMOAND
+	case 0b01000: result = loaded | src; break;                           // AMOOR
+	case 0b10000: result = ss < ls ? src : loaded; break;                 // AMOMIN
+	case 0b10100: result = ss > ls ? src : loaded; break;                 // AMOMAX
+	case 0b11000: result = src < loaded ? src : loaded; break;            // AMOMINU
+	case 0b11100: result = src > loaded ? src : loaded; break;            // AMOMAXU
+	default: break;
+	}
+	if (store) {
+		switch (width) {
+		case 1: mem.write8(paddr, (uint8_t)result); break;
+		case 2: { const uint8_t b[2] = {(uint8_t)result, (uint8_t)(result >> 8)}; mem.write_bytes(paddr, b, 2); break; }
+		case 4: mem.write32(paddr, (uint32_t)result); break;
+		default: mem.write64(paddr, result); break;
+		}
+	}
+	regs.write_x(instr.rd, sext(loaded));
 }

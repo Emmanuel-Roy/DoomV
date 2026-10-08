@@ -113,7 +113,7 @@ CORE_SIMS = ("sail", "spike", "whisper", "qemu", "doomv")
 # a snapshot of one is of that hart, and the others are given the same.
 LINUX_MARCH = ("rv64imafdcv_zicsr_zifencei_zba_zbb_zbs_zicond_zicbom_zicbop_zicboz_zicntr_zihintpause"
                "_zihintntl_zimop_zcmop_zawrs_zfa_zfh_svinval_svnapot_svpbmt_sscofpmf_ssstateen_ssnpm_smnpm"
-               "_zvfh_zvfhmin_zvfbfmin_zvfbfwma_zvbb_zvkb_zvbc_zvkg_zvkned_zvknha_zvknhb_zvksed_zvksh_sv48_sv57_svadu")
+               "_zvfh_zvfhmin_zvfbfmin_zvfbfwma_zvbb_zvkb_zvbc_zvkg_zvkned_zvknha_zvknhb_zvksed_zvksh_sv48_sv57_svadu_zacas_zabha")
 
 
 def wsl(path: pathlib.Path) -> str:

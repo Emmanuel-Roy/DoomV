@@ -105,6 +105,9 @@ public:
 	void exec_32I(const DecodedOp &instr, Registers &regs, Memory &mem);
 	void exec_32M(const DecodedOp &instr, Registers &regs, Memory &mem);
 	void exec_32A(const DecodedOp &instr, Registers &regs, Memory &mem);
+	// Zacas and Zabha: amocas at any width, the AMOs at byte and halfword width.
+	void exec_amo_narrow_or_cas(const DecodedOp &instr, Registers &regs, Memory &mem, uint64_t paddr,
+	                            unsigned width);
 	void exec_32ZICSR(const DecodedOp &instr, Registers &regs, Memory &mem);
 	void exec_F(const DecodedOp &instr, Registers &regs, Memory &mem);
 	void exec_D(const DecodedOp &instr, Registers &regs, Memory &mem);

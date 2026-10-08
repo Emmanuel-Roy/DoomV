@@ -348,7 +348,7 @@ bool setup_machine(int argc, const char *const *argv, std::unique_ptr<DoomSystem
 		            "_zicbom_zicbop_zicboz_zicntr_zihintpause_zihintntl"
 		            "_zimop_zcmop_zawrs_zfa_zfh_svinval_svnapot_svpbmt"
 		            "_sscofpmf_ssstateen_ssnpm_smnpm_smaia_ssaia"
-		            "_zvfh_zvfhmin_zvfbfmin_zvfbfwma_zvbb_zvkb_zvbc_zvkg_zvkned_zvknha_zvknhb_zvksed_zvksh_sv48_sv57_svadu");
+		            "_zvfh_zvfhmin_zvfbfmin_zvfbfwma_zvbb_zvkb_zvbc_zvkg_zvkned_zvknha_zvknhb_zvksed_zvksh_sv48_sv57_svadu_zacas_zabha");
 	}
 	// An initramfs is no longer required: with -disk= the kernel can mount a
 	// real root filesystem instead, which is the whole point of having a

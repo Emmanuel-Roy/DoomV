@@ -10,6 +10,7 @@
 #   Zvksed, Zvksh                        SM4, SM3
 #   Sv48, Sv57                           satp, vsatp and hgatp keep the mode or not
 #   Svadu                                menvcfg.ADUE sticks or not
+#   Zacas, Zabha                         amocas at every width, the byte and halfword AMOs
 
 .equ MSTATUS_FS_VS, (1 << 13) | (1 << 9)
 
@@ -81,6 +82,40 @@ _start:
 	csrs menvcfg, t0                  # ADUE: Svadu
 	csrr a5, menvcfg
 
+	# ---- Zacas and Zabha ---------------------------------------------------------------
+	# As words: the toolchain does not know Zacas or Zabha. AMOs take no offset.
+	la   s0, amo_data
+	li   t0, 0x1122334455667788
+	sd   t0, 0(s0)
+	sd   t0, 8(s0)
+	li   a0, 0x55667788
+	li   a1, 0x0badf00d
+	.word 0x28B4252F                  # amocas.w a0, a1, (s0)     Zacas: matches, stores
+	li   a0, 1
+	.word 0x28B4252F                  # amocas.w a0, a1, (s0)     Zacas: does not match, no store
+	ld   a3, 8(s0)
+	li   a4, 0x7777
+	.word 0x28E436AF                  # amocas.d a3, a4, (s0)     Zacas: doubleword
+	li   s2, 0x1234
+	li   s3, 0x99
+	ld   a6, 0(s0)
+	ld   a7, 8(s0)
+	.word 0x2924482F                  # amocas.q a6, s2, (s0)     Zacas: quadword, pairs a6/a7 and s2/s3
+	.word 0x293447AF                  # amocas.q a5, s3, (s0)     odd pairs: illegal
+	li   a0, 0x7f
+	.word 0x00A407AF                  # amoadd.b  a5, a0, (s0)    Zabha
+	.word 0x80A417AF                  # amomin.h  a5, a0, (s0)    Zabha
+	addi t1, s0, 1
+	.word 0xE0A307AF                  # amomaxu.b a5, a0, (t1)    Zabha
+	addi t1, s0, 2
+	.word 0x08A317AF                  # amoswap.h a5, a0, (t1)    Zabha
+	li   a0, 0
+	addi t1, s0, 3
+	.word 0x28B3052F                  # amocas.b  a0, a1, (t1)    Zabha and Zacas
+	addi t1, s0, 4
+	.word 0x28B3152F                  # amocas.h  a0, a1, (t1)    Zabha and Zacas
+	.word 0x1004052F                  # lr.b a0, (s0)             never an instruction
+
 	# ---- done ----------------------------------------------------------------------
 	li   t0, 1
 	la   t1, tohost
@@ -96,6 +131,8 @@ trap:
 
 .section .data
 .align 3
+.align 4
+amo_data: .dword 0, 0
 .global tohost
 tohost:   .dword 0
 .global fromhost
