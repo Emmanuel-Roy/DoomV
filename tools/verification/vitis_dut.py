@@ -21,6 +21,11 @@ contract, all through the environment:
   DOOMV_LS_LIMIT   at most this many steps
   DOOMV_LS_TRACE   for the stand-in only: the records it replays
 
+The component may say what machine it is in a file `doomv.args` beside its
+hls_config.cfg -- DoomV arguments such as -march, -priv, -pmp, -misaligned,
+-cycle-clock -- which corun.py adds to DOOMV_LS_ARGS last, so they decide.
+Ouroboros's generator writes one for every core.
+
 It hands every record the core retires to DoomV, prints doomv_ls_message on
 a mismatch (DoomV's "lockstep: MISMATCH ..." report), and returns 0 only if
 every record matched.

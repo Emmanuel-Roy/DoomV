@@ -1042,6 +1042,10 @@ def run_core(prog, out, args, sail_future) -> tuple:
             return r, {"status": "error", "detail": r.error}
         values["DOOMV_LS_TRACE"] = str(stamped)
     ls_args = prog.machine + ["-lockstep-strict", f"-cycle-clock={args.cycle_clock}", f"-lockstep-record={r.log}"]
+    # The component's own machine, last so it overrides: a generated core
+    # says what it is (-march, -priv, -pmp, -cycle-clock...) in doomv.args.
+    if (args.component / "doomv.args").is_file():
+        ls_args += (args.component / "doomv.args").read_text().split()
     values.update(DOOMV_LS_ARGS=vitis_dut.quote(ls_args), DOOMV_LS_ELF=str(prog.elf), DOOMV_LS_LIMIT=str(args.limit))
     r.command = [f"{k}={v}" for k, v in values.items()] + [f"({args.lockstep}: {args.component})"]
     code, text = args.dut.run(values, out)
