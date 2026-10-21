@@ -392,8 +392,14 @@ uint64_t legalize_mstatus(uint64_t value)
 	if (Extensions.V) keep |= 3ull << 9;                    // VS
 	if (Extensions.H) keep |= (1ull << 38) | (1ull << 39);  // GVA, MPV
 	if (Extensions.ZICFILP) keep |= (1ull << 23) | (1ull << 41);   // SPELP, MPELP
+	// The modes this hart lacks take their fields with them (-priv): S's
+	// SIE, SPIE, SPP, MXR, TVM, TSR and -- with no virtual memory -- SUM;
+	// U's MPRV and TW.
+	if (!Machine.has_s)
+		keep &= ~(MSTATUS_SIE | MSTATUS_SPIE | MSTATUS_SPP | (1ull << 18) | (1ull << 19) | (1ull << 20) | (1ull << 22));
+	if (!Machine.has_u) keep &= ~((1ull << 17) | (1ull << 21));
 	uint64_t mpp = (value >> 11) & 3;
-	if (mpp == 2) mpp = 0;   // not a privilege level: the lowest one, U
+	if (!priv_supported((unsigned)mpp)) mpp = lowest_priv();   // no such mode: the lowest there is
 	return (value & keep) | (mpp << 11);
 }
 
@@ -530,8 +536,8 @@ uint64_t compute_misa()
 	// B is Zba, Zbb and Zbs together -- the ratified B extension is defined
 	// as exactly that set, and misa reports it when all three are present.
 	if (Extensions.ZBA && Extensions.ZBB && Extensions.ZBS) bit('B');
-	bit('S');
-	bit('U');
+	if (Machine.has_s) bit('S');
+	if (Machine.has_u) bit('U');
 	v |= (Extensions.XLEN64 ? 2ull : 1ull) << (Extensions.XLEN64 ? 62 : 30);
 	return v;
 }
@@ -827,6 +833,15 @@ bool RiscvCore::csr_access_permitted(Registers &regs, uint16_t csr, bool writing
 	// Unassigned user-level addresses, for the same reason and with the
 	// same answer: no such register, illegal at every privilege.
 	if (is_unimplemented_user_csr(csr)) return false;
+
+	// A mode the hart lacks (-priv), and its registers with it, as Sail's
+	// is_CSR_accessible: without S, every S-level CSR (0x1xx, satp,
+	// scountovf) and the delegation registers; without U, mcounteren and
+	// menvcfg.
+	if (!Machine.has_s && (((csr >> 8) & 0xF) == 0x1 || ((csr >> 8) & 0xF) == 0x5 || ((csr >> 8) & 0xF) == 0x9
+	                       || ((csr >> 8) & 0xF) == 0xD || csr == 0x302 || csr == 0x303))
+		return false;
+	if (!Machine.has_u && (csr == 0x306 || csr == 0x30A)) return false;
 
 	// Smrnmi's CSRs -- mnscratch, mnepc, mncause, mnstatus. DoomV has no
 	// resumable NMI, so they are not there, and an access traps as it does
@@ -1135,7 +1150,10 @@ uint64_t RiscvCore::read_csr_effective(Registers &regs, Memory &mem, uint16_t cs
 	// mstatus read them from storage, where nothing ever set them -- so they
 	// read as 0 ("no such mode") until reset, which Sail does not. Found by
 	// lock-stepping against Sail at the first trap of every riscv-test.
-	if (csr == CSR_MSTATUS) return vcommon::with_sd(regs.read_csr(CSR_MSTATUS)) | (2ull << 32) | (2ull << 34);
+	// Each only with its mode (-priv): a mode the hart lacks has no XLEN.
+	if (csr == CSR_MSTATUS)
+		return vcommon::with_sd(regs.read_csr(CSR_MSTATUS)) | (Machine.has_u ? 2ull << 32 : 0)
+		     | (Machine.has_s ? 2ull << 34 : 0);
 	if (pmp::is_pmpcfg(csr)) return pmp::read_cfg(regs, csr);
 	if (pmp::is_pmpaddr(csr)) return pmp::read_addr(regs, csr);
 	if (csr == 0x100) return read_sstatus(regs);
@@ -1875,6 +1893,11 @@ void RiscvCore::exec_32ZICSR(const DecodedOp &instr, Registers &regs, Memory &me
 		// switch below. No TLB exists to flush yet, so this is a real,
 		// deliberate no-op rather than an unrecognized encoding.
 		if (instr.funct7 == 0b0001001 && instr.rd == 0) {
+			// No S-mode (-priv): no such instruction, at any privilege.
+			if (!Machine.has_s) {
+				raise_illegal_instruction(regs, instr.raw);
+				return;
+			}
 			// SFENCE.VMA is a supervisor instruction: attempting it from
 			// U-mode is illegal regardless of TVM, and DoomV let it through.
 			// From VU-mode the exception is a virtual instruction instead
@@ -1948,6 +1971,11 @@ void RiscvCore::exec_32ZICSR(const DecodedOp &instr, Registers &regs, Memory &me
 			enter_trap(regs, CAUSE_BREAKPOINT, pc);
 			return;
 		case 0x102: { // SRET -- mirrors MRET below, using the S-mode fields
+			// No S-mode (-priv): no such instruction.
+			if (!Machine.has_s) {
+				raise_illegal_instruction(regs, instr.raw);
+				return;
+			}
 			// hstatus.VTSR traps a guest supervisor's SRET as a *virtual*
 			// instruction (cause 22) rather than an illegal one, so the
 			// hypervisor can emulate the return itself. The bit was defined
@@ -2063,7 +2091,9 @@ void RiscvCore::exec_32ZICSR(const DecodedOp &instr, Registers &regs, Memory &me
 			// returning to M always clears V.
 			bool target_virt = Extensions.H && (mstatus & MSTATUS_MPV) != 0
 			                && target != PrivMode::M;
-			mstatus &= ~MSTATUS_MPP; // MPP reset to U on return, per spec
+			// MPP becomes the least privileged mode the hart has, per spec:
+			// U, or with no U-mode (-priv) S, or M.
+			mstatus = (mstatus & ~MSTATUS_MPP) | ((uint64_t)lowest_priv() << 11);
 			mstatus &= ~MSTATUS_MPV;
 			regs.write_csr(CSR_MSTATUS, mstatus);
 			if (Extensions.H) regs.set_virt(target_virt);

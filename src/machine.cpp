@@ -152,7 +152,8 @@ bool setup_machine(int argc, const char *const *argv, std::unique_ptr<DoomSystem
 			}
 		} else if (arg.rfind("-pmp=", 0) == 0 || arg.rfind("-pmp-grain=", 0) == 0 || arg.rfind("-asidlen=", 0) == 0
 		           || arg.rfind("-vmidlen=", 0) == 0 || arg.rfind("-physaddr-bits=", 0) == 0
-		           || arg.rfind("-cbo-block=", 0) == 0 || arg.rfind("-misaligned=", 0) == 0) {
+		           || arg.rfind("-cbo-block=", 0) == 0 || arg.rfind("-misaligned=", 0) == 0
+		           || arg.rfind("-priv=", 0) == 0) {
 			// The machine's parameters (MachineConfig), as Sail's
 			// configuration sets them; the defaults are Sail's.
 			const std::string v = arg.substr(arg.find('=') + 1);
@@ -193,13 +194,17 @@ bool setup_machine(int argc, const char *const *argv, std::unique_ptr<DoomSystem
 			} else if (arg.rfind("-cbo-block=", 0) == 0) {
 				ok = number(n) && n >= 8 && n <= 4096 && (n & (n - 1)) == 0;
 				Machine.cbo_block = n;
+			} else if (arg.rfind("-priv=", 0) == 0) {
+				ok = v == "m" || v == "mu" || v == "msu";
+				Machine.has_s = v == "msu";
+				Machine.has_u = v != "m";
 			} else {
 				ok = v == "split" || v == "trap";
 				Machine.misaligned_trap = v == "trap";
 			}
 			if (!ok) {
 				std::cout << "bad " << arg << ": -pmp=0|16|64[:usable] -pmp-grain=0..52 -asidlen=0..16 -vmidlen=0..14 "
-				             "-physaddr-bits=32..56 -cbo-block=8..4096 (a power of two) -misaligned=split|trap\n";
+				             "-physaddr-bits=32..56 -cbo-block=8..4096 (a power of two) -misaligned=split|trap -priv=m|mu|msu\n";
 				status = -1;
 				return false;
 			}

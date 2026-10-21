@@ -10,7 +10,8 @@ run exactly the same thing and cannot drift apart:
   3. the extension switches -- each of the vector unit's extensions, Sv48,
      Sv57, Svadu, Zacas and Zabha on and off -- and the machine's parameters
      (PMP, ASID and VMID widths, physical address width, cache block,
-     misaligned trapping), each against Sail set the same
+     misaligned trapping) and smaller machines (-priv: M, M+U, M+S+U, on RV64I
+     to RV64IMAFDC), each against Sail set the same
   4. the in-process lock-step (the DoomV library a core's simulation links)
      and the core's clock, held to Sail's traces
   5. scripts/verify.py -- differential, archtest, hypervisor, vector,
@@ -39,6 +40,7 @@ LOCKSTEP = ROOT / "tools/verification/lockstep_sail.py"
 LOCKSTEP_LIB = ROOT / "tools/verification/lockstep_lib.py"
 EXT_SWITCHES = ROOT / "tools/verification/ext_switches.py"
 MACHINE_PARAMS = ROOT / "tools/verification/machine_params.py"
+PRIV_LOCKSTEP = ROOT / "tools/verification/priv_lockstep.py"
 VERIFY = ROOT / "scripts/verify.py"
 
 
@@ -76,6 +78,7 @@ def main() -> int:
     stages.append(("lock-step vs Sail", [sys.executable, str(LOCKSTEP)]))
     stages.append(("extension switches", [sys.executable, str(EXT_SWITCHES)]))
     stages.append(("machine parameters", [sys.executable, str(MACHINE_PARAMS)]))
+    stages.append(("privilege modes", [sys.executable, str(PRIV_LOCKSTEP)]))
     stages.append(("lock-step library", [sys.executable, str(LOCKSTEP_LIB)]))
     stages.append(("verify.py", verify))
 

@@ -49,7 +49,7 @@ constexpr char MAGIC[8] = {'D', 'O', 'O', 'M', 'V', 'S', 'N', 'P'};
 // reads as a machine of one; version 2 has no network card, 3 no
 // real-time clock, 4 no sound card, with two queues to a virtio device
 // where there are now four, 5 no GPU, and 6 no GPU 3D state.
-constexpr uint32_t VERSION = 10;
+constexpr uint32_t VERSION = 11;
 
 class Writer {
 public:
@@ -565,11 +565,12 @@ struct SaveState {
 	}
 
 	// The machine's parameters as the snapshot records them, in a fixed order.
-	static constexpr size_t MACHINE_FIELDS = 8;
+	// Version 10 recorded the first eight; 11 added the privilege modes.
+	static constexpr size_t MACHINE_FIELDS = 10;
 	static std::array<uint32_t, MACHINE_FIELDS> machine_fields(const MachineConfig &m)
 	{
 		return {m.pmp_count, m.pmp_usable, m.pmp_grain, m.asidlen, m.vmidlen, m.physaddr_bits, m.cbo_block,
-		        (uint32_t)m.misaligned_trap};
+		        (uint32_t)m.misaligned_trap, (uint32_t)m.has_s, (uint32_t)m.has_u};
 	}
 
 	// What must match between the run that saved and the one restoring: the
@@ -725,7 +726,8 @@ bool SaveState::restore(DoomSystem &s, const std::string &dir)
 		}
 	}
 	std::array<uint32_t, MACHINE_FIELDS> fields = machine_fields(MachineConfig{});
-	if (version >= 10) for (uint32_t &v : fields) v = r.get<uint32_t>();
+	if (version >= 10)
+		for (size_t i = 0; i < (version >= 11 ? MACHINE_FIELDS : 8); i++) fields[i] = r.get<uint32_t>();
 	if (fields != machine_fields(Machine)) differ += " machine parameters (-pmp, -asidlen, ...)";
 	if (!differ.empty()) {
 		std::cout << "restore: this machine is not the one the snapshot was taken on -- start it with "

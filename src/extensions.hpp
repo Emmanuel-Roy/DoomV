@@ -206,8 +206,19 @@ struct MachineConfig {
 	unsigned physaddr_bits = 56;   // -physaddr-bits=: what satp, hgatp and pmpaddr keep
 	unsigned cbo_block = 64;       // -cbo-block=: the bytes a cbo.* instruction covers
 	bool misaligned_trap = false;  // -misaligned=trap: a misaligned load or store traps
+	// -priv=m|mu|msu: the privilege modes besides M (Sail's extensions.S and
+	// .U). Without S there are no S-mode CSRs, no delegation, no sret or
+	// sfence.vma, no virtual memory; without U, no mcounteren or menvcfg,
+	// and MPRV and TW read zero. mstatus.MPP holds only modes there are.
+	bool has_s = true;
+	bool has_u = true;
 };
+
 inline MachineConfig Machine;
+// The least privileged mode the hart has: what an MPP that names no mode
+// becomes, and what mret leaves in MPP. PrivMode-encoded (0 U, 1 S, 3 M).
+inline unsigned lowest_priv() { return Machine.has_u ? 0 : Machine.has_s ? 1 : 3; }
+inline bool priv_supported(unsigned p) { return p == 3 || (p == 1 && Machine.has_s) || (p == 0 && Machine.has_u); }
 // What the hart supports, as -march chose it. Extensions is what is enabled
 // right now: misa is writable, and clearing a letter turns its extension off
 // until it is set again, so Extensions follows misa and this does not.
