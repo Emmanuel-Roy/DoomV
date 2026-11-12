@@ -60,8 +60,13 @@ void RiscvCore::exec_ZBS(const DecodedOp &instr, Registers &regs, Memory &mem)
 	uint8_t funct7 = instr.funct7;
 	uint8_t funct6 = (uint8_t)(funct7 >> 1);
 
+	// RV32: the bit index is taken mod XLEN = 32 (bset with rs2 = 32 sets bit
+	// 0, not bit 32), and the result is sign-extended back into the 64-bit
+	// container like every RV32 result (bseti 31 must read as negative).
+	const unsigned index_mask = Extensions.XLEN64 ? 63 : 31;
+
 	if (instr.opcode == 0b0110011) { // register forms: index from rs2
-		unsigned n = (unsigned)(regs.read_x(instr.rs2) & 63);
+		unsigned n = (unsigned)(regs.read_x(instr.rs2) & index_mask);
 		if (funct7 == 0b0100100) {
 			result = (funct3 == 0b001) ? (rs1_val & ~(1ull << n))   // bclr
 			                           : ((rs1_val >> n) & 1);      // bext
@@ -71,7 +76,7 @@ void RiscvCore::exec_ZBS(const DecodedOp &instr, Registers &regs, Memory &mem)
 			result = rs1_val | (1ull << n);                          // bset
 		}
 	} else { // OP-IMM: index from the shamt field
-		unsigned n = (unsigned)((uint64_t)instr.imm & 63);
+		unsigned n = (unsigned)((uint64_t)instr.imm & index_mask);
 		if (funct3 == 0b001) {
 			result = (funct6 == 0b001010) ? (rs1_val | (1ull << n))   // bseti
 			       : (funct6 == 0b010010) ? (rs1_val & ~(1ull << n))  // bclri
@@ -81,6 +86,7 @@ void RiscvCore::exec_ZBS(const DecodedOp &instr, Registers &regs, Memory &mem)
 		}
 	}
 
+	if (!Extensions.XLEN64) result = (uint64_t)(int64_t)(int32_t)(uint32_t)result;
 	regs.write_x(instr.rd, result);
 	regs.set_pc(pc + instr.length);
 }
