@@ -1,0 +1,89 @@
+--- a/r_defs.h
++++ b/r_defs.h
+@@ -48,7 +48,8 @@
+ #define SIL_TOP			2
+ #define SIL_BOTH		3
+ 
+-#define MAXDRAWSEGS		256
++// Pico2Doom: was 256. Peak in the sim's -explore runs: 102.
++#define MAXDRAWSEGS		160
+ 
+ 
+ 
+--- a/r_plane.h
++++ b/r_plane.h
+@@ -28,6 +28,12 @@
+ // Visplane related.
+ extern  short*		lastopening;
+ 
++// Pico2Doom: was SCREENWIDTH*64 (40 KB). The most any shareware map used in
++// the sim's -explore runs was 3768; 6400 leaves 70% headroom, and
++// R_StoreWallRange now stops adding walls instead of overrunning.
++#define MAXOPENINGS	(SCREENWIDTH*20)
++extern short		openings[MAXOPENINGS];
++
+ 
+ typedef void (*planefunction_t) (int top, int bottom);
+ 
+--- a/r_plane.c
++++ b/r_plane.c
+@@ -42,14 +42,15 @@
+ //
+ 
+ // Here comes the obnoxious "visplane".
+-#define MAXVISPLANES	128
++// Pico2Doom: was 128 (85 KB); 56 is 37 KB. The shareware maps peak at 45 in the sim's
++// -explore runs. When full, planes are merged instead of crashing.
++#define MAXVISPLANES	56
+ visplane_t		visplanes[MAXVISPLANES];
+ visplane_t*		lastvisplane;
+ visplane_t*		floorplane;
+ visplane_t*		ceilingplane;
+ 
+ // ?
+-#define MAXOPENINGS	SCREENWIDTH*64
+ short			openings[MAXOPENINGS];
+ short*			lastopening;
+ 
+@@ -235,8 +236,10 @@
+     if (check < lastvisplane)
+ 	return check;
+ 		
++    // Pico2Doom: full -- reuse the last plane (a visual glitch) rather than
++    // I_Error.
+     if (lastvisplane - visplanes == MAXVISPLANES)
+-	I_Error ("R_FindPlane: no more visplanes");
++	return lastvisplane - 1;
+ 		
+     lastvisplane++;
+ 
+@@ -302,6 +305,15 @@
+ 	return pl;		
+     }
+ 	
++    // Pico2Doom: no room for a new visplane -- widen this one instead.
++    // Vanilla never checked here and overran the array.
++    if (lastvisplane - visplanes == MAXVISPLANES)
++    {
++	pl->minx = unionl;
++	pl->maxx = unionh;
++	return pl;
++    }
++
+     // make a new visplane
+     lastvisplane->height = pl->height;
+     lastvisplane->picnum = pl->picnum;
+--- a/r_segs.c
++++ b/r_segs.c
+@@ -381,6 +381,11 @@
+ 
+     // don't overflow and crash
+     if (ds_p == &drawsegs[MAXDRAWSEGS])
++	return;
++
++    // Pico2Doom: nor overrun the (smaller) openings array. A wall can store
++    // up to three columns' worth: masked texture, top and bottom clips.
++    if (lastopening + 3 * (stop - start + 1) > openings + MAXOPENINGS)
+ 	return;		
+ 		
+ #ifdef RANGECHECK

@@ -1,0 +1,51 @@
+--- a/p_setup.c
++++ b/p_setup.c
+@@ -509,7 +509,16 @@
+ 
+     lumplen = W_LumpLength(lump);
+     count = lumplen / 2;
+-	
++
++#ifndef SYS_BIG_ENDIAN
++    // Pico2Doom: on a little-endian CPU the lump is already in the format
++    // DOOM wants, so use it where it is -- in the memory-mapped WAD, i.e.
++    // flash -- instead of copying it into the zone (up to 19 KB a map).
++    // Nothing writes to the blockmap after this.
++    (void)i;
++    blockmaplump = W_CacheLumpNum(lump, PU_LEVEL);
++    blockmap = blockmaplump + 4;
++#else
+     blockmaplump = Z_Malloc(lumplen, PU_LEVEL, NULL);
+     W_ReadLump(lump, blockmaplump);
+     blockmap = blockmaplump + 4;
+@@ -520,6 +529,7 @@
+     {
+ 	blockmaplump[i] = SHORT(blockmaplump[i]);
+     }
++#endif
+ 		
+     // Read the header
+ 
+--- a/r_state.h
++++ b/r_state.h
+@@ -105,7 +105,8 @@
+ // ?
+ extern angle_t		clipangle;
+ 
+-extern int		viewangletox[FINEANGLES/2];
++// Pico2Doom: short, not int -- the values are screen columns (8 KB saved).
++extern short		viewangletox[FINEANGLES/2];
+ extern angle_t		xtoviewangle[SCREENWIDTH+1];
+ //extern fixed_t		finetangent[FINEANGLES/2];
+ 
+--- a/r_main.c
++++ b/r_main.c
+@@ -90,7 +90,7 @@
+ // maps the visible view angles to screen X coordinates,
+ // flattening the arc to a flat projection plane.
+ // There will be many angles mapped to the same X. 
+-int			viewangletox[FINEANGLES/2];
++short			viewangletox[FINEANGLES/2];
+ 
+ // The xtoviewangleangle[] table maps a screen pixel
+ // to the lowest viewangle that maps back to x ranges

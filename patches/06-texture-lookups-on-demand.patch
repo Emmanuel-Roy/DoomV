@@ -1,0 +1,245 @@
+--- a/r_data.c
++++ b/r_data.c
+@@ -151,6 +151,8 @@
+ unsigned short**	texturecolumnofs;
+ byte**			texturecomposite;
+ 
++void R_EnsureLookup (int texnum);
++
+ // for global animation
+ int*		flattranslation;
+ int*		texturetranslation;
+@@ -218,37 +220,38 @@
+ 
+ 
+ //
+-// R_GenerateComposite
+-// Using the texture definition,
+-//  the composite texture is created from the patches,
+-//  and each column is cached.
++// R_CompositeColumn
++// Pico2Doom: replaces R_GenerateComposite.
+ //
+-void R_GenerateComposite (int texnum)
++// A wall column covered by more than one patch has to be assembled from
++// them. Vanilla assembles the *whole texture* the first time any such
++// column is drawn and keeps it in the zone -- up to 32 KB in one block for
++// a big texture, the zone's largest and most fragmenting allocations.
++// Every caller of R_GetColumn draws the column straight away, so here just
++// that one column is assembled, into a static buffer, each time it is
++// needed: a little more work per multi-patch column, no zone memory at all.
++// The patches are drawn in the same order with the same clipping as the
++// original, so the result is the same.
++//
++// One quirk is kept on purpose: the column drawers read up to 128 rows
++// whatever the texture's height, so a shorter texture's column runs on into
++// the bytes after it -- in vanilla, the next multi-patch column of the
++// composite (the "tutti-frutti" effect). Those columns are assembled too,
++// until 128 rows are filled, so even that looks exactly as it did.
++//
++#define COMPOSITE_PAD 3   // R_RenderMaskedSegRange reads 3 bytes before a column
++#define COMPOSITE_ROWS 128
++static byte composite_column[COMPOSITE_PAD + 1024 + COMPOSITE_ROWS];
++
++static void R_AssembleColumn (texture_t *texture, int x, byte *out)
+ {
+-    byte*		block;
+-    texture_t*		texture;
+-    texpatch_t*		patch;	
++    texpatch_t*		patch;
+     patch_t*		realpatch;
+-    int			x;
++    column_t*		patchcol;
+     int			x1;
+     int			x2;
+     int			i;
+-    column_t*		patchcol;
+-    short*		collump;
+-    unsigned short*	colofs;
+-	
+-    texture = textures[texnum];
+ 
+-    block = Z_Malloc (texturecompositesize[texnum],
+-		      PU_STATIC, 
+-		      &texturecomposite[texnum]);	
+-
+-    collump = texturecolumnlump[texnum];
+-    colofs = texturecolumnofs[texnum];
+-    
+-    // Composite the columns together.
+-    patch = texture->patches;
+-		
+     for (i=0 , patch = texture->patches;
+ 	 i<texture->patchcount;
+ 	 i++, patch++)
+@@ -257,33 +260,47 @@
+ 	x1 = patch->originx;
+ 	x2 = x1 + SHORT(realpatch->width);
+ 
+-	if (x1<0)
+-	    x = 0;
+-	else
+-	    x = x1;
+-	
+-	if (x2 > texture->width)
+-	    x2 = texture->width;
++	if (x < x1 || x >= x2)
++	    continue;
+ 
+-	for ( ; x<x2 ; x++)
+-	{
+-	    // Column does not have multiple patches?
+-	    if (collump[x] >= 0)
+-		continue;
+-	    
+-	    patchcol = (column_t *)((byte *)realpatch
+-				    + LONG(realpatch->columnofs[x-x1]));
+-	    R_DrawColumnInCache (patchcol,
+-				 block + colofs[x],
+-				 patch->originy,
+-				 texture->height);
+-	}
+-						
++	patchcol = (column_t *)((byte *)realpatch
++				+ LONG(realpatch->columnofs[x-x1]));
++	R_DrawColumnInCache (patchcol, out, patch->originy, texture->height);
+     }
++}
+ 
+-    // Now that the texture has been built in column cache,
+-    //  it is purgable from zone memory.
+-    Z_ChangeTag (block, PU_CACHE);
++static byte *R_CompositeColumn (int texnum, int x)
++{
++    texture_t*		texture;
++    short*		collump;
++    byte*		out = composite_column + COMPOSITE_PAD;
++    int			filled;
++
++    texture = textures[texnum];
++    if (texture->height > 1024)
++    {
++	I_Error ("R_CompositeColumn: texture %s is too tall", texture->name);
++    }
++
++    R_AssembleColumn (texture, x, out);
++    filled = texture->height;
++
++    // What vanilla's composite block holds after this column.
++    collump = texturecolumnlump[texnum];
++    while (filled < COMPOSITE_ROWS)
++    {
++	do
++	    x++;
++	while (x < texture->width && collump[x] >= 0);
++
++	if (x >= texture->width)
++	    break;
++
++	R_AssembleColumn (texture, x, out + filled);
++	filled += texture->height;
++    }
++
++    return out;
+ }
+ 
+ 
+@@ -306,9 +323,9 @@
+ 	
+     texture = textures[texnum];
+ 
+-    // Composited texture not created yet.
+-    texturecomposite[texnum] = 0;
+-    
++    // Pico2Doom: this now runs whenever a purged lookup is rebuilt, and a
++    // composite built earlier is still valid, so texturecomposite[] is left
++    // alone (R_InitTextures clears it once).
+     texturecompositesize[texnum] = 0;
+     collump = texturecolumnlump[texnum];
+     colofs = texturecolumnofs[texnum];
+@@ -350,6 +367,7 @@
+ 	{
+ 	    printf ("R_GenerateLookup: column without a patch (%s)\n",
+ 		    texture->name);
++	    Z_Free(patchcount);
+ 	    return;
+ 	}
+ 	// I_Error ("R_GenerateLookup: column without a patch");
+@@ -373,6 +391,32 @@
+     Z_Free(patchcount);
+ }
+ 
++//
++// R_EnsureLookup
++// Pico2Doom: build a texture's column lookup on first use.
++//
++// Vanilla builds every texture's lookup at startup and keeps it: two shorts
++// per column of every texture, 64 KB for DOOM1.WAD, most of it for textures
++// the current level never shows. Here it is built the first time a texture
++// is drawn, as one block (lumps, then offsets) tagged PU_CACHE, so the zone
++// can throw it away under pressure and it is simply rebuilt when next used.
++//
++void R_EnsureLookup (int texnum)
++{
++    int width;
++    short *block;
++
++    if (texturecolumnlump[texnum] != NULL)
++	return;
++
++    width = textures[texnum]->width;
++    block = Z_Malloc (width * (sizeof(short) + sizeof(unsigned short)),
++		      PU_STATIC, &texturecolumnlump[texnum]);
++    texturecolumnofs[texnum] = (unsigned short *) (block + width);
++    R_GenerateLookup (texnum);       // its own Z_Malloc can't purge a PU_STATIC block
++    Z_ChangeTag (block, PU_CACHE);
++}
++
+ 
+ 
+ 
+@@ -388,16 +432,15 @@
+     int		ofs;
+ 	
+     col &= texturewidthmask[tex];
++    R_EnsureLookup (tex);
+     lump = texturecolumnlump[tex][col];
+     ofs = texturecolumnofs[tex][col];
+     
+     if (lump > 0)
+ 	return (byte *)W_CacheLumpNum(lump,PU_CACHE)+ofs;
+ 
+-    if (!texturecomposite[tex])
+-	R_GenerateComposite (tex);
+-
+-    return texturecomposite[tex] + ofs;
++    // Pico2Doom: a multi-patch column, assembled on the spot.
++    return R_CompositeColumn (tex, col);
+ }
+ 
+ 
+@@ -592,8 +635,10 @@
+ 			 texture->name);
+ 	    }
+ 	}		
+-	texturecolumnlump[i] = Z_Malloc (texture->width*sizeof(**texturecolumnlump), PU_STATIC,0);
+-	texturecolumnofs[i] = Z_Malloc (texture->width*sizeof(**texturecolumnofs), PU_STATIC,0);
++	// Pico2Doom: built on first use by R_EnsureLookup.
++	texturecolumnlump[i] = NULL;
++	texturecolumnofs[i] = NULL;
++	texturecomposite[i] = NULL;
+ 
+ 	j = 1;
+ 	while (j*2 <= texture->width)
+@@ -611,10 +656,7 @@
+     if (maptex2)
+         W_ReleaseLumpName(DEH_String("TEXTURE2"));
+     
+-    // Precalculate whatever possible.	
+-
+-    for (i=0 ; i<numtextures ; i++)
+-	R_GenerateLookup (i);
++    // Pico2Doom: lookups are no longer precalculated (R_EnsureLookup).
+     
+     // Create translation table for global animation.
+     texturetranslation = Z_Malloc ((numtextures+1)*sizeof(*texturetranslation), PU_STATIC, 0);
