@@ -95,6 +95,8 @@ public:
 	// at exactly those counts and ignores the window, stdin and -input.
 	bool set_input_record(const char *path);
 	bool set_input_replay(const char *path);
+	// -picolink=FILE: Pico2Doom lock-step against a real Pico 2 (pico_link.hpp).
+	bool set_pico_link(const char *path);
 	// -net: a network card, with user-mode NAT behind it (src/net/usernet).
 	// Call after set_input_replay: a replay gets the card but no network,
 	// only the frames the log recorded.

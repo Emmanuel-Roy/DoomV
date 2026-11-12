@@ -1,5 +1,7 @@
 #pragma once
 #include "guest_ram.hpp"
+#include "pico_link.hpp"
+#include <memory>
 #include "timer.hpp"
 #include "imsic.hpp"
 #include "aplic.hpp"
@@ -19,6 +21,10 @@ class Memory {
 	// Machine state is saved and restored field by field in savestate.cpp.
 	friend struct SaveState;
 public:
+	// Pico2Doom lock-step device (-picolink=FILE, see pico_link.hpp), or null.
+	PicoLink *pico_link() const { return pico_link_.get(); }
+	void attach_pico_link(std::unique_ptr<PicoLink> link) { pico_link_ = std::move(link); }
+
 	// MMIO/RAM/WAD addresses are still small values that fit comfortably in
 	// 64 bits -- RV64 doesn't require actually using a 64-bit-wide address
 	// space, just being able to represent one.
@@ -541,6 +547,9 @@ private:
 	int key_queue_tail;
 
 	uint64_t instr_count;   // steps taken -- see instruction_count()
+	// Pico2Doom lock-step (-picolink=FILE): replays a real Pico 2's inputs and
+	// checks its per-frame hashes and retired-instruction counts. Null when off.
+	std::unique_ptr<PicoLink> pico_link_;
 	uint32_t tick_counter;  // instr_count / INSTR_PER_MS -- what MMIO_TICK exposes
 	uint32_t ms_accum;      // instructions banked toward the next tick_counter++ (avoids a divide every instruction)
 	uint32_t fb_write_count;

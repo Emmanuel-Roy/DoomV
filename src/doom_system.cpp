@@ -1540,6 +1540,27 @@ void DoomSystem::cpu_loop()
 			progress_next = (memory.instruction_count() / progress_every + 1) * progress_every;
 		}
 		if (gdb) gdb_service();
+		// Pico2Doom lock-step: the guest just finished a frame (or asked for an
+		// input) that the real Pico did differently. Stop here, state saved,
+		// for Sail lock-step or the debugger to examine.
+		if (PicoLink *link = memory.pico_link(); link && link->take_halt_request()) {
+			debugger.halted = true;
+			console_drain();
+			debugger.dump_log(cur->regs, memory, "crash.log");
+			// DOOM's picture as DoomV drew it (the guest presents right after
+			// the check), to set beside the Pico's frame from picolink.py.
+			if (FILE *ppm = std::fopen("picolink_doomv.ppm", "wb")) {
+				const uint8_t *fb = memory.framebuffer();   // 0x00RRGGBB words, little-endian
+				std::fprintf(ppm, "P6\n%d %d\n255\n", (int)Memory::FB_W, (int)Memory::FB_H);
+				for (uint32_t i = 0; i < Memory::FB_W * Memory::FB_H; i++) {
+					const uint8_t rgb[3] = { fb[4 * i + 2], fb[4 * i + 1], fb[4 * i] };
+					std::fwrite(rgb, 1, 3, ppm);
+				}
+				std::fclose(ppm);
+			}
+			std::cerr << "picolink: machine halted at step " << memory.instruction_count()
+			          << "; state in crash.log, DOOM's picture in picolink_doomv.ppm\n";
+		}
 		if (debugger.halted) {
 			if (resume_requested.exchange(false)) {
 				resume_from_halt();
@@ -2913,4 +2934,12 @@ void DoomSystem::cosim_after_step()
 	if (line == cosim_line) return;
 	cosim_line = line;
 	std::fprintf(memory.cosim, "I %llu %d\n", (unsigned long long)memory.instruction_count(), line ? 1 : 0);
+}
+
+bool DoomSystem::set_pico_link(const char *path)
+{
+	auto link = std::make_unique<PicoLink>();
+	if (!link->open(path)) return false;
+	memory.attach_pico_link(std::move(link));
+	return true;
 }
