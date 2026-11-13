@@ -1,4 +1,5 @@
-// USB descriptors: one device, two CDC-ACM serial ports (console + link).
+// USB descriptors: one device, three CDC-ACM serial ports (console, link,
+// and the half-size video core 1 streams: core1_io.c).
 #include <string.h>
 
 #include "pico/unique_id.h"
@@ -30,7 +31,7 @@ const uint8_t *tud_descriptor_device_cb(void)
 	return (const uint8_t *)&device;
 }
 
-enum { ITF_CONSOLE, ITF_CONSOLE_DATA, ITF_LINK, ITF_LINK_DATA, ITF_COUNT };
+enum { ITF_CONSOLE, ITF_CONSOLE_DATA, ITF_LINK, ITF_LINK_DATA, ITF_VIDEO, ITF_VIDEO_DATA, ITF_COUNT };
 
 #define EP_CONSOLE_NOTIF 0x81
 #define EP_CONSOLE_OUT   0x02
@@ -38,13 +39,17 @@ enum { ITF_CONSOLE, ITF_CONSOLE_DATA, ITF_LINK, ITF_LINK_DATA, ITF_COUNT };
 #define EP_LINK_NOTIF    0x83
 #define EP_LINK_OUT      0x04
 #define EP_LINK_IN       0x84
+#define EP_VIDEO_NOTIF   0x85
+#define EP_VIDEO_OUT     0x06
+#define EP_VIDEO_IN      0x86
 
-#define CONFIG_LEN (TUD_CONFIG_DESC_LEN + 2 * TUD_CDC_DESC_LEN)
+#define CONFIG_LEN (TUD_CONFIG_DESC_LEN + 3 * TUD_CDC_DESC_LEN)
 
 static const uint8_t configuration[] = {
 	TUD_CONFIG_DESCRIPTOR(1, ITF_COUNT, 0, CONFIG_LEN, 0x00, 100),
 	TUD_CDC_DESCRIPTOR(ITF_CONSOLE, 4, EP_CONSOLE_NOTIF, 8, EP_CONSOLE_OUT, EP_CONSOLE_IN, 64),
 	TUD_CDC_DESCRIPTOR(ITF_LINK, 5, EP_LINK_NOTIF, 8, EP_LINK_OUT, EP_LINK_IN, 64),
+	TUD_CDC_DESCRIPTOR(ITF_VIDEO, 6, EP_VIDEO_NOTIF, 8, EP_VIDEO_OUT, EP_VIDEO_IN, 64),
 };
 
 const uint8_t *tud_descriptor_configuration_cb(uint8_t index)
@@ -60,6 +65,7 @@ static const char *strings[] = {
 	NULL,                    // 3: serial: the board's unique ID
 	"Pico2Doom console",     // 4: CDC 0
 	"Pico2Doom link",        // 5: CDC 1
+	"Pico2Doom video",       // 6: CDC 2
 };
 
 const uint16_t *tud_descriptor_string_cb(uint8_t index, uint16_t langid)

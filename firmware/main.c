@@ -21,6 +21,7 @@
 #include "hardware/vreg.h"
 #include "hardware/watchdog.h"
 #include "hardware/sync.h"
+#include "hardware/structs/qmi.h"
 
 #include "board_config.h"
 #include "buttons.h"
@@ -50,6 +51,14 @@ enum { MODE_PLAY, MODE_BENCH, MODE_LINK };
 
 static enum port_link_mode link_mode = LINK_NONE;
 static uint32_t frame_count;
+
+// Frame pacing: frames go to the display on a fixed beat, DOOM_FPS_CAP a
+// second, when DOOM renders faster than that -- a locked frame rate instead of
+// one that swings with the scene. 0 turns it off; the benchmark runs unpaced.
+#ifndef DOOM_FPS_CAP
+#define DOOM_FPS_CAP 30
+#endif
+static uint32_t pace_us = DOOM_FPS_CAP ? 1000000u / DOOM_FPS_CAP : 0;
 
 // ---- time -----------------------------------------------------------------
 
@@ -178,22 +187,6 @@ uint8_t *backend_zone(int *size)
 
 // ---- display ---------------------------------------------------------------------
 
-static void stream_video(const uint8_t *frame, const uint8_t *pal_rgb)
-{
-	static uint32_t last_pal_hash;
-	uint32_t ph = port_hash_bytes(pal_rgb, 768, 2166136261u);
-	if (ph != last_pal_hash) {
-		uint8_t tag = LINK_TAG_PALETTE;
-		usb_link_write(&tag, 1);
-		usb_link_write(pal_rgb, 768);
-		last_pal_hash = ph;
-	}
-	uint8_t hdr[5] = { LINK_TAG_VIDEO, (uint8_t)frame_count, (uint8_t)(frame_count >> 8),
-	                   (uint8_t)(frame_count >> 16), (uint8_t)(frame_count >> 24) };
-	usb_link_write(hdr, 5);
-	usb_link_write(frame, PORT_SCREEN_W * PORT_SCREEN_H);
-}
-
 // Core 1 sends the frame. DOOM waits only while core 1 reads the rows that
 // are not in port_video.c's copy (all 200 when there is no copy, none when
 // the whole frame is copied), then draws the next frame while core 1 sends
@@ -202,9 +195,21 @@ void backend_present(const uint8_t *frame, const uint16_t *pal565, const uint8_t
                      const uint8_t *tail, int tail_rows)
 {
 	frame_count++;
-	int every = io_video_every();
-	if (every && usb_link_connected() && frame_count % every == 0)
-		stream_video(frame, pal_rgb);   // before DOOM can touch `frame` again
+	// Wait for this frame's slot. A busy wait (core 0 takes no interrupts in
+	// link mode), outside every counted window; the clock values DOOM reads
+	// after it are recorded like any others, so DoomV sees the same run.
+	if (pace_us) {
+		static uint64_t slot;
+		uint64_t now = time_us_64();
+		if (slot && now < slot) {
+			while (time_us_64() < slot) tight_loop_contents();
+			now = slot;
+		}
+		// The next slot one beat on; after a slow frame, a beat from now
+		// (no burst of fast frames to catch up).
+		slot = (slot && now - slot < pace_us) ? slot + pace_us : now + pace_us;
+	}
+	(void)pal_rgb;   // the PC's video comes from core 1 (core1_io.c), in RGB565
 	io_present(frame, tail, tail_rows, pal565);
 }
 
@@ -216,9 +221,23 @@ enum port_link_mode backend_link_mode(void) { return link_mode; }
 void backend_link_write(const void *data, size_t len) { usb_link_write(data, len); }
 uint32_t backend_replay_ticks(void) { return 0; }
 int backend_replay_key(int *p, unsigned char *k) { (void)p; (void)k; return 0; }
+// The Pico records; DoomV compares. In a co-run (picolink.py corun) DoomV
+// replays the stream as it arrives, and the PC holds the Pico here -- after
+// the frame's record has gone out, outside every counted window -- until
+// DoomV has checked enough frames to let it run on. The clock values DOOM
+// reads while it waits are recorded like any others, so pacing changes
+// nothing DoomV compares.
 void backend_link_check(uint32_t f, uint32_t a, uint32_t b, uint32_t it, uint32_t ir)
 {
-	(void)f; (void)a; (void)b; (void)it; (void)ir;   // the Pico records; DoomV compares
+	(void)a; (void)b; (void)it; (void)ir;
+	uint32_t at;
+	if (link_mode == LINK_RECORD && io_link_wait(f, &at)) {
+		static char msg[160];
+		snprintf(msg, sizeof msg, "Lock-step: DoomV diverged at frame %lu.\n"
+		         "The Pico stopped after frame %lu; DoomV is halted\nthere (details on the PC).",
+		         (unsigned long)at, (unsigned long)f);
+		backend_fatal(msg);
+	}
 }
 
 // ---- stopping -----------------------------------------------------------------
@@ -262,13 +281,36 @@ void backend_fatal(const char *msg)
 
 void backend_init(void) {}
 
+// Flash (XIP) timing for an overclock. The boot code reads the flash at
+// clk_sys/2, sampling 2 half-cycles after the clock edge: right for 150 MHz
+// (75 MHz flash, a 6.7 ns delay). Faster clocks keep the flash at or under
+// 100 MHz (the W25Q on a Pico 2 is rated 133) and the sample point near the
+// same 6.7 ns. Runs from RAM: it retimes the flash it would otherwise be
+// fetched from.
+static void __no_inline_not_in_flash_func(set_flash_timing)(uint32_t sys_mhz)
+{
+	uint32_t div = (sys_mhz + 99) / 100;
+	if (div < 2) div = 2;
+	uint32_t rxdelay = (sys_mhz * 134 + 5000) / 10000;   // 6.7 ns in half-cycles, rounded
+	if (rxdelay < 2) rxdelay = 2;
+	if (rxdelay > 7) rxdelay = 7;
+	uint32_t t = qmi_hw->m[0].timing;
+	t &= ~(QMI_M0_TIMING_CLKDIV_BITS | QMI_M0_TIMING_RXDELAY_BITS);
+	t |= div << QMI_M0_TIMING_CLKDIV_LSB | rxdelay << QMI_M0_TIMING_RXDELAY_LSB;
+	qmi_hw->m[0].timing = t;
+	(void)qmi_hw->m[0].timing;
+}
+
 int main(void)
 {
 	paint_stack();
 
 	if (DOOM_SYS_MHZ > 150) {
-		vreg_set_voltage(VREG_VOLTAGE_1_20);   // headroom for an overclock
+		// Headroom for the overclock, and flash timing for it first (at the
+		// stock clock the new timing is merely slower than needed).
+		vreg_set_voltage(DOOM_SYS_MHZ > 266 ? VREG_VOLTAGE_1_30 : VREG_VOLTAGE_1_20);
 		sleep_ms(2);
+		set_flash_timing(DOOM_SYS_MHZ);
 	}
 	set_sys_clock_khz(DOOM_SYS_MHZ * 1000, true);
 	// Run the peripheral clock (and so the LCD's SPI) from the system clock.
@@ -287,7 +329,11 @@ int main(void)
 	if (buttons_raw() & (1u << BTN_FIRE)) mode = MODE_BENCH;
 
 	// The display is set up here, then belongs to core 1.
+	// Default: the fastest clock_peri/even divider at or under 42 MHz -- 37.5 MHz
+	// at the stock 150 MHz (proven on the board), 41.7 at 250, 37.5 at 300.
 	uint32_t spi_hz = DOOM_LCD_SPI_HZ ? DOOM_LCD_SPI_HZ : clock_get_hz(clk_peri) / 4;
+	if (!DOOM_LCD_SPI_HZ)
+		while (spi_hz > 42000000u) spi_hz = clock_get_hz(clk_peri) / (clock_get_hz(clk_peri) / spi_hz + 2);
 	spi_hz = lcd_init(spi_hz);
 	io_start();
 
@@ -302,6 +348,7 @@ int main(void)
 	if (mode == MODE_BENCH) {
 		extra[0] = "-timedemo";
 		extra[1] = "demo1";
+		pace_us = 0;                            // the benchmark measures flat out
 		io_message("Pico2Doom", "Benchmark: timedemo DEMO1...");
 	}
 	if (mode == MODE_LINK) {

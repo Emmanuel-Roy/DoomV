@@ -46,8 +46,10 @@ pico_sdk_init()
 include(${ROOT}/port/port.cmake)
 
 # --- options ---------------------------------------------------------------
-set(DOOM_SYS_MHZ 150 CACHE STRING "System clock in MHz (150 = stock; 200-250 overclocks)")
-set(DOOM_LCD_SPI_HZ 0 CACHE STRING "ILI9341 SPI clock in Hz (0 = fastest reliable: sys/4)")
+set(DOOM_SYS_MHZ 250 CACHE STRING "System clock in MHz (150 = stock; 250 = default overclock; 300 hangs at boot)")
+set(DOOM_LCD_SPI_HZ 0 CACHE STRING "ILI9341 SPI clock in Hz (0 = fastest at or under 42 MHz)")
+set(DOOM_FPS_CAP 30 CACHE STRING "Frame pacing: frames per second shown (0 = unpaced)")
+option(DOOM_LCD_TEAR "Never wait for the LCD: send a frame only when it is idle (can tear; keeps 30 fps)" ON)
 
 add_executable(pico2doom
   main.c
@@ -64,6 +66,8 @@ target_include_directories(pico2doom PRIVATE ${CMAKE_CURRENT_LIST_DIR})
 target_compile_definitions(pico2doom PRIVATE
   DOOM_SYS_MHZ=${DOOM_SYS_MHZ}
   DOOM_LCD_SPI_HZ=${DOOM_LCD_SPI_HZ}
+  DOOM_FPS_CAP=${DOOM_FPS_CAP}
+  DOOM_LCD_TEAR=$<BOOL:${DOOM_LCD_TEAR}>
   # Core 0's stack: the linker reserves 4 KB at the top of SCRATCH_Y, and
   # SCRATCH_X (4 KB) sits directly below it, unused -- core 1 runs on a
   # stack in main RAM (usb_link.c) -- so DOOM really has 8 KB.

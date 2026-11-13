@@ -13,7 +13,7 @@
 
 #include "usb_link.h"
 
-enum { CDC_CONSOLE = 0, CDC_LINK = 1 };
+enum { CDC_CONSOLE = 0, CDC_LINK = 1, CDC_VIDEO = 2 };
 
 typedef struct {
 	uint8_t *buf;
@@ -27,6 +27,7 @@ static ring_t console = { console_buf, sizeof console_buf, 0, 0 };
 static ring_t link = { link_buf, sizeof link_buf, 0, 0 };
 
 static volatile bool link_open;
+static bool video_open;   // core 1 only
 
 static uint32_t ring_used(const ring_t *r) { return r->head - r->tail; }
 static uint32_t ring_free(const ring_t *r) { return r->size - ring_used(r); }
@@ -70,6 +71,8 @@ void usb_service(void (*host_byte)(uint8_t c))
 	if (tud_cdc_n_connected(CDC_CONSOLE)) drain(&console, CDC_CONSOLE);
 	else console.tail = console.head;          // nobody listening: discard
 	if (link_open) drain(&link, CDC_LINK);
+	video_open = tud_cdc_n_connected(CDC_VIDEO);
+	if (video_open) tud_cdc_n_write_flush(CDC_VIDEO);
 	uint8_t c;
 	while (tud_cdc_n_available(CDC_LINK) && tud_cdc_n_read(CDC_LINK, &c, 1) == 1) host_byte(c);
 }
@@ -113,3 +116,9 @@ void usb_flush(unsigned timeout_ms)
 	while ((ring_used(&console) || (link_open && ring_used(&link))) && !time_reached(until))
 		tight_loop_contents();
 }
+
+// The video port: core 1 writes straight into its USB FIFO, never waiting --
+// a row that does not fit is dropped (core1_io.c).
+bool usb_video_open(void) { return video_open; }
+uint32_t usb_video_room(void) { return video_open ? tud_cdc_n_write_available(CDC_VIDEO) : 0; }
+void usb_video_put(const void *p, uint32_t n) { tud_cdc_n_write(CDC_VIDEO, p, n); }

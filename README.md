@@ -16,6 +16,9 @@ checked, frame by frame, against my RISC-V emulator
   -- every build checks the two are identical -- and halts at the first
   difference. Against the real chip: every frame, every retired instruction
   of DOOM, the same.
+- **Both at once, at a locked 30 fps.** `python tools/picolink.py corun`
+  runs the Pico and DoomV side by side, live: DoomV checks each frame as
+  it arrives, and at the first difference both stop on that frame.
 
 ## Hardware
 
@@ -84,6 +87,21 @@ python tools/picolink.py bench                    # DOOM's timedemo on DEMO1
 
 Hold **Fire** while powering on to run the benchmark without a PC. Numbers
 and analysis: [docs/PERFORMANCE.md](docs/PERFORMANCE.md).
+
+The firmware runs the RP2350 at 250 MHz and paces frames to a steady
+**30 fps**. The benchmark runs unpaced: **36 fps** on DEMO1 (E1M5).
+
+## Running beside DoomV
+
+```sh
+python tools/picolink.py corun --warp 1 1      # E1M1; play in the Pico's window
+```
+
+The Pico runs DOOM. DoomV runs the same machine code from the Pico's inputs
+as they arrive, and checks every frame's picture, game state and retired
+instructions. The Pico stays at most two frames ahead. The window title
+shows both frame counts and the Pico's frame rate. See
+[docs/LOCKSTEP.md](docs/LOCKSTEP.md#co-running-live).
 
 ## How it works
 

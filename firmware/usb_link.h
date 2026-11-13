@@ -7,6 +7,9 @@
 // Core 1.
 void usb_init(void);
 void usb_service(void (*host_byte)(uint8_t c));   // one turn of the USB loop
+bool usb_video_open(void);                        // host has the video port open
+uint32_t usb_video_room(void);                    // bytes the video FIFO takes now
+void usb_video_put(const void *p, uint32_t n);    // at most usb_video_room() bytes
 
 // Core 0.
 void usb_console_write(const char *s, size_t n);  // never blocks; drops if full

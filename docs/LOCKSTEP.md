@@ -113,8 +113,47 @@ both, and `tools/funcprof_diff.py` names the functions that differ.
    DoomV reports every 175 frames in step, or the first difference.
 
 `--video N` streams every Nth frame of the Pico's screen over USB into a
-window beside DoomV's (it costs the Pico ~60 ms per streamed frame), and
-keys typed in that window are played on the Pico.
+window beside DoomV's, and keys typed in that window are played on the Pico.
+The video is a half-size copy (160x100) that core 1 sends on its own USB
+port while it sends the frame to the LCD, so it costs DOOM nothing. If USB
+is busy, a row is dropped rather than waited for. Earlier firmware sent full
+frames from core 0 on the link port, which held DOOM up for about 60 ms per
+frame.
+
+## Co-running live
+
+`python tools/picolink.py corun [--warp E M]` runs the whole loop at once:
+
+1. The Pico is rebooted into link mode, and its recording goes to
+   `build/corun.p2dl`.
+2. DoomV is started on that file (`PICOLINK_ACK=1`) and replays it as it
+   arrives, printing `picolink-ack N` after each frame that matched.
+3. Each ack lets the Pico run on: `G n` on the link port allows it to finish
+   frames up to `n`, ack + `--ahead` (default 2). The Pico waits in
+   `backend_link_check`, after the frame's record has gone out and outside
+   every counted window. The clock values DOOM reads after waiting are
+   recorded like any others, so pacing changes nothing DoomV compares.
+4. At a difference, DoomV halts with `crash.log` and `picolink_doomv.ppm`, and
+   picolink sends `H frame`. The Pico stops after the frame it is on and
+   shows where DoomV diverged.
+
+Measured on the real Pico 2: **a locked 30 fps** (29.9 to 30.0 every second
+for 56 s) on E1M1, with video on, and every one of the 1,792 frames identical
+in DoomV. With DoomV's window open it was the same: 1,492 of 1,492 frames,
+29.9 fps average and minimum.
+
+Two things limited the first version to about 10 fps:
+
+- **picolink's reads.** `port.read(65536)` with a 0.2 s timeout handed the
+  recording to DoomV in fifth-of-a-second chunks. It now reads what has
+  arrived.
+- **DoomV.** It ran the RV32 guest only on its slow path, because its fast
+  path was RV64-only (51 MIPS). It now runs RV32 there too, at about 160
+  MIPS: integer results are computed on 32 bits and sign-extended, exactly
+  as its RV32 slow path does. The guest's own platform code had also been
+  built at `-O0`. Presenting a frame alone cost as many instructions as
+  DOOM's whole frame. Replaying the 864-frame recording above still matches
+  on every frame, retired-instruction counts included.
 
 ## Input from the Pico and from the PC
 

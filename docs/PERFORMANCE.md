@@ -85,9 +85,38 @@ the tightest map, where only part of each frame fits in a copy):
 On E1M1 and E1M8, where the whole frame fits in a copy, core 0 does not wait
 for the LCD at all; the frame rate is then set by the 30 ms transfer.
 
+## A locked 30 fps (250 MHz)
+
+The firmware now runs at 250 MHz (`DOOM_SYS_MHZ`). The flash is retimed
+first, at `clk_sys/3` (83 MHz) with the read sample point kept near the
+stock 6.7 ns. Frames are paced to 30 a second (`DOOM_FPS_CAP`; the benchmark
+runs unpaced).
+
+At 250 MHz DOOM draws an E1M5 frame in about 18 ms on average, and about
+33 ms in the heaviest scenes. Sending a frame to the LCD takes about 25 ms
+at 41.6 MHz SPI. A second 64 KB screen to send from does not fit in RAM: the
+zone already has only an 8 KB margin on the tightest map. So when DOOM waits
+for the LCD, the two costs add up:
+
+| E1M5 timedemo (`picolink.py bench`) | fps |
+|---|---:|
+| 150 MHz, DOOM waits for the LCD (before) | 23.7 |
+| 250 MHz, DOOM waits for the LCD | 26.5 |
+| 250 MHz, DOOM never waits for the LCD (`DOOM_LCD_TEAR`, default) | **36.0** |
+
+With `DOOM_LCD_TEAR` (the default), a frame goes to the LCD whenever core 1
+is idle and is sent while DOOM draws the next one into the same screen. The
+LCD can show a torn frame. The USB video, DoomV and the lock-step hashes
+(taken before present) are unaffected. `-DDOOM_LCD_TEAR=OFF` brings back
+the tear-free wait.
+
+300 MHz (clk_sys/3 flash at 100 MHz, 1.30 V) hung before USB came up on
+this board, and needed BOOTSEL to recover.
+
 ## Where to go next
 
-- **Faster SPI.** `-DDOOM_SYS_MHZ=200` (or 250) overclocks the chip and its
-  SPI with it; ILI9341 modules usually manage 50-62 MHz on short wires.
+- **Tear-free at 30 fps.** A faster LCD clock would shorten the wait.
+  ILI9341 modules usually manage 62.5 MHz on short wires, which would make
+  the wait about 16 ms. This needs the panel wired to check.
 - **Hot code in RAM.** The column and span drawers run from flash through the
   16 KB XIP cache, which the WAD's textures also stream through.

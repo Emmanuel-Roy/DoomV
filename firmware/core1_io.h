@@ -16,4 +16,7 @@ void io_present_wait(void);                            // until core 1 is done r
 void io_hud(const char *text);                         // shown under the next frame
 void io_message(const char *title, const char *msg);   // full-screen text, blocking
 int io_video_every(void);                              // PC asked for every Nth frame
+// Co-run pacing: after finishing `frame`, wait until the PC allows the next
+// one ('G'). Returns 1 if the PC said DoomV diverged ('H'), with its frame.
+int io_link_wait(uint32_t frame, uint32_t *halt_frame);
 uint32_t io_lcd_frame_us(void);                        // core 1's time to send the last frame

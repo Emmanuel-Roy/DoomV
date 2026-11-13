@@ -61,8 +61,21 @@ void backend_present(const uint8_t *frame, const uint16_t *pal565, const uint8_t
 	static uint32_t pal32[256];
 	for (int i = 0; i < 256; i++)
 		pal32[i] = ((uint32_t)pal_rgb[3 * i] << 16) | ((uint32_t)pal_rgb[3 * i + 1] << 8) | pal_rgb[3 * i + 2];
+	// Four pixels per word read, when the frame is word-aligned (it is: a
+	// large static array).
 	volatile uint32_t *fb = (volatile uint32_t *)(uintptr_t)MMIO_FB;
-	for (int i = 0; i < PORT_SCREEN_W * PORT_SCREEN_H; i++) fb[i] = pal32[frame[i]];
+	if ((uintptr_t)frame & 3) {
+		for (int i = 0; i < PORT_SCREEN_W * PORT_SCREEN_H; i++) fb[i] = pal32[frame[i]];
+		return;
+	}
+	const uint32_t *src = (const uint32_t *)(const void *)frame;
+	for (int i = 0; i < PORT_SCREEN_W * PORT_SCREEN_H / 4; i++, fb += 4) {
+		uint32_t w = src[i];
+		fb[0] = pal32[w & 0xFF];
+		fb[1] = pal32[(w >> 8) & 0xFF];
+		fb[2] = pal32[(w >> 16) & 0xFF];
+		fb[3] = pal32[w >> 24];
+	}
 }
 
 void backend_hud(const char *text) { (void)text; }

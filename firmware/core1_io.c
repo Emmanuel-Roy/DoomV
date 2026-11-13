@@ -69,9 +69,14 @@ int io_get_key(int *pressed, unsigned char *key, int *source)
 //   'W' e m           the same, starting on map EeMm (-warp e m)
 //   'B'               reboot into the benchmark
 //   'U'               reboot into BOOTSEL, for a new UF2
+//   'G' u32           co-run pacing: DOOM may finish frames up to this one,
+//                     then waits for more (picolink.py corun; main.c)
+//   'H' u32           co-run: DoomV diverged at this frame -- stop here
 
 #define MODE_MAGIC 0xD0D0B000u
 static volatile int video_every;
+static volatile uint32_t link_allowed, link_halt_frame;
+static volatile int link_paced, link_halted;
 
 static void reboot_into(uint32_t mode)
 {
@@ -82,7 +87,7 @@ static void reboot_into(uint32_t mode)
 
 static void host_byte(uint8_t c)
 {
-	static uint8_t cmd, args[2];
+	static uint8_t cmd, args[4];
 	static int nargs, need;
 	if (need) {
 		args[nargs++] = c;
@@ -94,12 +99,18 @@ static void host_byte(uint8_t c)
 			reboot_into(2);
 		}
 		else if (cmd == 'V') video_every = args[0];
+		else if (cmd == 'G' || cmd == 'H') {
+			uint32_t v = args[0] | (uint32_t)args[1] << 8 | (uint32_t)args[2] << 16 | (uint32_t)args[3] << 24;
+			if (cmd == 'G') { link_allowed = v; __mem_fence_release(); link_paced = 1; }
+			else { link_halt_frame = v; __mem_fence_release(); link_halted = 1; }
+		}
 		return;
 	}
 	switch (c) {
 	case 'K': cmd = c; nargs = 0; need = 2; break;
 	case 'W': cmd = c; nargs = 0; need = 2; break;
 	case 'V': cmd = c; nargs = 0; need = 1; break;
+	case 'G': case 'H': cmd = c; nargs = 0; need = 4; break;
 	case 'R': reboot_into(2); break;   // main.c: MODE_LINK
 	case 'B': reboot_into(1); break;   // main.c: MODE_BENCH
 	case 'U': reset_usb_boot(0, 0); for (;;) {}
@@ -107,6 +118,14 @@ static void host_byte(uint8_t c)
 }
 
 int io_video_every(void) { return video_every; }
+
+int io_link_wait(uint32_t frame, uint32_t *halt_frame)
+{
+	while (link_paced && frame >= link_allowed && !link_halted) tight_loop_contents();
+	__mem_fence_acquire();
+	if (link_halted) { *halt_frame = link_halt_frame; return 1; }
+	return 0;
+}
 
 // ---- display jobs: core 0 posts one, core 1 does it ----------------------------
 
@@ -130,6 +149,18 @@ void io_present_wait(void)
 
 void io_present(const uint8_t *top, const uint8_t *tail, int tail_rows, const uint16_t *pal565)
 {
+#if DOOM_LCD_TEAR
+	// Never wait for the display (the default): a frame goes to the LCD when
+	// core 1 is idle and is sent while DOOM draws the next one into the same
+	// screen, so the LCD can show a torn frame. Without RAM for a second
+	// 64 KB screen it is that or wait ~20 ms a frame; this keeps 30 fps.
+	// (The lock-step hashes are taken before present: unaffected.)
+	if (job != JOB_NONE) return;
+	job_top = top; job_tail = tail; job_tail_rows = tail_rows; job_pal = pal565; job_rows_read = 0;
+	__mem_fence_release();
+	job = JOB_FRAME;
+	return;
+#endif
 	io_present_wait();
 	job_top = top;
 	job_tail = tail;
@@ -179,6 +210,59 @@ static void draw_hud(void)
 	else lcd_hud_text(line, "");
 }
 
+// ---- video for the PC: a half-size copy of the frames ----------------------------
+//
+// Core 1 reads every row of a frame for the display; on every video_every-th
+// frame it also sends the even rows at half width on the video port (USB
+// interface 4): a frame record (0x5A, u32 frame, the palette as 256 RGB565
+// words), then a record per row (0xA5, row 0-99, 160 pixels). A record the
+// USB FIFO cannot take at once is dropped -- the PC keeps that row's last
+// picture -- so this never waits, and core 0 has no part in it. (Video used
+// to go out from core 0 on the link port: 64 KB a frame at USB full speed
+// held DOOM up for ~60 ms each time.)
+
+#define VID_W 160
+#define VID_H 100
+static uint32_t video_frames;
+static int video_row = -1;                     // next row to send; -1: not this frame
+static const uint8_t *vid_top, *vid_tail;
+static int vid_split;
+
+static void video_begin(const uint8_t *top, const uint8_t *tail, int tail_rows, const uint16_t *pal)
+{
+	video_row = -1;
+	int every = video_every;
+	if (!every || !usb_video_open()) return;
+	if (++video_frames % (uint32_t)every) return;
+	uint8_t hdr[5] = { 0x5A, (uint8_t)video_frames, (uint8_t)(video_frames >> 8),
+	                   (uint8_t)(video_frames >> 16), (uint8_t)(video_frames >> 24) };
+	if (usb_video_room() < sizeof hdr + 512) return;   // still busy with the last one
+	usb_video_put(hdr, sizeof hdr);
+	usb_video_put(pal, 512);
+	vid_top = top;
+	vid_tail = tail;
+	vid_split = 200 - tail_rows;
+	video_row = 0;
+}
+
+// The rows whose source rows the display has read so far: core 0 may reuse
+// them once job_rows_read says so, so they are sent before it does.
+static void video_rows(int rows_read)
+{
+	static uint8_t rec[2 + VID_W];
+	while (video_row >= 0 && video_row < VID_H && 2 * video_row < rows_read) {
+		int y = 2 * video_row;
+		const uint8_t *src = y < vid_split ? vid_top + y * 320 : vid_tail + (y - vid_split) * 320;
+		if (usb_video_room() >= sizeof rec) {
+			rec[0] = 0xA5;
+			rec[1] = (uint8_t)video_row;
+			for (int x = 0; x < VID_W; x++) rec[2 + x] = src[2 * x];
+			usb_video_put(rec, sizeof rec);
+		}
+		video_row++;
+	}
+}
+
 // ---- the loop -------------------------------------------------------------------
 
 static uint32_t core1_stack[512];   // 2 KB in main RAM; core 0's stack owns SCRATCH_X/Y
@@ -195,8 +279,14 @@ static void core1_main(void)
 		int j = job;
 		__mem_fence_acquire();
 		if (j == JOB_FRAME) {
-			if (!sending) { lcd_frame_begin(job_top, job_tail, job_tail_rows, job_pal); sending = true; t0 = time_us_64(); }
+			if (!sending) {
+				lcd_frame_begin(job_top, job_tail, job_tail_rows, job_pal);
+				video_begin(job_top, job_tail, job_tail_rows, job_pal);
+				sending = true;
+				t0 = time_us_64();
+			}
 			bool done = lcd_frame_step();
+			video_rows(lcd_rows_read());
 			__mem_fence_release();
 			job_rows_read = lcd_rows_read();
 			if (done) {
