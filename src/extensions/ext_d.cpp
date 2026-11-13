@@ -198,56 +198,45 @@ void RiscvCore::exec_D(const DecodedOp &instr, Registers &regs, Memory &mem)
 		regs.write_f(instr.rd, f64_from_bits(regs.read_x(instr.rs1)));
 		break;
 
+	// In SoftFloat, as exec_F's conversions and for the same reason: the
+	// host cannot round ties away (RMM), and fcvt.d.l 2^53+1 or fcvt.s.d of
+	// a halfway double came out rounded to even (BUGS 193).
 	case 0b1100001: { // FCVT.W/WU/L/LU.D -- rd integer; rs2 selects which
-		double v = regs.read_f(instr.rs1);
-		clear_fp_exceptions();
-		int old_round = std::fegetround();
-		std::fesetround(host_round_mode(instr.funct3, regs.get_frm()));
-		// volatile: see ext_fp_common.hpp's fp_binop comment -- without it
-		// GCC can reorder the conversion past the fetestexcept() below,
-		// silently dropping NX.
-		volatile uint64_t result = 0;
+		const float64_t v = sf::f64(bits_from_f64(regs.read_f(instr.rs1)));
+		const uint_fast8_t rm = sf::round_mode(instr.funct3, regs.get_frm());
+		sf::begin(instr.funct3, regs.get_frm());
+		uint64_t result = 0;
 		switch (instr.rs2) {
-		case 0b00000: result = sext32((uint32_t)fcvt_to_i32(v, regs)); break; // FCVT.W.D
-		case 0b00001: result = sext32(fcvt_to_u32(v, regs)); break;           // FCVT.WU.D -- still sign-extended per spec
-		case 0b00010: result = (uint64_t)fcvt_to_i64(v, regs); break;         // FCVT.L.D
-		case 0b00011: result = fcvt_to_u64(v, regs); break;                   // FCVT.LU.D
+		case 0b00000: result = sext32((uint32_t)f64_to_i32(v, rm, true)); break;  // FCVT.W.D
+		case 0b00001: result = sext32((uint32_t)f64_to_ui32(v, rm, true)); break; // FCVT.WU.D -- still sign-extended per spec
+		case 0b00010: result = (uint64_t)f64_to_i64(v, rm, true); break;          // FCVT.L.D
+		case 0b00011: result = f64_to_ui64(v, rm, true); break;                   // FCVT.LU.D
 		}
-		regs.or_fflags(collect_fflags());
-		std::fesetround(old_round);
+		sf::end(regs);
 		regs.write_x(instr.rd, result);
 		break;
 	}
 
 	case 0b1101001: { // FCVT.D.W/WU/L/LU -- rd D, rs1 integer
-		uint64_t xv = regs.read_x(instr.rs1);
-		clear_fp_exceptions();
-		int old_round = std::fegetround();
-		std::fesetround(host_round_mode(instr.funct3, regs.get_frm()));
-		volatile double dv = 0;
+		const uint64_t xv = regs.read_x(instr.rs1);
+		sf::begin(instr.funct3, regs.get_frm());
+		float64_t r{};
 		switch (instr.rs2) {
-		case 0b00000: dv = (double)(int32_t)xv; break;
-		case 0b00001: dv = (double)(uint32_t)xv; break;
-		case 0b00010: dv = (double)(int64_t)xv; break;
-		case 0b00011: dv = (double)xv; break;
+		case 0b00000: r = i32_to_f64((int32_t)xv); break;
+		case 0b00001: r = ui32_to_f64((uint32_t)xv); break;
+		case 0b00010: r = i64_to_f64((int64_t)xv); break;
+		case 0b00011: r = ui64_to_f64(xv); break;
 		}
-		regs.or_fflags(collect_fflags());
-		std::fesetround(old_round);
-		regs.write_f(instr.rd, dv);
+		sf::end(regs);
+		regs.write_f(instr.rd, f64_from_bits(sf::bits(r)));
 		break;
 	}
 
 	case 0b0100000: { // FCVT.S.D -- narrow double to single
-		double a = regs.read_f(instr.rs1);
-		clear_fp_exceptions();
-		int old_round = std::fegetround();
-		std::fesetround(host_round_mode(instr.funct3, regs.get_frm()));
-		volatile float result = (float)a;
-		regs.or_fflags(collect_fflags());
-		std::fesetround(old_round);
-		float rv = result;
-		if (std::isnan(rv)) rv = canonical_nan<float>();
-		write_f32_reg(regs, instr.rd, rv);
+		sf::begin(instr.funct3, regs.get_frm());
+		const float32_t r = f64_to_f32(sf::f64(bits_from_f64(regs.read_f(instr.rs1))));
+		sf::end(regs);
+		write_f32_bits(regs, instr.rd, sf::bits(r));
 		break;
 	}
 	case 0b0100001: { // FCVT.D.S -- widen single to double
@@ -261,10 +250,13 @@ void RiscvCore::exec_D(const DecodedOp &instr, Registers &regs, Memory &mem)
 		//
 		// Found by riscv-arch-test D-fcvt.d.s-00 against Sail; the
 		// hand-written suites never fed this instruction a signalling NaN.
-		float a = read_f32_reg(regs, instr.rs1);
-		if (is_snan(a)) regs.or_fflags(0x10); // NV
-		double result = std::isnan(a) ? canonical_nan<double>() : (double)a;
-		regs.write_f(instr.rd, result);
+		//
+		// SoftFloat's f32_to_f64 does all of that, as the other conversions
+		// do now.
+		sf::begin(instr.funct3, regs.get_frm());
+		const float64_t r = f32_to_f64(sf::f32(read_f32_bits(regs, instr.rs1)));
+		sf::end(regs);
+		regs.write_f(instr.rd, f64_from_bits(sf::bits(r)));
 		break;
 	}
 

@@ -139,14 +139,15 @@ void RiscvCore::exec_ZFHMIN(const DecodedOp &instr, Registers &regs, Memory &mem
 		}
 
 		case 0x22: { // fcvt.h.s / fcvt.h.d -- the rounding direction
-			int rm = host_round_mode(instr.funct3, regs.get_frm());
-			uint16_t h;
-			if (instr.rs2 == 0) {
-				h = fp16::f32_bits_to_h(bits_from_f32(read_f32_reg(regs, instr.rs1)), rm, flags);
-			} else {
-				h = fp16::f64_bits_to_h(bits_from_f64(regs.read_f(instr.rs1)), rm, flags);
-			}
-			regs.write_f(instr.rd, f64_from_bits(fp16::box_f16(h)));
+			// SoftFloat, as the vector narrowing to half already was: the
+			// hand-written narrowing took a host rounding mode, and the host
+			// has no ties away, so RMM rounded ties to even (BUGS 193).
+			sf::begin(instr.funct3, regs.get_frm());
+			const float16_t h = (instr.rs2 == 0)
+				? f32_to_f16(sf::f32(read_f32_bits(regs, instr.rs1)))
+				: f64_to_f16(sf::f64(bits_from_f64(regs.read_f(instr.rs1))));
+			flags |= (uint8_t)softfloat_exceptionFlags;
+			regs.write_f(instr.rd, f64_from_bits(fp16::box_f16(sf::bits(h))));
 			break;
 		}
 		}

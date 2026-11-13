@@ -123,20 +123,13 @@ const uint32_t FLI_S[32] = {
 	0x7FC00000u, // canonical quiet NaN
 };
 
-// Round to an integral value in the same format, honouring the instruction's
-// rounding mode. fround leaves the inexact flag alone; froundnx sets it when
-// the value actually changed. std::nearbyint follows the host rounding mode
-// (which host_round_mode has already set) and, unlike std::rint, does not
-// itself raise inexact -- so the two variants differ only by the explicit
-// flag below rather than by which host function is called.
-template <typename T>
-T fround_impl(T a, bool set_inexact, uint8_t &extra_flags)
-{
-	if (std::isnan(a) || std::isinf(a) || a == (T)0) return a;
-	T r = std::nearbyint(a);
-	if (set_inexact && r != a) extra_flags |= 0x01; // NX
-	return r;
-}
+// fround and froundnx: round to an integral value in the same format, in
+// SoftFloat. fround leaves the inexact flag alone; froundnx (exact) raises it
+// when the value changed. A signaling NaN raises invalid and the result of
+// any NaN is the canonical one, which f32/f64_roundToInt do themselves.
+//
+// This used std::nearbyint under the host rounding mode, and the host has no
+// ties away: fround.s 2.5 with RMM gave 2.0 rather than 3.0 (BUGS 193).
 
 } // namespace
 
@@ -211,28 +204,20 @@ void RiscvCore::exec_ZFA(const DecodedOp &instr, Registers &regs, Memory &mem)
 	}
 
 	case 0x20: { // fround.s / froundnx.s
-		float a = read_f32_reg(regs, instr.rs1);
-		if (is_snan_f32(a)) extra_flags |= 0x10;
-		clear_fp_exceptions();
-		int saved = std::fegetround();
-		std::fesetround(host_round_mode(instr.funct3, regs.get_frm()));
-		float r = std::isnan(a) ? canonical_nan<float>()
-		                        : fround_impl<float>(a, instr.rs2 == 5, extra_flags);
-		std::fesetround(saved);
-		write_f32_reg(regs, instr.rd, r);
+		const uint_fast8_t rm = sf::round_mode(instr.funct3, regs.get_frm());
+		sf::begin(instr.funct3, regs.get_frm());
+		const float32_t r = f32_roundToInt(sf::f32(read_f32_bits(regs, instr.rs1)), rm, instr.rs2 == 5);
+		sf::end(regs);
+		write_f32_bits(regs, instr.rd, sf::bits(r));
 		break;
 	}
 
 	case 0x21: { // fround.d / froundnx.d
-		double a = regs.read_f(instr.rs1);
-		if (is_snan_f64(a)) extra_flags |= 0x10;
-		clear_fp_exceptions();
-		int saved = std::fegetround();
-		std::fesetround(host_round_mode(instr.funct3, regs.get_frm()));
-		double r = std::isnan(a) ? canonical_nan<double>()
-		                         : fround_impl<double>(a, instr.rs2 == 5, extra_flags);
-		std::fesetround(saved);
-		regs.write_f(instr.rd, r);
+		const uint_fast8_t rm = sf::round_mode(instr.funct3, regs.get_frm());
+		sf::begin(instr.funct3, regs.get_frm());
+		const float64_t r = f64_roundToInt(sf::f64(bits_from_f64(regs.read_f(instr.rs1))), rm, instr.rs2 == 5);
+		sf::end(regs);
+		regs.write_f(instr.rd, f64_from_bits(sf::bits(r)));
 		break;
 	}
 

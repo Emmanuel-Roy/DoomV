@@ -313,7 +313,12 @@ inline uint16_t f32_bits_to_bf16(uint32_t f, uint8_t rm, Registers &regs)
 // injection hand a signaling NaN on unchanged. The host's float<->double
 // conversions quiet one -- 0x7FA49854 came back 0x7FE49854 -- so a NaN is
 // widened and narrowed by hand, payload and quiet bit where they were.
-// Arithmetic is unaffected: it sees a NaN either way.
+//
+// Arithmetic is affected just as much, through the flags: an element cast
+// back to float with (float)a arrived at SoftFloat already quiet, so a
+// signaling NaN never raised invalid -- vfadd, vfmin, vfsqrt, vfmacc, vmfeq
+// and the reductions all missed NV (BUGS 195). Every single-precision
+// element goes back to float through as_f32 below, never a cast.
 inline double widen_f32(uint32_t u)
 {
 	if ((u & 0x7F800000u) == 0x7F800000u && (u & 0x7FFFFFu))
@@ -439,6 +444,9 @@ inline uint16_t int16_to_h(uint64_t raw, bool uns, Registers &regs)
 
 inline uint16_t as_h(double v)  { return d_to_h(v); }
 inline double from_h(uint16_t h) { return h_to_d(h); }
+// A single-precision element to float and back, bit for bit (see widen_f32).
+inline float  as_f32(double v)  { return f32_from_bits(narrow_f32(v)); }
+inline double from_f32(float f) { return widen_f32(bits_from_f32(f)); }
 
 double fbinop_d(double a, double b, char op, uint8_t rm, Registers &regs) { return fp_binop(a, b, op, rm, regs); }
 float  fbinop_f(float a, float b, char op, uint8_t rm, Registers &regs) { return fp_binop(a, b, op, rm, regs); }
@@ -463,7 +471,7 @@ double gbinop(double a, double b, char op, uint8_t rm, int sew, Registers &regs)
 		sf::end(regs);
 		return from_h(sf::bits(r));
 	}
-	return (sew == 64) ? fbinop_d(a, b, op, rm, regs) : (double)fbinop_f((float)a, (float)b, op, rm, regs);
+	return (sew == 64) ? fbinop_d(a, b, op, rm, regs) : from_f32(fbinop_f(as_f32(a), as_f32(b), op, rm, regs));
 }
 double gsqrt(double a, uint8_t rm, int sew, Registers &regs)
 {
@@ -473,7 +481,7 @@ double gsqrt(double a, uint8_t rm, int sew, Registers &regs)
 		sf::end(regs);
 		return from_h(sf::bits(r));
 	}
-	return (sew == 64) ? fp_sqrt(a, rm, regs) : (double)fp_sqrt((float)a, rm, regs);
+	return (sew == 64) ? fp_sqrt(a, rm, regs) : from_f32(fp_sqrt(as_f32(a), rm, regs));
 }
 double gfma(double a, double b, double c, uint8_t rm, int sew, Registers &regs)
 {
@@ -483,7 +491,7 @@ double gfma(double a, double b, double c, uint8_t rm, int sew, Registers &regs)
 		sf::end(regs);
 		return from_h(sf::bits(r));
 	}
-	return (sew == 64) ? fp_fma(a, b, c, rm, regs) : (double)fp_fma((float)a, (float)b, (float)c, rm, regs);
+	return (sew == 64) ? fp_fma(a, b, c, rm, regs) : from_f32(fp_fma(as_f32(a), as_f32(b), as_f32(c), rm, regs));
 }
 uint64_t gcompare(double a, double b, uint8_t funct3, int sew, Registers &regs)
 {
@@ -511,7 +519,7 @@ uint64_t gcompare(double a, double b, uint8_t funct3, int sew, Registers &regs)
 		sf::end(regs);
 		return out ? 1u : 0u;
 	}
-	return (sew == 64) ? fcompare(a, b, funct3, regs) : fcompare((float)a, (float)b, funct3, regs);
+	return (sew == 64) ? fcompare(a, b, funct3, regs) : fcompare(as_f32(a), as_f32(b), funct3, regs);
 }
 double gminmax(double a, double b, bool is_max, int sew, Registers &regs)
 {
@@ -532,7 +540,7 @@ double gminmax(double a, double b, bool is_max, int sew, Registers &regs)
 		const bool lt = f16_lt(sf::f16(x), sf::f16(y));
 		return from_h(is_max ? (lt ? y : x) : (lt ? x : y));
 	}
-	return (sew == 64) ? fminmax(a, b, is_max, regs) : (double)fminmax((float)a, (float)b, is_max, regs);
+	return (sew == 64) ? fminmax(a, b, is_max, regs) : from_f32(fminmax(as_f32(a), as_f32(b), is_max, regs));
 }
 double gsgnj(double a, double b, uint8_t funct3, int sew)
 {
@@ -569,7 +577,7 @@ uint64_t gclassify(double v, int sew)
 		if (e == 0)                return neg ? (1u << 2) : (1u << 5);
 		return neg ? (1u << 1) : (1u << 6);
 	}
-	return (sew == 64) ? fclassify(v) : fclassify((float)v);
+	return (sew == 64) ? fclassify(v) : fclassify(as_f32(v));
 }
 
 } // namespace
@@ -615,7 +623,7 @@ void exec_v_fp(const DecodedOp &instr, Registers &regs)
 		if (w == 64) return regs.read_f(instr.rs1);
 		if (w == 16)
 			return h_to_d(fp16::unbox_f16(bits_from_f64(regs.read_f(instr.rs1))));
-		return (double)read_f32_reg(regs, instr.rs1);
+		return widen_f32(read_f32_bits(regs, instr.rs1));
 	};
 	auto op2 = [&](uint64_t i) -> double {
 		return is_vv ? read_felem(regs, instr.rs1, sew, i) : read_fscalar(sew);
@@ -631,7 +639,7 @@ void exec_v_fp(const DecodedOp &instr, Registers &regs)
 				// f register.
 				regs.write_f(instr.rd, f64_from_bits(fp16::box_f16(d_to_h(v))));
 			}
-			else write_f32_reg(regs, instr.rd, (float)v);
+			else write_f32_bits(regs, instr.rd, narrow_f32(v));
 		} else if (vl > 0) {
 			write_felem(regs, instr.rd, sew, 0, read_fscalar(sew));
 		}
@@ -1061,7 +1069,7 @@ void exec_v_fp(const DecodedOp &instr, Registers &regs)
 				if (is_vv) return read_felem(regs, instr.rs1, sew, i);
 				if (sew == 16)
 					return h_to_d(fp16::unbox_f16(bits_from_f64(regs.read_f(instr.rs1))));
-				return (double)read_f32_reg(regs, instr.rs1);
+				return widen_f32(read_f32_bits(regs, instr.rs1));
 			};
 			if (funct6 == 0x31 || funct6 == 0x33) { // vfwredusum.vs / vfwredosum.vs (OPFVV only)
 				double acc = read_felem(regs, instr.rs1, wsew, 0);

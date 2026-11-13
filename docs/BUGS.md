@@ -350,6 +350,14 @@ of console output (`2667bf1`, re-verified in `936df17`).
 185. [The PMP registers past the sixteenth answered instead of trapping](#bug185)
 186. [The AIA CSRs were there whatever -march said](#bug186)
 187. [Every floating-point instruction made FS Dirty](#bug187)
+188. [A byte or halfword AMO ran as a word one](#bug188)
+189. [hgatp ignored a whole write when the mode was unsupported](#bug189)
+190. [Snapshots from before bd7e3bb no longer restored](#bug190)
+191. [Every level interrupt Linux handled came back as a spurious one](#bug191)
+192. [Venus compared all of its memory at every sync point, recording or not](#bug192)
+193. [Scalar conversions and fround rounded RMM ties to even](#bug193)
+194. [FMIN/FMAX with one signaling NaN returned whatever libm did](#bug194)
+195. [Vector single precision never raised invalid for a signaling NaN](#bug195)
 
 <a id="part-vii"></a>
 ### Part VII — Cross-cutting
@@ -7462,3 +7470,53 @@ seconds of guest time made no visible progress in twenty minutes of wall
 clock. The recorder is installed only when `-record` has opened its log.
 Guest-invisible: the Venus step itself runs at the same instructions either
 way (two `-gpu` runs stopped mid-load leave identical crash.log files).
+
+<a id="bug193"></a>
+### 193. Scalar conversions and fround rounded RMM ties to even
+
+Every scalar conversion -- FCVT between integers and single or double, and
+FCVT.S.D -- rounded on the host: fesetround, then a cast or nearbyint. The
+host has four rounding modes and RISC-V five, and `host_round_mode` mapped
+RMM (round to nearest, ties away from zero) to ties-to-even, so every exact
+tie came out one ulp wrong: fcvt.w.s 2.5 gave 2 rather than 3, fcvt.s.w
+0x1000001 gave 0x4B800000 rather than 0x4B800001, fcvt.d.l 2^53+1 and fcvt.s.d
+of a halfway double likewise. Where the tie decides the range the flag is
+wrong too: fcvt.wu.s -0.5 rounds to -1 under RMM, which is invalid, where
+DoomV rounded to -0 and reported only inexact (and fcvt.w.d of -2^31-0.5 the
+same). Zfa's fround/froundnx (nearbyint) and Zfhmin's fcvt.h.s/fcvt.h.d
+(hand-written narrowing taking the host mode) had the same flaw. SoftFloat
+had replaced the arithmetic and the vector conversions (bug 178) for exactly
+this reason; these were left. They are all SoftFloat now, at the operands'
+own widths, and the host conversion helpers are gone. Found by an outside
+differential run of 796,020 scalar cases against Berkeley SoftFloat 3e and
+QEMU (0 mismatches between those two); arch-test, riscv-tests and the Linux
+lock-step never feed a tie under RMM, and fp_rm.S has none. Lock-stepped
+against Sail in tests/lockstep/fp_softfloat.S.
+
+<a id="bug194"></a>
+### 194. FMIN/FMAX with one signaling NaN returned whatever libm did
+
+`fminmax` raised invalid for a signaling NaN and handled two NaNs and signed
+zeros itself, then left the rest to std::fmin/std::fmax. C puts signaling
+NaNs outside its rules: glibc returns one quieted -- fmin(0, 0x7F800001) is
+0x7FC00001 -- where RISC-V returns the other operand. MinGW returns the
+operand, so the Windows build was right by luck and a glibc build would not
+be. Every case is decided from the operands now: two NaNs give the canonical
+NaN, one gives the other operand, opposite zeros by sign, and the rest by
+SoftFloat's quiet less-than, as spike does. In fp_softfloat.S.
+
+<a id="bug195"></a>
+### 195. Vector single precision never raised invalid for a signaling NaN
+
+A SEW=32 element is carried as a double, widened by hand so a signaling NaN
+survives (widen_f32). The arithmetic then narrowed it back with a plain
+`(float)a`, and the host's conversion quiets it: 0x7FA49854 became 0x7FE49854
+before SoftFloat saw it, so vfadd, vfsqrt, vfmacc, vfmin/vfmax, vmfeq and the
+reductions built on them all missed NV, and vfclass called a signaling NaN
+quiet. The .vf scalar operand was widened the same way (through a host
+float), and so was vfmv.f.s's result going back to an f register, which
+handed on a quieted NaN rather than the element. The comment on widen_f32
+said arithmetic was unaffected; it was, in the value, and not in the flags.
+Elements go to and from float through narrow_f32/widen_f32 now, bit for bit.
+In fp_softfloat.S: vfadd.vv(0x7FA49854, 1.0) gives the canonical NaN and NV,
+vfmin.vv gives 1.0 and NV, as Sail and QEMU do.

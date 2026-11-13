@@ -34,11 +34,22 @@ inline float unbox_f32(uint64_t boxed)
 inline float  read_f32_reg(Registers &r, int i) { return unbox_f32(bits_from_f64(r.read_f(i))); }
 inline void   write_f32_reg(Registers &r, int i, float v) { r.write_f(i, f64_from_bits(box_f32(bits_from_f32(v)))); }
 
+// The same, as bit patterns, for code that hands them to SoftFloat: nothing
+// on the way can turn a signaling NaN into a quiet one.
+inline uint32_t read_f32_bits(Registers &r, int i)
+{
+	const uint64_t b = bits_from_f64(r.read_f(i));
+	return ((b >> 32) == 0xFFFFFFFFull) ? (uint32_t)b : 0x7FC00000u;
+}
+inline void write_f32_bits(Registers &r, int i, uint32_t bits) { r.write_f(i, f64_from_bits(box_f32(bits))); }
+
 // RISC-V's rm field: 000=RNE,001=RTZ,010=RDN,011=RUP,100=RMM,111=dynamic
-// (use fcsr's frm). x86/host <cfenv> has no native "round to nearest,
-// ties away from zero" (RMM) -- approximated as round-to-nearest-even,
-// a defensible simplification since RMM is rarely used in practice and
-// only differs from RNE on exact halfway ties.
+// (use fcsr's frm), as a host <cfenv> mode. The host has no "round to
+// nearest, ties away from zero", so RMM comes out as ties-to-even: wrong on
+// every exact tie. Nothing that rounds may use this for that reason -- scalar
+// F/D/Zfa/Zfhmin rounding all goes through SoftFloat, which has RMM (BUGS
+// 193). What is left is vector code that sets the host mode around work
+// SoftFloat now does, where the mode no longer reaches a result.
 inline int host_round_mode(uint8_t rm, uint8_t frm)
 {
 	uint8_t mode = (rm == 0b111) ? frm : rm;
@@ -277,27 +288,39 @@ uint64_t fcompare(T a, T b, uint8_t funct3, Registers &regs)
 }
 
 // FMIN/FMAX: canonical NaN if both inputs are NaN, the non-NaN operand if
-// only one is -- std::fmin/fmax already implement exactly that.
+// only one is.
 //
 // Only a signalling NaN raises invalid here. A quiet NaN operand is the
 // ordinary, non-exceptional case these instructions are built around.
+//
+// Every case is decided here rather than left to std::fmin/fmax. C puts a
+// signaling NaN outside its rules, and glibc returns it quieted -- fmin(0,
+// 0x7F800001) is 0x7FC00001 -- where RISC-V wants the other operand. MinGW
+// happened to return the operand, so the Windows build passed and a Linux one
+// would not (BUGS 194). The ordering is SoftFloat's quiet less-than, as in
+// spike.
 template <typename T>
 T fminmax(T a, T b, bool is_max, Registers &regs)
 {
 	if (is_snan(a) || is_snan(b)) regs.or_fflags(0x10);
-	if (std::isnan(a) && std::isnan(b)) return canonical_nan<T>();
+	const bool a_nan = std::isnan(a), b_nan = std::isnan(b);
+	if (a_nan && b_nan) return canonical_nan<T>();
+	if (a_nan) return b;
+	if (b_nan) return a;
 
-	// Zeros of opposite sign compare equal, so std::fmin/fmax are free to
-	// return either operand -- C++ leaves it unspecified. RISC-V does not:
-	// fmin(+0,-0) is -0.0 and fmax(+0,-0) is +0.0, regardless of operand
-	// order. Decide it from the sign bits instead of the comparison.
+	// Zeros of opposite sign compare equal. RISC-V orders them: fmin(+0,-0)
+	// is -0.0 and fmax(+0,-0) is +0.0, regardless of operand order. Decide it
+	// from the sign bits instead of the comparison.
 	if (a == (T)0 && b == (T)0) {
 		bool negative = is_max ? (std::signbit(a) && std::signbit(b))
 		                       : (std::signbit(a) || std::signbit(b));
 		return negative ? -(T)0 : (T)0;
 	}
 
-	return is_max ? std::fmax(a, b) : std::fmin(a, b);
+	bool lt;
+	if constexpr (sizeof(T) == 4) lt = f32_lt_quiet(sf::f32(bits_from_f32((float)a)), sf::f32(bits_from_f32((float)b)));
+	else lt = f64_lt_quiet(sf::f64(bits_from_f64((double)a)), sf::f64(bits_from_f64((double)b)));
+	return is_max ? (lt ? b : a) : (lt ? a : b);
 }
 
 // FSGNJ/FSGNJN/FSGNJX: pure bit manipulation (copy rs1's magnitude, take
@@ -340,93 +363,3 @@ uint64_t fclassify(T v)
 	if (std::fpclassify(v) == FP_SUBNORMAL) return neg ? (1ull << 2) : (1ull << 5);
 	return neg ? (1ull << 1) : (1ull << 6);
 }
-
-// Float/double -> integer conversions. Out-of-range and NaN clamp to the
-// target type's max/min (NaN -> max) and set NV, matching FCVT.*'s spec'd
-// "invalid" behavior instead of relying on UB from an out-of-range cast.
-// Float-to-integer conversions have to report inexact themselves rather than
-// leaning on the host's accrued flags.
-//
-// collect_fflags() reads MXCSR, which covers SSE arithmetic, but std::llrint
-// on this toolchain goes through x87 and leaves its status in the x87 word
-// instead -- so the inexact from a conversion was simply never seen. That
-// was invisible until a differential test dumped fflags per operation and
-// spike reported NX where DoomV reported none.
-//
-// Deciding it from the values is also more robust than either host path: a
-// conversion is inexact exactly when the integer it produced, converted
-// back, differs from the input. That holds for every rounding mode without
-// having to know which one was in force.
-template <typename INT>
-inline void note_cvt_inexact(double v, INT result, Registers &regs)
-{
-	if ((double)result != v) regs.or_fflags(0x01); // NX
-}
-
-// Float-to-integer conversion.
-//
-// The order of operations is the whole of the difficulty here: the value is
-// rounded to an integer *first*, and only then checked against the
-// destination's range. Checking the unrounded value instead -- which is
-// what these did -- disagrees with the architecture at both ends, and in
-// opposite directions:
-//
-//   * -0.5 to unsigned rounds to -0.0, which is in range. The result is 0
-//     and the only flag is inexact. Rejecting it on v < 0.0 reported
-//     invalid for an operation that is merely inexact.
-//   * 2147483647.6 to int32 rounds to 2^31, which is *not* in range, so it
-//     is invalid. Admitting it on v < 2^31 sent an out-of-range value into
-//     a cast whose behaviour is undefined.
-//
-// nearbyint is the rounding step rather than rint or llrint: it honours the
-// rounding mode the caller installed, and unlike rint it does not itself
-// raise inexact, so the flag stays decided by comparison rather than by
-// whatever the host's status register happens to hold.
-//
-// Found by riscv-arch-test D-fcvt.lu.d-00 and friends against Sail.
-//
-// On a NaN every conversion yields the destination's maximum and raises
-// invalid -- including the unsigned forms, where the answer is all-ones
-// rather than zero.
-inline int32_t fcvt_to_i32(double v, Registers &regs)
-{
-	if (std::isnan(v)) { regs.or_fflags(0x10); return INT32_MAX; }
-	double r = std::nearbyint(v);
-	if (r >= 2147483648.0) { regs.or_fflags(0x10); return INT32_MAX; }
-	if (r < -2147483648.0) { regs.or_fflags(0x10); return INT32_MIN; }
-	if (r != v) regs.or_fflags(0x01); // NX
-	return (int32_t)r;
-}
-inline uint32_t fcvt_to_u32(double v, Registers &regs)
-{
-	if (std::isnan(v)) { regs.or_fflags(0x10); return 0xFFFFFFFFu; }
-	double r = std::nearbyint(v);
-	if (r >= 4294967296.0) { regs.or_fflags(0x10); return 0xFFFFFFFFu; }
-	// -0.0 is not less than 0.0, so a value that rounds to negative zero
-	// lands here as an in-range 0 -- which is the point.
-	if (r < 0.0) { regs.or_fflags(0x10); return 0; }
-	if (r != v) regs.or_fflags(0x01); // NX
-	return (uint32_t)r;
-}
-inline int64_t fcvt_to_i64(double v, Registers &regs)
-{
-	if (std::isnan(v)) { regs.or_fflags(0x10); return INT64_MAX; }
-	double r = std::nearbyint(v);
-	if (r >= 9223372036854775808.0) { regs.or_fflags(0x10); return INT64_MAX; }
-	if (r < -9223372036854775808.0) { regs.or_fflags(0x10); return INT64_MIN; }
-	if (r != v) regs.or_fflags(0x01); // NX
-	return (int64_t)r;
-}
-inline uint64_t fcvt_to_u64(double v, Registers &regs)
-{
-	// A double's 53-bit significand cannot name every uint64_t near the top
-	// of the range, so the rounded value is what it is -- that is a property
-	// of the source format, not a rounding error to correct.
-	if (std::isnan(v)) { regs.or_fflags(0x10); return UINT64_MAX; }
-	double r = std::nearbyint(v);
-	if (r >= 18446744073709551616.0) { regs.or_fflags(0x10); return UINT64_MAX; }
-	if (r < 0.0) { regs.or_fflags(0x10); return 0; }
-	if (r != v) regs.or_fflags(0x01); // NX
-	return (uint64_t)r;
-}
-

@@ -182,43 +182,41 @@ void RiscvCore::exec_F(const DecodedOp &instr, Registers &regs, Memory &mem)
 		regs.write_f(instr.rd, f64_from_bits(box_f32((uint32_t)regs.read_x(instr.rs1))));
 		break;
 
+	// The conversions, in SoftFloat at the operands' own widths. They used to
+	// round on the host, through fesetround and a cast or nearbyint, and the
+	// host has no ties-away mode: RMM rounded every exact tie to even, so
+	// fcvt.w.s 2.5 gave 2 and not 3, and -0.5 to unsigned rounded to -0 (in
+	// range, inexact) rather than to -1 (invalid). BUGS 193. SoftFloat's
+	// RISC-V specialization also gives the architecture's answers for NaN
+	// (the maximum) and out of range (saturated, invalid) by itself.
 	case 0b1100000: { // FCVT.W/WU/L/LU.S -- rd integer; rs2 selects which
-		double v = (double)read_f32_reg(regs, instr.rs1);
-		clear_fp_exceptions();
-		int old_round = std::fegetround();
-		std::fesetround(host_round_mode(instr.funct3, regs.get_frm()));
-		// volatile: see ext_fp_common.hpp's fp_binop comment -- without it
-		// GCC can reorder the conversion past the fetestexcept() below,
-		// silently dropping NX.
-		volatile uint64_t result = 0;
+		const float32_t v = sf::f32(read_f32_bits(regs, instr.rs1));
+		const uint_fast8_t rm = sf::round_mode(instr.funct3, regs.get_frm());
+		sf::begin(instr.funct3, regs.get_frm());
+		uint64_t result = 0;
 		switch (instr.rs2) {
-		case 0b00000: result = sext32((uint32_t)fcvt_to_i32(v, regs)); break; // FCVT.W.S
-		case 0b00001: result = sext32(fcvt_to_u32(v, regs)); break;           // FCVT.WU.S -- still sign-extended per spec
-		case 0b00010: result = (uint64_t)fcvt_to_i64(v, regs); break;         // FCVT.L.S
-		case 0b00011: result = fcvt_to_u64(v, regs); break;                   // FCVT.LU.S
+		case 0b00000: result = sext32((uint32_t)f32_to_i32(v, rm, true)); break;  // FCVT.W.S
+		case 0b00001: result = sext32((uint32_t)f32_to_ui32(v, rm, true)); break; // FCVT.WU.S -- still sign-extended per spec
+		case 0b00010: result = (uint64_t)f32_to_i64(v, rm, true); break;          // FCVT.L.S
+		case 0b00011: result = f32_to_ui64(v, rm, true); break;                   // FCVT.LU.S
 		}
-		regs.or_fflags(collect_fflags());
-		std::fesetround(old_round);
+		sf::end(regs);
 		regs.write_x(instr.rd, result);
 		break;
 	}
 
-	case 0b1101000: { // FCVT.S.W/WU/L/LU -- rd F, rs1 integer. Converts straight
-		// to float rather than via a double intermediate, to avoid double rounding.
-		uint64_t xv = regs.read_x(instr.rs1);
-		clear_fp_exceptions();
-		int old_round = std::fegetround();
-		std::fesetround(host_round_mode(instr.funct3, regs.get_frm()));
-		volatile float fv = 0;
+	case 0b1101000: { // FCVT.S.W/WU/L/LU -- rd F, rs1 integer, rounded once
+		const uint64_t xv = regs.read_x(instr.rs1);
+		sf::begin(instr.funct3, regs.get_frm());
+		float32_t r{};
 		switch (instr.rs2) {
-		case 0b00000: fv = (float)(int32_t)xv; break;
-		case 0b00001: fv = (float)(uint32_t)xv; break;
-		case 0b00010: fv = (float)(int64_t)xv; break;
-		case 0b00011: fv = (float)xv; break;
+		case 0b00000: r = i32_to_f32((int32_t)xv); break;
+		case 0b00001: r = ui32_to_f32((uint32_t)xv); break;
+		case 0b00010: r = i64_to_f32((int64_t)xv); break;
+		case 0b00011: r = ui64_to_f32(xv); break;
 		}
-		regs.or_fflags(collect_fflags());
-		std::fesetround(old_round);
-		write_f32_reg(regs, instr.rd, fv);
+		sf::end(regs);
+		write_f32_bits(regs, instr.rd, sf::bits(r));
 		break;
 	}
 

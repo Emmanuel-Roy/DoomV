@@ -39,9 +39,14 @@ instruction must be the one the lock-step stopped at. Restore it with
 What is compared, and what is not:
   * x, f and v registers, after every instruction, and memory stores (QEMU's
     log has no stores; it is compared on registers alone).
-  * Not CSRs, between the other simulators: each implements its own set of
-    optional ones and its own counters, so they differ by design. DoomV's
-    CSRs are compared with Sail's by the lock-step.
+  * fflags, the floating-point exception flags, where a log has them: Sail's
+    and DoomV's traces log each write to fflags or fcsr, and QEMU's dump shows
+    fcsr before every instruction. A flag-only difference (an invalid not
+    raised, say) changes no register, so without this it went unseen against
+    QEMU. Spike's and Whisper's logs are not read for it.
+  * Not the other CSRs, between the other simulators: each implements its own
+    set of optional ones and its own counters, so they differ by design.
+    DoomV's CSRs are compared with Sail's by the lock-step.
   * Each simulator is given the ISA asked for (--march); what a simulator does
     not know is dropped, and the report lists what was dropped, since a
     simulator without an extension traps where Sail does not.
@@ -207,6 +212,8 @@ RECORD = re.compile(r"^\[(\d+)\] \[[A-Z]+\]: 0x([0-9A-Fa-f]+) \(0x([0-9A-Fa-f]+)
 WRITE = re.compile(r"^([xfv])(\d+) <- 0x([0-9A-Fa-f]+)")
 STORE = re.compile(r"^mem\[(?:W|RW|C),0x([0-9A-Fa-f]+)\] <- 0x([0-9A-Fa-f]+)")
 EPC = re.compile(r"^CSR (?:mepc|sepc|vsepc|mnepc) \(0x[0-9A-Fa-f]+\) <- 0x([0-9A-Fa-f]+)")
+# fflags is fcsr's low five bits; a write to either sets it.
+FFLAGS = re.compile(r"^CSR (?:fflags|fcsr) \(0x[0-9A-Fa-f]+\) <- 0x([0-9A-Fa-f]+)")
 
 
 def parse_sail_format(path: pathlib.Path) -> list:
@@ -231,6 +238,10 @@ def parse_sail_format(path: pathlib.Path) -> list:
             m = STORE.match(line)
             if m:
                 store_bytes(int(m.group(1), 16), m.group(2), cur.stores)
+                continue
+            m = FFLAGS.match(line)
+            if m:
+                cur.writes["fflags"] = int(m.group(1), 16) & 0x1F
                 continue
             if line.startswith("trapping from"):
                 trapping = True
@@ -367,6 +378,9 @@ def parse_qemu(path: pathlib.Path) -> list:
                 k, v = s.split()[:2]
                 cur[k] = int(v, 16)
                 continue
+            if s.startswith("fcsr "):
+                cur["fflags"] = int(s.split()[1], 16) & 0x1F
+                continue
             for name, value in QEMU_REG.findall(line):
                 if name[0] in "xfv":
                     cur[name[0] + str(int(name[1:]))] = int(value, 16)
@@ -388,7 +402,7 @@ def parse_qemu(path: pathlib.Path) -> list:
         if i + 1 < len(dumps):
             nxt = dumps[i + 1]
             for k, v in nxt.items():
-                if k[0] in "xfv" and k[1:].isdigit() and d.get(k) != v:
+                if (k == "fflags" or (k[0] in "xfv" and k[1:].isdigit())) and d.get(k) != v:
                     st.writes[k] = v
             vectors = {nxt.get("mtvec", -1) & ~3, nxt.get("stvec", -1) & ~3}
             if nxt["pc"] in vectors and d["pc"] in (nxt.get("mepc"), nxt.get("sepc")) \
@@ -645,7 +659,7 @@ def compare(sail: Run, other: Run, entry: int, tohost: int | None = None, limit:
             prev = sa.get(name)
             va = a.writes.get(name, prev)
             vb = b.writes.get(name, sb.get(name, prev))
-            if name[0] == "f" and va is not None and vb is not None and (va >> 32 == 0 or vb >> 32 == 0):
+            if name[0] == "f" and name != "fflags" and va is not None and vb is not None and (va >> 32 == 0 or vb >> 32 == 0):
                 va, vb = va & 0xFFFFFFFF, vb & 0xFFFFFFFF      # a 32-bit print on one side
             if va is not None and vb is not None and va != vb:
                 return i, Divergence(i, a.pc, name, fmt(va, name), fmt(vb, name))
