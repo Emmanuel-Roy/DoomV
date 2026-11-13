@@ -2317,6 +2317,12 @@ void DoomSystem::wire_gpu_log()
 		};
 		return;
 	}
+	// Only for -record (set up before this). An on_sync makes every sync
+	// point compare all of Venus's memory with a mirror of it -- device
+	// memory too, whenever GPU work ran -- which with a model's buffers
+	// mapped is most of a run's time, and reads the GPU's host-visible
+	// memory back over the bus to do it.
+	if (!record_file) return;
 	gpu.on_sync = [this](VirtioGpu::SyncKind kind, const VirtioGpu::BlobWrites &writes) {
 		if (!record_file) return;
 		std::fprintf(record_file, "%llu vsync %d", (unsigned long long)memory.instruction_count(), (int)kind);

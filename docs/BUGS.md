@@ -7448,3 +7448,17 @@ rebuilt from the devices on a restore), and setipnum and setipnum_le set a
 level source pending only while it is up. Bisected: 05d2917 boots clean,
 22f7457 does not.
 
+<a id="bug192"></a>
+### 192. Venus compared all of its memory at every sync point, recording or not
+
+The `-record` side of Venus (71866ac) diffs every blob against a mirror at
+each sync point -- shared memory always, device memory whenever GPU work ran
+-- to log what the host wrote. The callback that does it was installed on
+every run with `-gpu` and only returned early, after the diff, when no log was
+open. With llama.cpp's buffers mapped that was nearly all of a run: the CPU
+thread sat in `memcmp` inside `VirtioGpu::sync`, reading the GPU's
+host-visible memory back over the bus, and a model load that now takes
+seconds of guest time made no visible progress in twenty minutes of wall
+clock. The recorder is installed only when `-record` has opened its log.
+Guest-invisible: the Venus step itself runs at the same instructions either
+way (two `-gpu` runs stopped mid-load leave identical crash.log files).
