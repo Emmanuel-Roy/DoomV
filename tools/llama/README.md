@@ -58,6 +58,87 @@ of that script. It also works on a *copy* of the image: a boot writes to the
 disk, and a throwaway run should not be what the real image has been through --
 see the determinism note in [scripts/README.md](../../scripts/README.md).
 
+## On the GPU: Vulkan through virtio-gpu
+
+llama.cpp's Vulkan backend runs in the guest on Mesa's Venus driver, which
+hands every Vulkan call to the virtio-gpu, and DoomV's `-gpu` runs them on this
+computer's GPU (see [tools/venus](../venus/README.md)). Nothing in llama.cpp
+knows it is virtualised: it finds a Vulkan device and offloads to it.
+
+```sh
+bash tools/llama/build_vulkan.sh                                  # once: shared/llama-vulkan
+bash tools/llama/run_vulkan.sh shared/Qwen3.5-0.8B-Q4_K_M.gguf    # boot, run on the GPU, power off
+bash tools/llama/run_vulkan.sh shared/model.gguf "Once upon a time" 32
+NGL=0 bash tools/llama/run_vulkan.sh shared/model.gguf             # same binary, CPU only, to compare
+```
+
+Needs an image with Mesa's Vulkan drivers (`python scripts/boot.py ubuntu
+--setup-gpu`, once) and `build/venus` (`python scripts/get_venus.py`, which
+`boot.py --gpu` runs by itself). `run_vulkan.sh` prints what the guest's
+`vulkaninfo` sees, the device llama.cpp chose, the answer and the timings:
+
+```
+--- the guest's GPU (vulkaninfo) ---
+	deviceName         = Virtio-GPU Venus (AMD Radeon RX 9070 XT)
+	driverName         = venus
+	driverInfo         = Mesa 25.2.8-0ubuntu0.24.04.4
+	...
+--- llama.cpp's Vulkan backend ---
+Available devices:
+  Vulkan0: Virtio-GPU Venus (AMD Radeon RX 9070 XT) (16304 MiB, 16304 MiB free)
+--- what the model produced ---
+The capital of France is **Paris**.
+--- timing (guest clock, then this computer's) ---
+prompt eval time =     105.95 ms /    13 tokens (    8.15 ms per token,   122.70 tokens per second)
+       eval time =     131.49 ms /    11 runs   (   11.95 ms per token,    83.66 tokens per second)
+wall clock: 4 min 53 s, boot included
+```
+
+That is the whole run -- boot, model load, answer -- in under five minutes.
+On the CPU the static build takes about 35 minutes for twelve tokens (above),
+and this binary with `NGL=0`, beside it on the same machine, had given its
+first token after 23. The guest's clock counts instructions, so 12 ms a token
+is about 12 million guest instructions: the CPU only sends the work, and the
+matrices are multiplied on the GPU.
+
+Settings, all optional: `NGL=` layers on the GPU (99, all), `CTX=` context
+(2048: llama.cpp's default is the model's full training context, and its KV
+cache would go to the GPU too), `VKDEV=` which device (0), `SEED=` the
+sampler's seed (42), and `RAM=`, `IMAGE=` as for `run.sh`.
+
+**Which GPU.** Venus shows the guest every GPU the host has -- a machine with
+a discrete card and an integrated one has two, plus Mesa's llvmpipe on the
+CPU -- and llama.cpp would split the model across all of them.
+`run_vulkan.sh` sets `GGML_VK_VISIBLE_DEVICES=$VKDEV` to keep it to one;
+vulkaninfo's list is the order, and `VKDEV=0,1` uses two.
+
+**Why the build is different.** `build.sh` makes a static binary, and a
+static binary cannot `dlopen` -- which is how the Vulkan loader reaches the
+driver, through `/usr/share/vulkan/icd.d/virtio_icd.json`. So `llama-vulkan`
+is dynamic, and a dynamic binary must be linked against the guest's own glibc
+(Ubuntu 24.04's 2.39), not the cross-compiler's newer one. `build_vulkan.sh`
+builds against an Ubuntu 24.04 riscv64 sysroot (libc, the Vulkan loader, the
+SPIR-V headers) and links libstdc++ and libgcc statically, since the
+cross-compiler's are newer than the guest's too; it reports the newest glibc
+symbol the binary needs (2.38). `glslc` compiles the shaders on the build
+machine. All of those come as `.deb`s downloaded on the Windows side
+(`fetch_vulkan_debs.py`), because WSL often has no network of its own here
+(a VPN), and WSL only unpacks them.
+
+**By hand**, in a guest booted with `python scripts/boot.py ubuntu --gpu
+--ram 4G`:
+
+```sh
+mkdir -p /mnt/shared && mount -t 9p -o trans=virtio,version=9p2000.L shared /mnt/shared
+cp /mnt/shared/llama-vulkan /root/ && chmod +x /root/llama-vulkan
+export GGML_VK_VISIBLE_DEVICES=0
+/root/llama-vulkan completion --list-devices
+/root/llama-vulkan completion -m /mnt/shared/Qwen3.5-0.8B-Q4_K_M.gguf     -p "The capital of France is" -n 12 -c 2048 -ngl 99 -t 1 --no-warmup -st
+```
+
+`-st` ends the chat after one answer; without it `completion` waits at its
+`>` prompt for the next turn. That is what an unattended run must not do.
+
 ## Run it by hand
 
 Boot Ubuntu normally with room for the model:
@@ -253,6 +334,8 @@ knowing so the first two presses are not mistaken for a hang.
   enough for one inside a desktop session -- see above. Unused guest RAM costs
   nothing -- the allocation is lazy -- so size it for the model rather than
   sparingly. A bigger model needs a bigger `-ram=` and nothing else.
+* **GPU.** `build_vulkan.sh` / `run_vulkan.sh` run it on this computer's GPU;
+  see [On the GPU](#on-the-gpu-vulkan-through-virtio-gpu).
 * **Vector.** This builds for plain `rv64gc`. The guest implements far more,
   vector included, so an RVV build of ggml is the obvious next thing to try;
   it has not been tried here.
