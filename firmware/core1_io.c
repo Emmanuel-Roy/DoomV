@@ -66,6 +66,7 @@ int io_get_key(int *pressed, unsigned char *key, int *source)
 //   'K' pressed key   a key event, as from the buttons (picolink.py play)
 //   'V' n             stream every nth frame over USB (0: stop)
 //   'R'               reboot into link mode (lock-step recording)
+//   'W' e m           the same, starting on map EeMm (-warp e m)
 //   'B'               reboot into the benchmark
 //   'U'               reboot into BOOTSEL, for a new UF2
 
@@ -88,11 +89,16 @@ static void host_byte(uint8_t c)
 		if (nargs < need) return;
 		need = 0;
 		if (cmd == 'K') input_push(IO_FROM_PC, args[0], args[1]);
+		else if (cmd == 'W') {                  // link mode, starting on map E<a>M<b>
+			watchdog_hw->scratch[1] = 0x57A00000u | ((uint32_t)args[0] << 8) | args[1];
+			reboot_into(2);
+		}
 		else if (cmd == 'V') video_every = args[0];
 		return;
 	}
 	switch (c) {
 	case 'K': cmd = c; nargs = 0; need = 2; break;
+	case 'W': cmd = c; nargs = 0; need = 2; break;
 	case 'V': cmd = c; nargs = 0; need = 1; break;
 	case 'R': reboot_into(2); break;   // main.c: MODE_LINK
 	case 'B': reboot_into(1); break;   // main.c: MODE_BENCH

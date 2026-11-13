@@ -13,7 +13,9 @@ checked, frame by frame, against my RISC-V emulator
   `timedemo` benchmark.
 - **Lock-step with DoomV.** The Pico records its inputs, picture hashes and
   retired-instruction counts; DoomV replays them on the same machine code
-  and halts at the first difference.
+  -- every build checks the two are identical -- and halts at the first
+  difference. Against the real chip: every frame, every retired instruction
+  of DOOM, the same.
 
 ## Hardware
 

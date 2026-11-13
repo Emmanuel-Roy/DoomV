@@ -20,7 +20,4 @@ _start:
 	blt a0, a1, 1b
 2:
 	call main
-
-	.global _exit
-_exit:
-	j _exit
+3:	j 3b                    // main never returns; _exit is port/port_libc.c's

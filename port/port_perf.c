@@ -65,7 +65,21 @@ void perf_take_instret(uint32_t *tic, uint32_t *render)
 }
 
 extern void __real_G_Ticker(void);
+#ifdef PORT_FUNCPROF
+// The lock-step drill-down (port_funcprof.c): profile each game-logic window.
+void port_funcprof_begin(void);
+void port_funcprof_end(uint32_t frame, uint32_t window_instret);
+void __wrap_G_Ticker(void)
+{
+	win_tics++;
+	uint32_t before = instret_tic;
+	port_funcprof_begin();
+	TIMED(PERF_TIC, instret_tic, __real_G_Ticker());
+	port_funcprof_end(port_link_frames() + 1, instret_tic - before);
+}
+#else
 void __wrap_G_Ticker(void) { win_tics++; TIMED(PERF_TIC, instret_tic, __real_G_Ticker()); }
+#endif
 
 extern void __real_R_RenderBSPNode(int bspnum);
 void __wrap_R_RenderBSPNode(int bspnum) { TIMED(PERF_BSP, instret_render, __real_R_RenderBSPNode(bspnum)); }

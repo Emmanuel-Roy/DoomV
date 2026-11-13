@@ -20,6 +20,7 @@
 #include "hardware/clocks.h"
 #include "hardware/vreg.h"
 #include "hardware/watchdog.h"
+#include "hardware/sync.h"
 
 #include "board_config.h"
 #include "buttons.h"
@@ -154,7 +155,17 @@ const uint8_t *backend_wad(uint32_t *size)
 	return doom_wad;
 }
 
-extern char __HeapLimit;
+// The C library's heap (port_libc.c): from the end of static data to the top
+// of main SRAM.
+extern char __end__, __HeapLimit;
+void backend_heap(void **lo, void **hi)
+{
+	*lo = &__end__;
+	*hi = &__HeapLimit;
+}
+
+void backend_console(const char *buf, int len) { usb_console_write(buf, (size_t)len); }
+
 uint8_t *backend_zone(int *size)
 {
 	char *brk = sbrk(0);
@@ -284,7 +295,10 @@ int main(void)
 	         (unsigned long)(clock_get_hz(clk_sys) / 1000000),
 	         (unsigned long)(spi_hz / 1000000), (unsigned long)(spi_hz / 100000 % 10));
 
-	char *extra[4] = { NULL };
+	static char *extra[6] = { NULL };
+	static char warp_e[4], warp_m[4];
+	uint32_t warp = watchdog_hw->scratch[1];
+	watchdog_hw->scratch[1] = 0;
 	if (mode == MODE_BENCH) {
 		extra[0] = "-timedemo";
 		extra[1] = "demo1";
@@ -303,10 +317,23 @@ int main(void)
 			steady_ms = usb_link_connected() ? steady_ms + 10 : 0;
 		}
 		if (steady_ms >= 250) link_mode = LINK_RECORD;
+		if ((warp & 0xFFF00000u) == 0x57A00000u) {    // picolink.py record --warp E M
+			snprintf(warp_e, sizeof warp_e, "%lu", (unsigned long)((warp >> 8) & 0xFF));
+			snprintf(warp_m, sizeof warp_m, "%lu", (unsigned long)(warp & 0xFF));
+			extra[0] = "-warp"; extra[1] = warp_e; extra[2] = warp_m;
+		}
 	}
 	sleep_ms(mode == MODE_PLAY ? 300 : 0);   // let a console attach and see the banner
 	backend_log(banner);
-	if (link_mode == LINK_RECORD) backend_log("link: recording for DoomV lock-step");
+	if (link_mode == LINK_RECORD) {
+		backend_log("link: recording for DoomV lock-step");
+		// No interrupts on core 0 while DOOM is recorded: a handler's
+		// instructions would retire inside a counted window, and the counts
+		// compared with DoomV would differ by whatever it ran. Core 0 needs
+		// none -- USB and the display are core 1's, the clock is read
+		// directly, and sleeps spin (backend_sleep_ms).
+		save_and_disable_interrupts();
+	}
 
 	port_run(extra);
 }

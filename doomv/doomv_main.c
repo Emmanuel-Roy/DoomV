@@ -88,6 +88,19 @@ uint8_t *backend_zone(int *size)
 
 // ---- console ----------------------------------------------------------------------
 
+// The C library's heap (port_libc.c): after .bss, up to 1 MB below the stack.
+extern char end;
+void backend_heap(void **lo, void **hi)
+{
+	*lo = &end;
+	*hi = (void *)0x83F00000u;
+}
+
+void backend_console(const char *buf, int len)
+{
+	for (int i = 0; i < len; i++) *(volatile uint8_t *)(uintptr_t)MMIO_DEBUG = (uint8_t)buf[i];
+}
+
 static void puts_debug(const char *s)
 {
 	while (*s) *(volatile uint8_t *)(uintptr_t)MMIO_DEBUG = (uint8_t)*s++;

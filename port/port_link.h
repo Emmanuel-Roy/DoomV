@@ -35,11 +35,13 @@ enum {
 void port_link_start(uint32_t wad_size, uint32_t zone_size, const char *args);
 void port_link_frame(const uint8_t *screen, size_t len);
 uint32_t port_link_frames(void);
+void port_text(const char *line);   // diagnostics: in the recording, or on the console
 
 // Retired instructions spent inside DG_GetTicksMs/DG_GetKey so far. Those are
 // platform code (USB on the Pico, a replay device on DoomV), so the counted
 // engine windows subtract them (port_perf.c).
 uint32_t port_link_excluded_instret(void);
+void port_link_exclude_instret(uint32_t n);   // add platform code run elsewhere (port_libc.c)
 
 // Hashes, also used by the sim for golden-run checks.
 uint32_t port_hash_bytes(const void *data, size_t len, uint32_t h);

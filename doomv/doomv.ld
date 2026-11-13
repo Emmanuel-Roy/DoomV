@@ -11,6 +11,11 @@ SECTIONS
     .text : {
         *(.text.start)
         *(.text*)
+    } > RAM
+
+    /* Constant data in a section of its own, as in the Pico firmware, so a
+       disassembly (tools/compare_isa.py) never reads data as instructions. */
+    .rodata : {
         *(.rodata*)
         *(.srodata*)
     } > RAM

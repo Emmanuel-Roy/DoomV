@@ -65,6 +65,11 @@ uint8_t *backend_zone(int *size);
 // Report a line of human-readable status (perf stats, errors).
 void backend_log(const char *line);
 
+// RISC-V builds only (port_libc.c): the memory newlib's malloc may grow into,
+// and raw console output for the C library's stdout/stderr.
+void backend_heap(void **lo, void **hi);
+void backend_console(const char *buf, int len);
+
 // DOOM stopped (I_Error or quit). Show `msg` and never return.
 void backend_fatal(const char *msg) __attribute__((noreturn));
 

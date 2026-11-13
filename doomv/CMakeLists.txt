@@ -12,7 +12,7 @@ project(pico2doom_doomv C ASM)
 
 include(${CMAKE_CURRENT_LIST_DIR}/../port/port.cmake)
 
-add_executable(pico2doom-doomv.elf start.S doomv_main.c libc_shim.c)
+add_executable(pico2doom-doomv.elf start.S doomv_main.c)
 port_add_doom(pico2doom-doomv.elf)
 port_riscv_lockstep_flags(pico2doom-doomv.elf)
 target_include_directories(pico2doom-doomv.elf PRIVATE ${CMAKE_CURRENT_LIST_DIR})

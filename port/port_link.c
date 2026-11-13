@@ -35,6 +35,7 @@ static uint32_t frames;
 static uint32_t excluded_instret;
 
 uint32_t port_link_excluded_instret(void) { return excluded_instret; }
+void port_link_exclude_instret(uint32_t n) { excluded_instret += n; }
 
 // The last clock value sent, and how many times since it was repeated.
 // TryRunTics spins on the clock while it waits for the next tic, so most
@@ -77,8 +78,10 @@ void port_link_start(uint32_t wad_size, uint32_t zone_size, const char *args)
 	put(args, n);
 }
 
-static uint32_t ticks_body(void);
-static int key_body(int *pressed, unsigned char *key);
+// noinline: these are the boundary tools/compare_isa.py stops at -- the
+// platform code below them is measured and subtracted, not compared.
+static uint32_t ticks_body(void) __attribute__((noinline));
+static int key_body(int *pressed, unsigned char *key) __attribute__((noinline));
 
 // The two engine inputs. Their bodies are platform code, so the retired
 // instructions they take are set aside (see port_link_excluded_instret).
@@ -222,3 +225,19 @@ void port_link_frame(const uint8_t *screen, size_t len)
 }
 
 uint32_t port_link_frames(void) { return frames; }
+
+// A diagnostic line for the PC: while recording, a TEXT record in the stream
+// (lossless, and DoomV prints it next to its own output); otherwise the
+// console.
+void port_text(const char *line)
+{
+	if (mode == LINK_RECORD) {
+		size_t n = strlen(line);
+		if (n > 255) n = 255;
+		put8(LINK_TAG_TEXT);
+		put8((uint8_t)n);
+		put(line, n);
+	} else {
+		backend_log(line);
+	}
+}

@@ -50,11 +50,9 @@ count over every frame instead.
 
 For the counts to be comparable:
 
-- **Same instructions.** The firmware and the DoomV guest are built by the
-  same compiler with the same flags. `tools/compare_isa.py` disassembles
-  both and confirms that all 890 shared functions (83,791 instructions) are
-  instruction-for-instruction identical; only the platform backends and the
-  C library's system calls differ.
+- **Identical builds.** The firmware and the DoomV guest are built by the
+  same compiler with the same flags, and every firmware build also builds the
+  guest and checks them (see *Identical builds* below).
 - **No linker relaxation.** Relaxation shortens address sequences only for
   data that lands near `gp`, which differs between the images
   (`port_riscv_lockstep_flags`).
@@ -67,6 +65,38 @@ For the counts to be comparable:
 - **Same heap.** The recording starts with the Pico's zone size and DOOM's
   arguments; DoomV gives DOOM exactly the same, so allocation decisions
   match.
+
+## Identical builds
+
+Every firmware build (`cmake --build build/firmware`) also builds the DoomV
+guest and runs `tools/compare_isa.py`, which fails the build unless every
+function DOOM can reach from a counted window -- 422 functions, ~51,700
+instructions, down through newlib and libgcc -- is the same machine code in
+both images: same opcodes, same registers, same callees. What it took:
+
+| Difference found | Fix |
+|---|---|
+| pico-sdk `--wrap`s `malloc`/`free`/`realloc` (with a mutex) and `printf`/`puts`/`vprintf` (through its stdio drivers), also inside newlib | the firmware defines `pico_malloc` and `pico_stdio` itself, without the wraps (`firmware/CMakeLists.txt`) |
+| system calls (`_sbrk`, `_write`, ...) from pico-sdk on one side, a shim on the other | one shared `port/port_libc.c`; console output is platform code, measured and subtracted |
+| pico-sdk's soft-float routines replace libgcc's | `pico_set_float/double_implementation(compiler)` |
+| `-O3` from the SDK's release flags on some shared files | `port_riscv_lockstep_flags` pins `-O2` and no relaxation on every shared file |
+| the zone started with power-on garbage on the Pico, zeroes on DoomV | shared code zeroes the zone and every piece of heap before use |
+| newlib's `memset`/`memmove` align to 16 bytes, so their instruction count depended on where data landed in each image (addresses agree mod 4, not mod 16) | shared `memset`/`memmove` in `port_libc.c` that look only at alignment mod 4 |
+
+A `minstret` self-test (`port/port_instret_test.c`) runs at start-up on both
+machines and goes into the recording: reads around back-to-back CSRs, loads,
+load-use stalls, divides, taken branches and stores give the same counts on
+the real Hazard3 as on DoomV.
+
+## Drilling down
+
+When a frame's retired counts differ, build both with `-DPORT_FUNCPROF=ON`:
+the engine is compiled with `-finstrument-functions`, and constant-cost,
+branch-free hooks (`port/port_funcprof.c`) charge each stretch of retired
+instructions to the function running -- the same hooks on both machines, so
+they cannot perturb the comparison. Large game-logic windows are dumped per
+function; the Pico's dump travels in the recording, so one DoomV log holds
+both, and `tools/funcprof_diff.py` names the functions that differ.
 
 ## Running it
 
@@ -102,18 +132,22 @@ attract demo on E1M5 -- replayed in DoomV:
 
 | | |
 |---|---|
-| frames | 897 |
-| pictures and game state identical | **897 of 897** |
-| retired-instruction counts identical | **896 of 897** -- ~910 million instructions of DOOM |
-| the exception | frame 161, where the demo starts and E1M5 loads: DoomV retired 64 more instructions in game logic, with the same picture and state |
+| | First run | With identical builds |
+|---|---:|---:|
+| frames compared | 897 | 864 (boot, title, DEMO1 on E1M5) |
+| pictures and game state identical | all | **all** |
+| retired-instruction counts identical | 896 (one frame off by 64) | **all -- strict mode, no exceptions** |
 
-`PICOLINK_HASHES_ONLY=1` is DoomV's diagnostic mode for this: it reports
-retired-count differences but halts only on a picture or state difference.
-The 64 instructions come from a one-off path at level load; the next step is
-to split the game-logic counter into finer regions (level load, the
-per-system tickers) on both machines to name the code. Candidates are the
-places the shared code reaches the C library's platform layer -- pico-sdk
-gives newlib multicore-safe lock hooks where DoomV's newlib has none.
+A run starting on E1M1 (`picolink.py record --warp 1 1`) also matched in
+strict mode on every one of its 916 frames: ~1.57 billion retired
+instructions of DOOM, the same on the real chip and in DoomV.
+
+The first run's one-frame difference, at DEMO1's start, took the
+drill-down to find: first pico-sdk's malloc/printf wrappers, then newlib's
+16-byte-aligning `memset` -- both now gone (*Identical builds*).
+`PICOLINK_HASHES_ONLY=1` is DoomV's diagnostic mode for such hunts: it
+reports retired-count differences and halts only on a picture or state
+difference.
 
 ## What it has found so far
 

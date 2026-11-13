@@ -332,7 +332,7 @@ def cmd_play(args):
 
 def cmd_record(args):
     print("picolink: rebooting the Pico into link mode...")
-    console, link = reboot_into(b"R")
+    console, link = reboot_into(bytes([ord("W"), args.warp[0], args.warp[1]]) if args.warp else b"R")
     print(f"picolink: recording to {args.output} -- replay it with DoomV:\n"
           f"  riscv_doom build/doomv/doom1.wad build/doomv/pico2doom-doomv.elf "
           f"-march=rv32imac_zicsr_zifencei_zba_zbb_zbs_zbkb -picolink={args.output}\n"
@@ -391,6 +391,7 @@ def main():
     p = sub.add_parser("play"); p.add_argument("--video", type=int, default=2); p.set_defaults(fn=cmd_play)
     p = sub.add_parser("record"); p.add_argument("output"); p.add_argument("--video", type=int, default=0)
     p.add_argument("--seconds", type=float, default=0, help="stop after this long (default: Ctrl+C)")
+    p.add_argument("--warp", type=int, nargs=2, metavar=("E", "M"), help="start on map EeMm")
     p.set_defaults(fn=cmd_record)
     p = sub.add_parser("flash"); p.add_argument("uf2", nargs="?", default="build/firmware/pico2doom.uf2")
     p.set_defaults(fn=cmd_flash)

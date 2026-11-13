@@ -137,8 +137,29 @@ endfunction()
 #     happens to land near gp -- which differs between the two images, since
 #     their backends differ. Without it, both execute identical sequences
 #     and their minstret counts per frame can be compared exactly.
+#   * one C-library layer (port_libc.c): pico-sdk --wraps malloc/printf and
+#     brings its own system calls, so the shared code calls port_malloc,
+#     port_printf, ... instead -- renamed here -- implemented identically for
+#     both on newlib's reentrant functions.
 function(port_riscv_lockstep_flags target)
-  set_property(SOURCE ${DOOM_ENGINE_SOURCES} ${PORT_SOURCES} APPEND PROPERTY
+  target_sources(${target} PRIVATE ${PORT_DIR}/port_libc.c ${PORT_DIR}/port_instret_test.c)
+  set(shared ${DOOM_ENGINE_SOURCES} ${PORT_SOURCES} ${PORT_DIR}/port_libc.c ${PORT_DIR}/port_instret_test.c)
+  set_property(SOURCE ${shared} APPEND PROPERTY
     COMPILE_OPTIONS -O2 -mno-relax -ffunction-sections -fdata-sections)
+  set_property(SOURCE ${shared} APPEND PROPERTY COMPILE_DEFINITIONS
+    malloc=port_malloc calloc=port_calloc realloc=port_realloc free=port_free
+    printf=port_printf vprintf=port_vprintf puts=port_puts)
   target_link_options(${target} PRIVATE -Wl,--no-relax)
+  # The lock-step drill-down: per-function retired-instruction counts
+  # (port_funcprof.c), the same in both builds. Diagnostic only.
+  if(PORT_FUNCPROF)
+    target_sources(${target} PRIVATE ${PORT_DIR}/port_funcprof.c)
+    set_property(SOURCE ${PORT_DIR}/port_funcprof.c APPEND PROPERTY
+      COMPILE_OPTIONS -O2 -mno-relax -ffunction-sections -fdata-sections)
+    set_property(SOURCE ${DOOM_ENGINE_SOURCES} APPEND PROPERTY COMPILE_OPTIONS -finstrument-functions)
+    set_property(SOURCE ${PORT_DIR}/port_perf.c APPEND PROPERTY COMPILE_DEFINITIONS PORT_FUNCPROF=1)
+    set_property(SOURCE ${PORT_DIR}/port_funcprof.c APPEND PROPERTY COMPILE_DEFINITIONS PROF_BITS=${PORT_FUNCPROF_BITS})
+  endif()
 endfunction()
+option(PORT_FUNCPROF "Lock-step drill-down: per-function retired instructions (diagnostic)" OFF)
+set(PORT_FUNCPROF_BITS 10 CACHE STRING "Profile table: 2^bits slots (bigger: fewer collisions, less RAM)")
