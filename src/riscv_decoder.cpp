@@ -700,7 +700,12 @@ bool fp_rm_illegal(const DecodedOp &d, uint8_t frm)
 // once when the entry is filled. Anything not listed is FOP_SLOW.
 FastOp classify_fast(const DecodedOp &d)
 {
-	if (!Extensions.XLEN64) return FOP_SLOW;
+	// RV32 (a Pico2Doom guest): the same operations, but the ALU ones
+	// compute on 32 bits (run_fast), and RV64's word, doubleword and FP
+	// forms stay on the ordinary step.
+	const bool rv32 = !Extensions.XLEN64;
+	if (rv32 && (d.ext == Extension::F || d.ext == Extension::D)) return FOP_SLOW;
+	if (rv32 && (d.opcode == 0b0011011 || d.opcode == 0b0111011)) return FOP_SLOW;
 	if (d.ext == Extension::M) return FOP_MEXT;
 	if (d.ext == Extension::ZIHINTPAUSE) return FOP_FENCE;   // exec_ZIHINTPAUSE only advances pc
 	if (d.ext == Extension::F || d.ext == Extension::D) {
@@ -724,10 +729,12 @@ FastOp classify_fast(const DecodedOp &d)
 	}
 	case 0b0000011: {
 		static const FastOp l[8] = {FOP_LB, FOP_LH, FOP_LW, FOP_LD, FOP_LBU, FOP_LHU, FOP_LWU, FOP_SLOW};
+		if (rv32 && (f3 == 0b011 || f3 == 0b110)) return FOP_SLOW;   // LD, LWU: RV64 only
 		return l[f3 & 7];
 	}
 	case 0b0100011: {
 		static const FastOp st[8] = {FOP_SB, FOP_SH, FOP_SW, FOP_SD, FOP_SLOW, FOP_SLOW, FOP_SLOW, FOP_SLOW};
+		if (rv32 && f3 == 0b011) return FOP_SLOW;                     // SD: RV64 only
 		return st[f3 & 7];
 	}
 	case 0b0010011:

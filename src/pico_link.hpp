@@ -23,6 +23,12 @@
 // is directly comparable.
 //
 // The file may still be growing (a live run): reads wait for more data.
+//
+// Co-running (Pico2Doom's `picolink.py corun`): the PC records the Pico into
+// the file while DoomV follows it, and with PICOLINK_ACK set DoomV prints
+// "picolink-ack N" to stderr after each frame that matched. The PC uses it to
+// keep the Pico at most a few frames ahead, and to stop the Pico at the frame
+// where DoomV halted.
 
 #include <cstdint>
 #include <cstdio>

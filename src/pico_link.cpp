@@ -41,13 +41,17 @@ bool PicoLink::open(const std::string &path)
 }
 
 // The recording may still be arriving from the Pico: wait for each byte.
+// Live (picolink.py corun) the next record is usually a millisecond or two
+// away, and a sleep on Windows can last a 15.6 ms timer tick, which paced the
+// Pico at 10 fps: yield first, and sleep only once the stream has gone quiet.
 uint8_t PicoLink::u8()
 {
-	for (;;) {
+	for (unsigned idle = 0;; idle++) {
 		int c = std::fgetc(f_);
 		if (c != EOF) return (uint8_t)c;
 		std::clearerr(f_);
-		std::this_thread::sleep_for(std::chrono::milliseconds(2));
+		if (idle < 20000) std::this_thread::yield();
+		else std::this_thread::sleep_for(std::chrono::milliseconds(1));
 	}
 }
 
@@ -201,6 +205,18 @@ void PicoLink::write32(uint64_t addr, uint32_t val)
 	}
 	frames_ok_++;
 	instret_total_ += (uint64_t)pico[3] + pico[4];
+	// PICOLINK_ACK=1 (picolink.py corun): say each frame that matched, so the
+	// PC can let the Pico run on -- it keeps the Pico a few frames ahead of
+	// DoomV at most, and stops it where DoomV halts.
+	static const bool ack = std::getenv("PICOLINK_ACK") != nullptr;
+	if (ack) {
+		// One write, so the guest's console output (stdout, often the same
+		// pipe) cannot land in the middle of it.
+		char line[40];
+		const int n = std::snprintf(line, sizeof line, "picolink-ack %llu\n", (unsigned long long)frames_ok_);
+		std::fwrite(line, 1, (size_t)n, stderr);
+		std::fflush(stderr);
+	}
 	if (frames_ok_ % 175 == 0)
 		std::cerr << "picolink: " << frames_ok_ << " frames in step, " << instret_total_
 		          << " retired instructions of DOOM matched\n";
