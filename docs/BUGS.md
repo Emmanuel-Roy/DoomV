@@ -360,6 +360,7 @@ of console output (`2667bf1`, re-verified in `936df17`).
 195. [Vector single precision never raised invalid for a signaling NaN](#bug195)
 196. [Half to and from 8-bit integers did nothing in the vector unit](#bug196)
 197. [The two Sail references disagreed on misaligned AMOs](#bug197)
+198. [The lock-step Sail translated through a reserved PTE bit](#bug198)
 
 <a id="part-vii"></a>
 ### Part VII — Cross-cutting
@@ -7560,3 +7561,17 @@ same machine (loads and stores keep the granule). Spike and QEMU also trap
 these AMOs, though as address-misaligned. tools/verification/tests/lockstep/amo_misaligned.S
 lock-steps the cases against Sail: inside a block, across one, LR/SC, and
 under Sv39 on an unmapped page, where the access fault comes first.
+
+<a id="bug198"></a>
+### 198. The lock-step Sail translated through a reserved PTE bit
+
+The same split as 197, found by the same co-run. mkconfig.py enables the
+profile's extensions but leaves everything else at the model's default, and
+the default has Svrsw60t59b on: PTE bits 60-59 become software's. Neither
+RVA23 nor DoomV has it, and riscv-arch-test's config has it off. In
+sv39_pte_reserved_field_Smode a store through a PTE with bit 59 set took a
+page fault in DoomV, in Spike and in the reference signatures, but completed
+in the lock-step Sail, so corun.py reported a DoomV divergence that wasn't
+one. mkconfig.py now turns it off. Sail's default still enables other
+extensions DoomV lacks; none of them changed a test, but the mkconfig.py audit
+lists them.

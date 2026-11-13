@@ -147,6 +147,13 @@ def main():
     # Loads and stores keep the granule.
     cfg["memory"]["misaligned"]["exceptions"]["amo"] = {"Some": "AccessFault"}
 
+    # Svrsw60t59b (PTE bits 60-59 for software) is on in the model's default
+    # but is neither in RVA23 nor in DoomV, nor on in riscv-arch-test's
+    # sail-RVA23S64 config. With it on, a PTE with bit 59 set translated in
+    # the lock-step while DoomV, Spike and the signatures took the page fault
+    # the spec gives reserved bits (sv39_pte_reserved_field_Smode; BUGS 198).
+    cfg["extensions"]["Svrsw60t59b"]["supported"] = False
+
     json.dump(cfg, open(OUT, "w"), indent=2)
     print("\nenabled %d extensions; wrote %s" % (len(enabled), OUT))
     if unknown:
