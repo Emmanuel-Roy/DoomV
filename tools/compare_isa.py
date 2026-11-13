@@ -10,7 +10,7 @@ Addresses legitimately differ (the Pico runs from flash at 0x10000000, the
 DoomV guest from RAM at 0x80000000), so numbers are ignored: what must match
 is each instruction's opcode and registers, in order. Two spellings objdump
 uses for the same instruction are folded together: `jalr ra` is
-`jalr 0(ra)`, and `mv a,b` is `addi a,b,0`.
+`jalr 0(ra)` (and `jr t1` is `jr 0(t1)`), and `mv a,b` is `addi a,b,0`.
 
 Usage: python tools/compare_isa.py build/firmware/pico2doom.elf build/doomv/pico2doom-doomv.elf
 """
@@ -36,7 +36,7 @@ def functions(elf, objdump):
         args = re.sub(r"-?\b(0x)?[0-9a-f]+\b", "N", args).strip()
         if op == "mv":                       # mv rd, rs  ==  addi rd, rs, 0
             op, args = "addi", args + ",N"
-        if op == "jalr" and "(" not in args:  # jalr rs  ==  jalr 0(rs)
+        if op in ("jalr", "jr") and "(" not in args:  # jalr rs == jalr 0(rs); jr likewise
             args = "N(%s)" % args
         funcs[cur].append(op + " " + args)
     return funcs

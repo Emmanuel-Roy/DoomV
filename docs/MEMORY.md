@@ -29,9 +29,9 @@ would have to be unpacked into RAM, the one thing there is less of.
 | | Stock doomgeneric | Pico2Doom |
 |---|---:|---:|
 | 32-bit copy of every frame (`DG_ScreenBuffer`) | 250 KB | **0** -- sent from the 8-bit frame |
-| static data (`.data` + `.bss`) | 397 KB | **233 KB** |
+| static data (`.data` + `.bss`) | 397 KB | **235 KB** |
 | `malloc` (WAD directory, ...) | 35 KB | **0.1 KB** |
-| left for DOOM's zone (heap) | -- | **271 KB** |
+| left for DOOM's zone (heap) | -- | **269 KB** |
 
 Where the static memory went: the renderer's fixed-size arrays sized from
 what the maps really use, constant tables kept in flash, netgame buffers for
@@ -40,12 +40,12 @@ for each patch and what it saves).
 
 What is left in RAM (the largest): the 8-bit screen (62 KB), visplanes
 (36 KB), openings (12 KB), light tables (11 KB), `viewangletox` (8 KB),
-sprite and wall-segment lists (14 KB), the LCD's DMA buffers (2.5 KB) and
-USB buffers (5 KB).
+sprite and wall-segment lists (14 KB), the LCD's DMA buffers (2.5 KB),
+USB buffers (5 KB) and core 1's stack (2 KB).
 
 ## Which maps fit
 
-Each map was run in the simulator with exactly the Pico's 271 KB zone, at
+Each map was run in the simulator with exactly the Pico's 269 KB zone, at
 Ultra-Violence (most monsters), teleporting through every sector and
 spinning for 4,000 frames with the monsters awake (`doom_sim -explore`), and
 again with 8 KB less as a margin:
@@ -77,12 +77,28 @@ need level geometry moved into flash and DOOM's line structure split in two
   (stock: 192 KB). It is borrowed only if the zone can spare it (patch 08);
   otherwise the new screen just appears.
 
+## Borrowing memory for the display
+
+Core 1 can send a frame to the LCD while core 0 draws the next one -- but
+only from a copy, and a whole frame is 64 KB. Rather than reserve it (which
+would cost E1M4 and E1M5), `port/port_video.c` *borrows* it from the zone as
+a cache block: the zone takes it back whenever DOOM needs the room. The whole
+frame is tried, then half, then a quarter; DOOM waits only for the rows that
+are not copied. Measured share of each frame sent without waiting:
+
+| E1M1 | E1M4 | E1M5 | E1M8 | E1M9 |
+|---:|---:|---:|---:|---:|
+| 98% | 25% | 5% | 98% | 50% |
+
+Because the borrowing is shared code, DoomV borrows and loses the block at
+the same moments, and its heap stays identical to the Pico's.
+
 ## Reproducing the numbers
 
 ```sh
 cmake -S sim -B build/sim -G Ninja -DCMAKE_TOOLCHAIN_FILE=$PWD/sim/zig-x86.cmake
 cmake --build build/sim
 cd build/sim
-./doom_sim -wad doom1.wad -zone 271 -fastclock -explore -frames 4000 -- -warp 1 5 -skill 4
+./doom_sim -wad doom1.wad -zone 269 -fastclock -explore -frames 4000 -- -warp 1 5 -skill 4
 ./doom_sim -wad doom1.wad -fastclock -explore -frames 2000 -zonereport -- -warp 1 6 -skill 4
 ```

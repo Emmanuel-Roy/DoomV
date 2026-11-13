@@ -19,7 +19,7 @@ checked, frame by frame, against my RISC-V emulator
 
 | Part | |
 |---|---|
-| Raspberry Pi Pico 2 (RP2350) | the RISC-V cores run DOOM; core 1 runs USB |
+| Raspberry Pi Pico 2 (RP2350) | core 0 runs DOOM; core 1 does all the I/O -- display, buttons, USB |
 | ILI9341 2.4"/2.8" SPI display, 320×240 | DOOM in the top 200 rows, performance read-out below |
 | 8 push buttons | between a GPIO and GND -- no resistors needed |
 
@@ -59,7 +59,13 @@ time, `python tools/picolink.py flash` does it without the button.
 ## Controls
 
 D-pad moves and turns, **Fire** shoots, **Use** opens doors, **Menu** opens
-the menu (Fire selects). Always-run is on. Maps that fit: **E1M1, E1M4,
+the menu (Fire selects). Always-run is on.
+
+Or play from the PC -- no buttons needed: `python tools/picolink.py play`
+shows the Pico's screen in a window (over USB) and sends the keyboard to it
+(arrows, Ctrl fire, Space use, Esc menu, Enter select, 1-7 weapons). PC keys
+and button presses go into the same input buffer, and every key DOOM reads,
+from either, is reported to the PC -- and recorded for DoomV. Maps that fit: **E1M1, E1M4,
 E1M5, E1M8, E1M9** -- the others show a "not enough RAM" screen.
 
 ## Performance

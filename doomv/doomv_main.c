@@ -51,8 +51,12 @@ int backend_get_key(int *pressed, unsigned char *key)
 
 // ---- display ------------------------------------------------------------------
 
-void backend_present(const uint8_t *frame, const uint16_t *pal565, const uint8_t *pal_rgb)
+void backend_present_wait(void) {}
+
+void backend_present(const uint8_t *frame, const uint16_t *pal565, const uint8_t *pal_rgb,
+                     const uint8_t *tail, int tail_rows)
 {
+	(void)tail; (void)tail_rows;   // presented at once from `frame`: nothing to wait for
 	(void)pal565;
 	static uint32_t pal32[256];
 	for (int i = 0; i < 256; i++)

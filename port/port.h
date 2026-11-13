@@ -41,10 +41,19 @@ uint32_t backend_cycles_per_us(void);
 // from doomkeys.h), or 0 when there is nothing pending.
 int backend_get_key(int *pressed, unsigned char *key);
 
-// Show one finished 320x200 frame. `pal565` is the current palette as
-// RGB565 (byte-swapped for the ILI9341's big-endian SPI order is the
-// backend's business), `pal_rgb` is the same palette as 768 bytes of RGB.
-void backend_present(const uint8_t *frame, const uint16_t *pal565, const uint8_t *pal_rgb);
+// Show one finished 320x200 frame. `frame` is DOOM's own screen; `pal565`
+// the palette as RGB565 and `pal_rgb` as 768 bytes of RGB.
+//
+// `tail` is a private copy of the frame's last `tail_rows` rows (0 to 200;
+// NULL when 0), which DOOM will not touch until backend_present_wait()
+// returns -- nor pal565, when tail_rows > 0. So a backend may return as soon
+// as it has read the *other* rows from `frame`, and send the tail while DOOM
+// draws the next frame (the Pico's second core does). All 200 rows copied:
+// no waiting at all; none: wait for the whole frame.
+void backend_present(const uint8_t *frame, const uint16_t *pal565, const uint8_t *pal_rgb,
+                     const uint8_t *tail, int tail_rows);
+// Block until the backend has finished reading the last frame it was given.
+void backend_present_wait(void);
 
 // The packed IWAD, mapped read-only (flash on the Pico).
 const uint8_t *backend_wad(uint32_t *size);

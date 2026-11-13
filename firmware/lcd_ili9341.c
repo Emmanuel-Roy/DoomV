@@ -139,22 +139,74 @@ uint32_t lcd_init(uint32_t spi_hz)
 	return actual;
 }
 
+static void convert_strip(uint16_t *out, const uint8_t *in, const uint16_t *pal565)
+{
+	for (int i = 0; i < STRIP_LINES * LCD_W; i += 4) {
+		out[i + 0] = pal565[in[i + 0]];
+		out[i + 1] = pal565[in[i + 1]];
+		out[i + 2] = pal565[in[i + 2]];
+		out[i + 3] = pal565[in[i + 3]];
+	}
+}
+
 void lcd_present_frame(const uint8_t *frame, const uint16_t *pal565)
 {
+	lcd_frame_begin(frame, NULL, 0, pal565);
+	while (!lcd_frame_step()) tight_loop_contents();
+}
+
+// ---- a frame as a job done in steps (core 1, between USB and buttons) ------
+//
+// Each step does what can be done without waiting: when the DMA is idle it
+// starts the strip converted last time, then converts the next one into the
+// other buffer while that strip goes out. So a 27 ms frame never holds up
+// the rest of core 1's loop for more than one strip's conversion (~15 us).
+
+static const uint8_t *job_top, *job_tail;
+static int job_split;                 // rows from job_top; the rest from job_tail
+static const uint16_t *job_pal;
+static volatile int job_y;            // rows converted (= read) so far; core 0 polls it
+static int job_buf, ready_buf;
+static bool job_active, ready;
+
+void lcd_frame_begin(const uint8_t *top, const uint8_t *tail, int tail_rows, const uint16_t *pal565)
+{
 	begin_window(0, LCD_GAME_Y, LCD_W - 1, LCD_GAME_Y + 199);
-	for (int y = 0, b = 0; y < 200; y += STRIP_LINES, b ^= 1) {
-		// strip[b] was last sent two strips ago; send_strip waited for it.
-		uint16_t *out = strip[b];
-		const uint8_t *in = frame + y * LCD_W;
-		for (int i = 0; i < STRIP_LINES * LCD_W; i += 4) {
-			out[i + 0] = pal565[in[i + 0]];
-			out[i + 1] = pal565[in[i + 1]];
-			out[i + 2] = pal565[in[i + 2]];
-			out[i + 3] = pal565[in[i + 3]];
-		}
-		send_strip(out, STRIP_LINES * LCD_W);
+	job_top = top;
+	job_tail = tail;
+	job_split = 200 - tail_rows;
+	job_pal = pal565;
+	job_buf = 0;
+	ready = false;
+	job_active = true;
+	job_y = 0;
+}
+
+int lcd_rows_read(void) { return job_active ? job_y : 200; }
+
+bool lcd_frame_step(void)
+{
+	if (!job_active) return true;
+	if (dma_channel_is_busy(dma_ch)) return false;
+	if (ready) {                                   // send what was converted last step
+		dma_channel_set_read_addr(dma_ch, strip[ready_buf], false);
+		dma_channel_set_trans_count(dma_ch, STRIP_LINES * LCD_W, true);
+		ready = false;
 	}
+	if (job_y < 200) {                             // and convert the next, meanwhile
+		const uint8_t *src = job_y < job_split ? job_top + job_y * LCD_W
+		                                       : job_tail + (job_y - job_split) * LCD_W;
+		convert_strip(strip[job_buf], src, job_pal);
+		ready = true;
+		ready_buf = job_buf;
+		job_buf ^= 1;
+		job_y += STRIP_LINES;
+		return false;
+	}
+	if (dma_channel_is_busy(dma_ch)) return false; // the last strip is still going
 	end_window();
+	job_active = false;
+	return true;
 }
 
 // ---- text -----------------------------------------------------------------

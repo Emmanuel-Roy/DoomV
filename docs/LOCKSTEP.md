@@ -83,7 +83,37 @@ For the counts to be comparable:
    DoomV reports every 175 frames in step, or the first difference.
 
 `--video N` streams every Nth frame of the Pico's screen over USB into a
-window beside DoomV's (it costs the Pico ~60 ms per streamed frame).
+window beside DoomV's (it costs the Pico ~60 ms per streamed frame), and
+keys typed in that window are played on the Pico.
+
+## Input from the Pico and from the PC
+
+Core 1 puts button presses *and* keys from the PC (`picolink.py play` or
+`record --video`) into one input buffer; DOOM's `DG_GetKey` takes them from
+there. Every key DOOM reads is recorded, whichever way it came, so DoomV
+replays PC and button input alike and stays in step. Each key is also sent
+to the PC as an `INPUT` record with its source -- in every mode, not just
+when recording -- so a press on the Pico shows up on the PC.
+
+## Real hardware against DoomV
+
+A 40-second recording from a real Pico 2 -- boot, title screen, the DEMO1
+attract demo on E1M5 -- replayed in DoomV:
+
+| | |
+|---|---|
+| frames | 897 |
+| pictures and game state identical | **897 of 897** |
+| retired-instruction counts identical | **896 of 897** -- ~910 million instructions of DOOM |
+| the exception | frame 161, where the demo starts and E1M5 loads: DoomV retired 64 more instructions in game logic, with the same picture and state |
+
+`PICOLINK_HASHES_ONLY=1` is DoomV's diagnostic mode for this: it reports
+retired-count differences but halts only on a picture or state difference.
+The 64 instructions come from a one-off path at level load; the next step is
+to split the game-logic counter into finer regions (level load, the
+per-system tickers) on both machines to name the code. Candidates are the
+places the shared code reaches the C library's platform layer -- pico-sdk
+gives newlib multicore-safe lock hooks where DoomV's newlib has none.
 
 ## What it has found so far
 

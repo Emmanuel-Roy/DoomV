@@ -54,13 +54,39 @@ and 95 ms means the SPI ran at ~12 MHz. The cause: the RP2350's peripheral
 clock stays on the 48 MHz USB PLL unless it is moved, which caps SPI at a
 quarter of that. The firmware now runs `clk_peri` from the 150 MHz system
 clock, for a 37.5 MHz SPI clock -- ~27 ms per frame, an expected ~19 fps.
-*(To be confirmed on hardware.)*
+*(Confirmed on hardware: 37.5 MHz, see below.)*
+
+**Benchmark on the first firmware:** `timed 5026 gametics in 21655 realtics`
+-- **8.1 fps** for the whole of DEMO1, which completed on the real chip with
+the heap peaking at 236 of 271 KB. During it DOOM's own work was ~17 ms a
+frame (logic ~1, walls ~8, floors ~7, sprites ~1); the rest was the LCD.
+
+## The second core
+
+Core 1 now does all the I/O (`firmware/core1_io.c`): it sends frames to the
+LCD, scans the buttons and runs USB, while core 0 runs only DOOM. A frame is
+sent from a copy borrowed from DOOM's heap when there is room (see
+[MEMORY.md](MEMORY.md#borrowing-memory-for-the-display)): on E1M1 and E1M8
+98% of each frame goes out while DOOM is already drawing the next one, so the
+frame time drops from *render + transfer* towards *the longer of the two*.
+The read-out shows both sides: `lcd` is how long core 0 waited, and
+`core1 lcd` how long core 1 took to send the frame.
+
+Measured on the real Pico 2 with this firmware (title-screen demo, E1M5 --
+the tightest map, where only part of each frame fits in a copy):
+
+| | First firmware | Now |
+|---|---:|---:|
+| SPI clock | 12 MHz | **37.5 MHz** |
+| core 0 waiting for the LCD | 95 ms | **22 ms** |
+| core 1 sending a frame | -- | 30 ms |
+| **frames per second** | **8** | **23.7** average, 29 peak |
+
+On E1M1 and E1M8, where the whole frame fits in a copy, core 0 does not wait
+for the LCD at all; the frame rate is then set by the 30 ms transfer.
 
 ## Where to go next
 
-- **Overlap the LCD with the next frame.** The CPU waits for the SPI. A second
-  64 KB frame buffer would let core 1 send one frame while core 0 draws the
-  next -- but 64 KB is a quarter of the heap; it would cost E1M5.
 - **Faster SPI.** `-DDOOM_SYS_MHZ=200` (or 250) overclocks the chip and its
   SPI with it; ILI9341 modules usually manage 50-62 MHz on short wires.
 - **Hot code in RAM.** The column and span drawers run from flash through the

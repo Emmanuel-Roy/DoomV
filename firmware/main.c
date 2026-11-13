@@ -1,12 +1,14 @@
 // Pico2Doom: the RP2350 backend for the shared port layer (port/port.h).
 //
-// Core 0 runs DOOM. Core 1 runs USB (usb_link.c). Boot modes:
+// Core 0 runs DOOM and nothing else. Core 1 (core1_io.c) does all the I/O:
+// the display, the buttons, USB, and the input buffer DOOM reads keys from.
 //
+// Boot modes:
 //   normal      play.
 //   benchmark   hold FIRE while powering on (or `picolink.py bench`): runs
 //               DOOM's own -timedemo on DEMO1 and shows the result.
-//   link        `picolink.py` reboots the board into this mode: the whole
-//               run is recorded over USB so DoomV can replay it in
+//   link        `picolink.py record` reboots the board into this mode: the
+//               whole run is recorded over USB so DoomV can replay it in
 //               lock-step (docs/LOCKSTEP.md).
 
 #include <stdio.h>
@@ -18,11 +20,10 @@
 #include "hardware/clocks.h"
 #include "hardware/vreg.h"
 #include "hardware/watchdog.h"
-#include "hardware/sync.h"
-#include "pico/bootrom.h"
 
 #include "board_config.h"
 #include "buttons.h"
+#include "core1_io.h"
 #include "lcd_ili9341.h"
 #include "usb_link.h"
 
@@ -34,31 +35,29 @@ void port_run(char **extra);
 
 extern const uint8_t doom_wad[], doom_wad_end[];
 
-// Bytes kept back from the zone for DOOM's own malloc calls (the WAD
-// strings; the WAD directory stays in flash, patches/05). The sim measured
-// a peak of 113 bytes; this leaves room for newlib's own stdio buffers.
+// Bytes kept back from the zone for DOOM's own malloc calls (strings; the
+// WAD directory stays in flash, patches/05). The sim measured a peak of 113
+// bytes; this leaves room for newlib's own stdio buffers.
 #ifndef DOOM_MALLOC_RESERVE
 #define DOOM_MALLOC_RESERVE (8 * 1024)
 #endif
 
 // Watchdog scratch registers survive a reboot: picolink.py's commands set
-// the next boot's mode there.
+// the next boot's mode there (core1_io.c).
 #define MODE_MAGIC 0xD0D0B000u
 enum { MODE_PLAY, MODE_BENCH, MODE_LINK };
 
 static enum port_link_mode link_mode = LINK_NONE;
-static int video_every;          // stream every Nth frame to the PC (0: off)
 static uint32_t frame_count;
-static char hud_line[192];
-static volatile int hud_dirty;
 
 // ---- time -----------------------------------------------------------------
 
 uint32_t backend_ticks_ms(void) { return to_ms_since_boot(get_absolute_time()); }
+
 // In link mode core 0 must take no interrupts: a handler's instructions
 // would retire inside a counted window and the retired-instruction counts
 // compared with DoomV would differ. sleep_ms() sleeps on a timer interrupt,
-// so link mode spins instead. (USB already lives on core 1.)
+// so link mode spins instead. (All I/O interrupts belong to core 1.)
 void backend_sleep_ms(uint32_t ms)
 {
 	if (link_mode == LINK_NONE) { sleep_ms(ms); return; }
@@ -118,13 +117,36 @@ void backend_hud(const char *text)
 	// a terminal has had a chance to open the console port.
 	static unsigned calls;
 	if (calls++ % 10 == 0) backend_log(banner);
-	snprintf(hud_line, sizeof hud_line, "%s | stack %u B", text, stack_used());
-	hud_dirty = 1;
+	// Core 1's own figure: how long sending a frame takes it, in parallel.
+	char line[224];
+	uint32_t us = io_lcd_frame_us();
+	snprintf(line, sizeof line, "%s | core1 lcd %lu.%lu ms | stack %u B",
+	         text, (unsigned long)(us / 1000), (unsigned long)(us / 100 % 10), stack_used());
+	io_hud(line);
+	// port_perf.c has already logged `text`; add core 1's half on its own line.
+	snprintf(line, sizeof line, "core1: lcd send %lu.%lu ms/frame, stack %u B",
+	         (unsigned long)(us / 1000), (unsigned long)(us / 100 % 10), stack_used());
+	backend_log(line);
 }
 
-// ---- display, input, WAD, memory -------------------------------------------
+// ---- input --------------------------------------------------------------------
 
-int backend_get_key(int *pressed, unsigned char *key) { return buttons_get_key(pressed, key); }
+// Keys come from core 1's input buffer: the buttons, and the PC (picolink.py
+// play). Each one is also mirrored to the PC with where it came from, so a
+// press on the Pico shows up on the PC. In a recording the KEY record that
+// port_link.c writes next is what DoomV replays; this one is informational.
+int backend_get_key(int *pressed, unsigned char *key)
+{
+	int source;
+	if (!io_get_key(pressed, key, &source)) return 0;
+	if (usb_link_connected()) {
+		uint8_t rec[4] = { LINK_TAG_INPUT, (uint8_t)source, (uint8_t)*pressed, *key };
+		usb_link_write(rec, sizeof rec);
+	}
+	return 1;
+}
+
+// ---- WAD and memory ----------------------------------------------------------------
 
 const uint8_t *backend_wad(uint32_t *size)
 {
@@ -143,31 +165,7 @@ uint8_t *backend_zone(int *size)
 	return z;
 }
 
-static void poll_host_commands(void)
-{
-	int c;
-	while ((c = usb_link_getc()) >= 0) {
-		switch (c) {
-		case 'V': {                     // 'V' n: video every n frames
-			int n = -1;
-			for (int tries = 0; n < 0 && tries < 100000; tries++) n = usb_link_getc();
-			video_every = n < 0 ? 0 : n;
-			break;
-		}
-		case 'R':                       // reboot into link (lock-step) mode
-			watchdog_hw->scratch[0] = MODE_MAGIC | MODE_LINK;
-			watchdog_reboot(0, 0, 10);
-			for (;;) {}
-		case 'U':                       // reboot into BOOTSEL, ready for a new UF2
-			reset_usb_boot(0, 0);
-			for (;;) {}
-		case 'B':                       // reboot into the benchmark
-			watchdog_hw->scratch[0] = MODE_MAGIC | MODE_BENCH;
-			watchdog_reboot(0, 0, 10);
-			for (;;) {}
-		}
-	}
-}
+// ---- display ---------------------------------------------------------------------
 
 static void stream_video(const uint8_t *frame, const uint8_t *pal_rgb)
 {
@@ -185,21 +183,21 @@ static void stream_video(const uint8_t *frame, const uint8_t *pal_rgb)
 	usb_link_write(frame, PORT_SCREEN_W * PORT_SCREEN_H);
 }
 
-void backend_present(const uint8_t *frame, const uint16_t *pal565, const uint8_t *pal_rgb)
+// Core 1 sends the frame. DOOM waits only while core 1 reads the rows that
+// are not in port_video.c's copy (all 200 when there is no copy, none when
+// the whole frame is copied), then draws the next frame while core 1 sends
+// the rest.
+void backend_present(const uint8_t *frame, const uint16_t *pal565, const uint8_t *pal_rgb,
+                     const uint8_t *tail, int tail_rows)
 {
 	frame_count++;
-	lcd_present_frame(frame, pal565);
-	if (hud_dirty) {
-		hud_dirty = 0;
-		// "fps 21.4 | frame ... " -> two HUD lines: timings, then memory.
-		char *zone = strstr(hud_line, "| zone");
-		if (zone) { zone[-1] = 0; lcd_hud_text(hud_line, zone + 2); }
-		else lcd_hud_text(hud_line, "");
-	}
-	poll_host_commands();
-	if (video_every && usb_link_connected() && frame_count % video_every == 0)
-		stream_video(frame, pal_rgb);
+	int every = io_video_every();
+	if (every && usb_link_connected() && frame_count % every == 0)
+		stream_video(frame, pal_rgb);   // before DOOM can touch `frame` again
+	io_present(frame, tail, tail_rows, pal565);
 }
+
+void backend_present_wait(void) { io_present_wait(); }
 
 // ---- lock-step --------------------------------------------------------------
 
@@ -220,8 +218,8 @@ void backend_fatal(const char *msg)
 	const perf_window_t *t = perf_totals();
 	perf_format(t, summary, sizeof summary);
 
-	char text[512];
-	snprintf(text, sizeof text, "%s\n\nWhole run: %s\nstack %u B\n\nPress any button to restart.",
+	static char text[512];
+	snprintf(text, sizeof text, "%s\n\nWhole run: %s\nstack %u B\n\nPress any button (or key on the PC) to restart.",
 	         msg, summary, stack_used());
 	backend_log(msg);
 	backend_log(summary);
@@ -230,13 +228,20 @@ void backend_fatal(const char *msg)
 		usb_link_write(hdr, 2);
 		usb_link_write(msg, hdr[1]);
 	}
-	lcd_message(strncmp(msg, "timed ", 6) == 0 ? "Benchmark finished" : "DOOM stopped", text);
+	io_message(strncmp(msg, "timed ", 6) == 0 ? "Benchmark finished" : "DOOM stopped", text);
 	usb_flush(500);
 
-	// Release, then press -- still listening to the PC, so picolink.py can
-	// reboot or reflash a board left on this screen (or one with no buttons).
-	while (buttons_raw()) { poll_host_commands(); sleep_ms(10); }
-	while (!buttons_raw()) { poll_host_commands(); sleep_ms(10); }
+	// Wait for a fresh press, on the board or from the PC. Core 1 keeps
+	// running, so picolink.py can also reboot or reflash the board from here.
+	int pressed, source;
+	unsigned char key;
+	while (io_get_key(&pressed, &key, &source)) {}
+	while (buttons_raw()) sleep_ms(10);
+	for (;;) {
+		if (buttons_raw()) break;
+		if (io_get_key(&pressed, &key, &source) && pressed) break;
+		sleep_ms(10);
+	}
 	watchdog_hw->scratch[0] = 0;
 	watchdog_reboot(0, 0, 10);
 	for (;;) {}
@@ -267,35 +272,40 @@ int main(void)
 	if ((watchdog_hw->scratch[0] & 0xFFFFFF00u) == MODE_MAGIC) mode = watchdog_hw->scratch[0] & 0xFF;
 	watchdog_hw->scratch[0] = 0;
 
-	usb_start();
 	buttons_init();
 	if (buttons_raw() & (1u << BTN_FIRE)) mode = MODE_BENCH;
 
+	// The display is set up here, then belongs to core 1.
 	uint32_t spi_hz = DOOM_LCD_SPI_HZ ? DOOM_LCD_SPI_HZ : clock_get_hz(clk_peri) / 4;
 	spi_hz = lcd_init(spi_hz);
+	io_start();
 
-	char *line = banner;
 	snprintf(banner, sizeof banner, "Pico2Doom: RP2350 Hazard3 @ %lu MHz, LCD SPI %lu.%lu MHz",
 	         (unsigned long)(clock_get_hz(clk_sys) / 1000000),
 	         (unsigned long)(spi_hz / 1000000), (unsigned long)(spi_hz / 100000 % 10));
-	(void)sizeof line;
 
 	char *extra[4] = { NULL };
 	if (mode == MODE_BENCH) {
 		extra[0] = "-timedemo";
 		extra[1] = "demo1";
-		lcd_message("Pico2Doom", "Benchmark: timedemo DEMO1...");
+		io_message("Pico2Doom", "Benchmark: timedemo DEMO1...");
 	}
 	if (mode == MODE_LINK) {
 		// picolink.py rebooted us and is reopening the port: wait for it, so
 		// the recording starts at DOOM's very first clock read.
-		lcd_message("Pico2Doom", "Link mode: waiting for picolink.py...");
+		io_message("Pico2Doom", "Link mode: waiting for picolink.py...");
+		// Connected = DTR set, and opening a port toggles it: wait until the
+		// connection has held for 250 ms before the first record goes out.
 		absolute_time_t until = make_timeout_time_ms(10000);
-		while (!usb_link_connected() && !time_reached(until)) sleep_ms(10);
-		if (usb_link_connected()) link_mode = LINK_RECORD;
+		int steady_ms = 0;
+		while (steady_ms < 250 && !time_reached(until)) {
+			sleep_ms(10);
+			steady_ms = usb_link_connected() ? steady_ms + 10 : 0;
+		}
+		if (steady_ms >= 250) link_mode = LINK_RECORD;
 	}
 	sleep_ms(mode == MODE_PLAY ? 300 : 0);   // let a console attach and see the banner
-	backend_log(line);
+	backend_log(banner);
 	if (link_mode == LINK_RECORD) backend_log("link: recording for DoomV lock-step");
 
 	port_run(extra);

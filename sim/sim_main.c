@@ -47,7 +47,7 @@ static int explore;                // god mode, visit every sector and spin: wor
 static int zone_report;            // -zonereport: list the zone's owners at exit
 void sim_zone_report(void);
 static int fast_clock;             // each clock read advances 1 ms (deterministic)
-static long frame_no;
+static long rows_private;     // rows presented from port_video.c's borrowed back buffer
 static volatile long progress;
 
 // ---- memory accounting for malloc (lumpinfo and friends live here) -----
@@ -60,8 +60,14 @@ static long heap_now, heap_peak;
 
 typedef union { size_t n; double align; } hdr_t;
 
+static long frame_no;
 void *__wrap_malloc(size_t n)
 {
+	// SIM_TRACE_MALLOC=1: list the engine's malloc calls once DOOM is running
+	// (on a Pico they reach the C library's _sbrk -- platform code).
+	static int trace = -1;
+	if (trace < 0) trace = getenv("SIM_TRACE_MALLOC") != NULL;
+	if (trace && frame_no > 0) printf("sim: malloc(%u) at frame %ld from %p\n", (unsigned)n, frame_no, __builtin_return_address(0));
 	hdr_t *h = __real_malloc(n + sizeof(hdr_t));
 	if (!h) return NULL;
 	h->n = n;
@@ -131,11 +137,20 @@ uint32_t backend_cycles_per_us(void)
 
 // -look: hold "turn right" for the whole run (with a pause every so often),
 // so the renderer draws the level from every direction at the start spot.
+static FILE *record_file;
+
 int backend_get_key(int *pressed, unsigned char *key)
 {
 	static int held;
 	if (!look_around || frame_no < 40) return 0;
-	if (!held) { held = 1; *pressed = 1; *key = KEY_RIGHTARROW; return 1; }
+	if (!held) {
+		held = 1; *pressed = 1; *key = KEY_RIGHTARROW;
+		if (record_file) {   // mirror it to the "PC", as the firmware does (LINK_TAG_INPUT)
+			uint8_t rec[4] = { 0x0B, 0, 1, KEY_RIGHTARROW };
+			fwrite(rec, 1, sizeof rec, record_file);
+		}
+		return 1;
+	}
 	return 0;
 }
 
@@ -173,8 +188,13 @@ static void explore_step(void)
 	}
 }
 
-void backend_present(const uint8_t *frame, const uint16_t *pal565, const uint8_t *pal_rgb)
+void backend_present_wait(void) {}
+
+void backend_present(const uint8_t *frame, const uint16_t *pal565, const uint8_t *pal_rgb,
+                     const uint8_t *tail, int tail_rows)
 {
+	(void)tail;
+	rows_private += tail_rows;
 	(void)pal565;
 	frame_no++;
 	progress++;
@@ -204,7 +224,7 @@ void backend_hud(const char *text) { (void)text; }
 static FILE *hash_log;
 // -record FILE: write the lock-step recording a Pico would send, so DoomV can
 // replay a sim run (tests the link without hardware; no retired counts).
-static FILE *record_file;
+// (record_file is declared above backend_get_key.)
 
 static void finish(int code, const char *why)
 {
@@ -212,7 +232,8 @@ static void finish(int code, const char *why)
 	if (zone_report) sim_zone_report();
 	if (hash_log) fclose(hash_log);
 	if (record_file) fclose(record_file);
-	printf("sim: %s after %ld frames\n", why, frame_no);
+	printf("sim: %s after %ld frames (%ld%% of rows sent from the back buffer: the Pico's core 0 skips that much of the LCD wait)\n",
+	       why, frame_no, frame_no ? rows_private * 100 / (frame_no * PORT_SCREEN_H) : 0);
 	printf("sim: zone peak %d KB live data (of %d KB), malloc peak %ld KB, pointer size %d\n",
 	       t->zone_peak / 1024, t->zone_size / 1024, heap_peak / 1024, (int)sizeof(void *));
 	const perf_limits_t *l = perf_limits();

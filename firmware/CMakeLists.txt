@@ -33,6 +33,7 @@ add_executable(pico2doom
   lcd_ili9341.c
   buttons.c
   usb_link.c
+  core1_io.c
   usb_descriptors.c
   hud_font.c
   syscalls.c

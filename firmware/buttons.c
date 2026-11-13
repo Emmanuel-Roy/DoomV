@@ -1,8 +1,9 @@
 // Eight buttons to DOOM key events.
 //
-// DOOM wants key-down / key-up events, so the pins are sampled (at most
-// every 5 ms, which also debounces them) and every change becomes events in
-// a small queue that DG_GetKey drains. Some buttons send two keys because
+// DOOM wants key-down / key-up events, so the pins are sampled every 5 ms
+// (which also debounces them) by core 1, and every change becomes events
+// handed to `emit` -- core1_io.c puts them in the input buffer that
+// DG_GetKey drains on core 0. Some buttons send two keys because
 // DOOM uses different keys in the menus and in the game:
 //
 //   FIRE  -> fire  + Enter (select in menus)
@@ -29,17 +30,9 @@ static uint64_t last_sample_us;
 static uint8_t sent[BTN_COUNT];     // the key each held button sent on press
 static int weapon_used_as_modifier;
 
-static struct { uint8_t pressed, key; } queue[32];
-static unsigned q_head, q_tail;
+static void (*emit)(int pressed, unsigned char key);
 
-static void push(int pressed, unsigned char key)
-{
-	unsigned next = (q_tail + 1) % 32;
-	if (next == q_head) return;    // full: drop (DOOM drains it every tic)
-	queue[q_tail].pressed = (uint8_t)pressed;
-	queue[q_tail].key = key;
-	q_tail = next;
-}
+static void push(int pressed, unsigned char key) { emit(pressed, key); }
 
 void buttons_init(void)
 {
@@ -95,8 +88,9 @@ static void release(int b)
 	sent[b] = 0;
 }
 
-static void sample(void)
+void buttons_poll(void (*emit_fn)(int pressed, unsigned char key))
 {
+	emit = emit_fn;
 	uint64_t now = time_us_64();
 	if (now - last_sample_us < 5000) return;
 	last_sample_us = now;
@@ -115,12 +109,3 @@ static void sample(void)
 	}
 }
 
-int buttons_get_key(int *pressed, unsigned char *key)
-{
-	if (q_head == q_tail) sample();
-	if (q_head == q_tail) return 0;
-	*pressed = queue[q_head].pressed;
-	*key = queue[q_head].key;
-	q_head = (q_head + 1) % 32;
-	return 1;
-}

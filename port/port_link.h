@@ -20,6 +20,9 @@ enum {
 	LINK_TAG_TEXT      = 0x09,  // u8 len, len bytes: a log line
 	LINK_TAG_ARGS      = 0x0A,  // u8 len, len bytes: DOOM's extra arguments, space-separated
 	                            //   (always right after HELLO; the replay must start DOOM the same way)
+	LINK_TAG_INPUT     = 0x0B,  // u8 source (0 buttons, 1 PC), u8 pressed, u8 key: a key event
+	                            //   as it reached DOOM, for the PC to see. Informational: the KEY
+	                            //   record that follows is what a replay uses.
 };
 
 #define LINK_MAGIC   0x4C443250u  // "P2DL"
