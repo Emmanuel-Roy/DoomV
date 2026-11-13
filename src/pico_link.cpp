@@ -3,6 +3,7 @@
 #include "pico_link.hpp"
 
 #include <chrono>
+#include <cstdlib>
 #include <iostream>
 #include <sstream>
 #include <thread>
@@ -12,7 +13,7 @@ namespace {
 enum : uint8_t {
 	TAG_TICKS = 0x01, TAG_TICKS_REP = 0x02, TAG_KEY = 0x03, TAG_NOKEY = 0x04,
 	TAG_FRAME = 0x05, TAG_HELLO = 0x06, TAG_VIDEO = 0x07, TAG_PALETTE = 0x08, TAG_TEXT = 0x09,
-	TAG_ARGS = 0x0A,
+	TAG_ARGS = 0x0A, TAG_INPUT = 0x0B,
 };
 constexpr uint32_t LINK_MAGIC = 0x4C443250u;  // "P2DL"
 constexpr uint32_t LINK_VERSION = 2;
@@ -95,6 +96,7 @@ uint8_t PicoLink::next_input_tag()
 		switch (tag) {
 		case TAG_VIDEO: skip(4 + 320 * 200); continue;   // picolink.py shows it
 		case TAG_PALETTE: skip(768); continue;
+		case TAG_INPUT: skip(3); continue;              // a key's source, for the PC to show; KEY records drive the replay
 		case TAG_TEXT: {
 			std::string s(u8(), '\0');
 			for (char &c : s) c = (char)u8();
@@ -177,8 +179,18 @@ void PicoLink::write32(uint64_t addr, uint32_t val)
 		std::cerr << "picolink: this recording has no retired-instruction counts (not from a Pico); "
 		             "comparing hashes only\n";
 	}
+	// PICOLINK_HASHES_ONLY=1: a diagnostic mode -- report retired-instruction
+	// differences but halt only when the picture or the game state differs,
+	// to see whether the two machines stay in step architecturally.
+	static const bool hashes_only = std::getenv("PICOLINK_HASHES_ONLY") != nullptr;
+	if (hashes_only && retired_counts_ && (pico[3] != frame_words_[3] || pico[4] != frame_words_[4])) {
+		if (++instret_mismatches_ <= 20)
+			std::cerr << "picolink: frame " << pico[0] << " retired counts differ (state and picture match): logic "
+			          << (int64_t)frame_words_[3] - (int64_t)pico[3] << ", render "
+			          << (int64_t)frame_words_[4] - (int64_t)pico[4] << " (DoomV - Pico)\n";
+	}
 	std::ostringstream diff;
-	for (int i = 0; i < (retired_counts_ ? 5 : 3); i++) {
+	for (int i = 0; i < ((retired_counts_ && !hashes_only) ? 5 : 3); i++) {
 		if (pico[i] == frame_words_[i]) continue;
 		diff << "\n  " << what[i] << ": Pico " << pico[i] << ", DoomV " << frame_words_[i];
 		if (i >= 3) diff << " (" << (int64_t)frame_words_[i] - (int64_t)pico[i] << ")";

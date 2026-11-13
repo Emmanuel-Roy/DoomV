@@ -68,6 +68,7 @@ private:
 	int frame_word_n_ = 0;
 	uint64_t frames_ok_ = 0;
 	uint64_t instret_total_ = 0;
+	uint64_t instret_mismatches_ = 0;
 	bool diverged_ = false, halt_taken_ = false;
 	std::string report_;
 };
