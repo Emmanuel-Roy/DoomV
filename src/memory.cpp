@@ -181,6 +181,7 @@ uint16_t Memory::read16(uint64_t addr)
 
 uint32_t Memory::read32(uint64_t addr)
 {
+	if (PicoLink::covers(addr)) return pico_link_ ? pico_link_->read32(addr) : 0;   // 0 = no recording attached
 	if (addr == MMIO_INPUT) {
 		std::lock_guard<std::mutex> lock(key_mutex);
 		if (key_queue_head == key_queue_tail) return 0;
@@ -397,6 +398,7 @@ void Memory::write32(uint64_t addr, uint32_t val)
 		if (tohost_addr && addr == tohost_addr + 4) check_tohost();
 		return;
 	}
+	if (PicoLink::covers(addr)) { if (pico_link_) pico_link_->write32(addr, val); return; }
 	// Unlike the byte-addressable devices below (RAM/framebuffer/debug
 	// putchar, all handled through write8), these are register-file-style
 	// devices whose writes need to land atomically (e.g. setipnum's
@@ -569,6 +571,7 @@ bool Memory::is_backed(uint64_t addr, unsigned size) const
 	if (in(MMIO_INPUT, 4) || in(MMIO_TICK, 4) || in(MMIO_DEBUG, 4)) return true;
 	if (in(MMIO_MOUSE_MOVE, 4) || in(MMIO_MOUSE_BTN, 4)) return true;
 	if (in(MMIO_WAD_BASE, 4) || in(MMIO_WAD_SIZE, 4)) return true;
+	if (in(PicoLink::MMIO_ZONE, PicoLink::MMIO_ARGS + 4 - PicoLink::MMIO_ZONE)) return true;   // Pico2Doom link (reads 0 when off)
 
 	return false;
 }

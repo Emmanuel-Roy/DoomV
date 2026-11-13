@@ -639,6 +639,14 @@ bool mmu_paging_active(Registers &regs, AccessType type)
 bool mmu_translate(Registers &regs, Memory &mem, uint64_t vaddr, AccessType type,
                     uint64_t &paddr, uint64_t &cause, uint64_t &tval, bool as_guest)
 {
+	// RV32: an address is XLEN bits. Registers hold RV32 values sign-extended
+	// in 64-bit containers, so anything at or above 0x80000000 -- where guest
+	// RAM has lived since Stage 3 -- arrives here as 0xffffffff8xxxxxxx and,
+	// untruncated, faulted on the first store (a Pico2Doom RV32 guest's .bss
+	// clear). Below 0x80000000 the extension is harmless, which is why
+	// earlier RV32 guests, loaded lower, never showed it.
+	if (!Extensions.XLEN64) vaddr &= 0xffffffffull;
+
 	// M-mode does not translate, except when it explicitly asks to:
 	// mstatus.MPRV makes a load or store behave as though issued from
 	// mstatus.MPP, using that mode's translation *and* its permission

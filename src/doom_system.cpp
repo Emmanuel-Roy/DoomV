@@ -624,14 +624,14 @@ void DoomSystem::run_fast(uint64_t n)
 		// Conditions under which no step can be simple. step() for all of them.
 		if (debugger.may_halt() || memory.tohost_addr || core.access_log || memory.store_log
 		    || decoder.cache_epoch != ExtensionsEpoch
-		    || !Extensions.C || !Extensions.XLEN64 || Extensions.ZICFILP
+		    || !Extensions.C || Extensions.ZICFILP
 		    || core.wait_request != RiscvCore::Wait::None
 		    || regs.keyed(regs.state_gen + ExtensionsEpoch) != counter_key
 		    || EventGen != irq_key || timer.get_mtime() >= irq_deadline) {
 			fs_slow_entry++;
 			// Counted only here, on the way to the slow step.
 			fs_entry[(debugger.may_halt() || memory.tohost_addr || core.access_log || memory.store_log
-			          || !Extensions.C || !Extensions.XLEN64 || Extensions.ZICFILP) ? 0
+			          || !Extensions.C || Extensions.ZICFILP) ? 0
 			         : decoder.cache_epoch != ExtensionsEpoch ? 1
 			         : core.wait_request != RiscvCore::Wait::None ? 2
 			         : regs.keyed(regs.state_gen + ExtensionsEpoch) != counter_key ? 3
@@ -655,6 +655,14 @@ void DoomSystem::run_fast(uint64_t n)
 		// which changes nothing a run depends on (Registers::write_csr). Only
 		// a CSR instruction, never run here, can change FS, so it holds for the run.
 		const bool fp_ok = (regs.read_csr(0x300) & (3ull << 13)) == (3ull << 13) && !regs.get_virt();
+		// RV32 (a Pico2Doom guest): registers hold RV32 values sign-extended
+		// in their 64-bit containers, and an integer ALU result is the 32-bit
+		// result sign-extended -- exec_32I's RV32 path, exactly. Everything
+		// else is computed as exec_32I computes it at either XLEN: pc, links,
+		// branch compares and addresses on the 64-bit values (the MMU
+		// truncates RV32 addresses; the caches are keyed as the slow path
+		// keys them). classify_fast leaves RV64-only and FP forms to step().
+		const bool rv32 = !Extensions.XLEN64;
 		regs.minstret_increment = counts_instret;
 
 		uint64_t pc = regs.get_pc();
@@ -749,29 +757,29 @@ void DoomSystem::run_fast(uint64_t n)
 				if (e.backing != Memory::Backing::Ram) memory.framebuffer_stored(e.backing, size);
 				break;
 			}
-			case FOP_ADDI:  regs.write_x(d.rd, a + imm); break;
-			case FOP_SLTI:  regs.write_x(d.rd, (int64_t)a < (int64_t)d.imm); break;
-			case FOP_SLTIU: regs.write_x(d.rd, a < imm); break;
-			case FOP_XORI:  regs.write_x(d.rd, a ^ imm); break;
-			case FOP_ORI:   regs.write_x(d.rd, a | imm); break;
-			case FOP_ANDI:  regs.write_x(d.rd, a & imm); break;
-			case FOP_SLLI:  regs.write_x(d.rd, a << (d.imm & 0x3F)); break;
-			case FOP_SRLI:  regs.write_x(d.rd, a >> (d.imm & 0x3F)); break;
-			case FOP_SRAI:  regs.write_x(d.rd, (uint64_t)((int64_t)a >> (d.imm & 0x3F))); break;
+			case FOP_ADDI:  regs.write_x(d.rd, rv32 ? sext32((uint32_t)a + (uint32_t)d.imm) : a + imm); break;
+			case FOP_SLTI:  regs.write_x(d.rd, rv32 ? sext32((uint32_t)((int32_t)(uint32_t)a < d.imm)) : (int64_t)a < (int64_t)d.imm); break;
+			case FOP_SLTIU: regs.write_x(d.rd, rv32 ? sext32((uint32_t)((uint32_t)a < (uint32_t)d.imm)) : a < imm); break;
+			case FOP_XORI:  regs.write_x(d.rd, rv32 ? sext32((uint32_t)a ^ (uint32_t)d.imm) : a ^ imm); break;
+			case FOP_ORI:   regs.write_x(d.rd, rv32 ? sext32((uint32_t)a | (uint32_t)d.imm) : a | imm); break;
+			case FOP_ANDI:  regs.write_x(d.rd, rv32 ? sext32((uint32_t)a & (uint32_t)d.imm) : a & imm); break;
+			case FOP_SLLI:  regs.write_x(d.rd, rv32 ? sext32((uint32_t)a << (d.imm & 0x1F)) : a << (d.imm & 0x3F)); break;
+			case FOP_SRLI:  regs.write_x(d.rd, rv32 ? sext32((uint32_t)a >> (d.imm & 0x1F)) : a >> (d.imm & 0x3F)); break;
+			case FOP_SRAI:  regs.write_x(d.rd, rv32 ? sext32((uint32_t)((int32_t)(uint32_t)a >> (d.imm & 0x1F))) : (uint64_t)((int64_t)a >> (d.imm & 0x3F))); break;
 			case FOP_ADDIW: regs.write_x(d.rd, sext32((uint32_t)a + (uint32_t)d.imm)); break;
 			case FOP_SLLIW: regs.write_x(d.rd, sext32((uint32_t)a << (d.imm & 0x1F))); break;
 			case FOP_SRLIW: regs.write_x(d.rd, sext32((uint32_t)a >> (d.imm & 0x1F))); break;
 			case FOP_SRAIW: regs.write_x(d.rd, sext32((uint32_t)((int32_t)(uint32_t)a >> (d.imm & 0x1F)))); break;
-			case FOP_ADD:  regs.write_x(d.rd, a + b); break;
-			case FOP_SUB:  regs.write_x(d.rd, a - b); break;
-			case FOP_SLL:  regs.write_x(d.rd, a << (b & 0x3F)); break;
-			case FOP_SLT:  regs.write_x(d.rd, (int64_t)a < (int64_t)b); break;
-			case FOP_SLTU: regs.write_x(d.rd, a < b); break;
-			case FOP_XOR:  regs.write_x(d.rd, a ^ b); break;
-			case FOP_SRL:  regs.write_x(d.rd, a >> (b & 0x3F)); break;
-			case FOP_SRA:  regs.write_x(d.rd, (uint64_t)((int64_t)a >> (b & 0x3F))); break;
-			case FOP_OR:   regs.write_x(d.rd, a | b); break;
-			case FOP_AND:  regs.write_x(d.rd, a & b); break;
+			case FOP_ADD:  regs.write_x(d.rd, rv32 ? sext32((uint32_t)a + (uint32_t)b) : a + b); break;
+			case FOP_SUB:  regs.write_x(d.rd, rv32 ? sext32((uint32_t)a - (uint32_t)b) : a - b); break;
+			case FOP_SLL:  regs.write_x(d.rd, rv32 ? sext32((uint32_t)a << (b & 0x1F)) : a << (b & 0x3F)); break;
+			case FOP_SLT:  regs.write_x(d.rd, rv32 ? sext32((uint32_t)((int32_t)(uint32_t)a < (int32_t)(uint32_t)b)) : (int64_t)a < (int64_t)b); break;
+			case FOP_SLTU: regs.write_x(d.rd, rv32 ? sext32((uint32_t)((uint32_t)a < (uint32_t)b)) : a < b); break;
+			case FOP_XOR:  regs.write_x(d.rd, rv32 ? sext32((uint32_t)a ^ (uint32_t)b) : a ^ b); break;
+			case FOP_SRL:  regs.write_x(d.rd, rv32 ? sext32((uint32_t)a >> (b & 0x1F)) : a >> (b & 0x3F)); break;
+			case FOP_SRA:  regs.write_x(d.rd, rv32 ? sext32((uint32_t)((int32_t)(uint32_t)a >> (b & 0x1F))) : (uint64_t)((int64_t)a >> (b & 0x3F))); break;
+			case FOP_OR:   regs.write_x(d.rd, rv32 ? sext32((uint32_t)a | (uint32_t)b) : a | b); break;
+			case FOP_AND:  regs.write_x(d.rd, rv32 ? sext32((uint32_t)a & (uint32_t)b) : a & b); break;
 			case FOP_ADDW: regs.write_x(d.rd, sext32((uint32_t)a + (uint32_t)b)); break;
 			case FOP_SUBW: regs.write_x(d.rd, sext32((uint32_t)a - (uint32_t)b)); break;
 			case FOP_SLLW: regs.write_x(d.rd, sext32((uint32_t)a << (b & 0x1F))); break;
@@ -1540,6 +1548,27 @@ void DoomSystem::cpu_loop()
 			progress_next = (memory.instruction_count() / progress_every + 1) * progress_every;
 		}
 		if (gdb) gdb_service();
+		// Pico2Doom lock-step: the guest just finished a frame (or asked for an
+		// input) that the real Pico did differently. Stop here, state saved,
+		// for Sail lock-step or the debugger to examine.
+		if (PicoLink *link = memory.pico_link(); link && link->take_halt_request()) {
+			debugger.halted = true;
+			console_drain();
+			debugger.dump_log(cur->regs, memory, "crash.log");
+			// DOOM's picture as DoomV drew it (the guest presents right after
+			// the check), to set beside the Pico's frame from picolink.py.
+			if (FILE *ppm = std::fopen("picolink_doomv.ppm", "wb")) {
+				const uint8_t *fb = memory.framebuffer();   // 0x00RRGGBB words, little-endian
+				std::fprintf(ppm, "P6\n%d %d\n255\n", (int)Memory::FB_W, (int)Memory::FB_H);
+				for (uint32_t i = 0; i < Memory::FB_W * Memory::FB_H; i++) {
+					const uint8_t rgb[3] = { fb[4 * i + 2], fb[4 * i + 1], fb[4 * i] };
+					std::fwrite(rgb, 1, 3, ppm);
+				}
+				std::fclose(ppm);
+			}
+			std::cerr << "picolink: machine halted at step " << memory.instruction_count()
+			          << "; state in crash.log, DOOM's picture in picolink_doomv.ppm\n";
+		}
 		if (debugger.halted) {
 			if (resume_requested.exchange(false)) {
 				resume_from_halt();
@@ -2919,4 +2948,12 @@ void DoomSystem::cosim_after_step()
 	if (line == cosim_line) return;
 	cosim_line = line;
 	std::fprintf(memory.cosim, "I %llu %d\n", (unsigned long long)memory.instruction_count(), line ? 1 : 0);
+}
+
+bool DoomSystem::set_pico_link(const char *path)
+{
+	auto link = std::make_unique<PicoLink>();
+	if (!link->open(path)) return false;
+	memory.attach_pico_link(std::move(link));
+	return true;
 }

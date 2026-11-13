@@ -1,0 +1,58 @@
+--- a/z_zone.h
++++ b/z_zone.h
+@@ -52,6 +52,8 @@
+ 
+ void	Z_Init (void);
+ void*	Z_Malloc (int size, int tag, void *ptr);
++void*	Z_TryMalloc (int size, int tag, void *ptr);   // Pico2Doom: NULL if no room
++#define Z_HAVE_TRYMALLOC 1
+ void    Z_Free (void *ptr);
+ void    Z_FreeTags (int lowtag, int hightag);
+ void    Z_DumpHeap (int lowtag, int hightag);
+--- a/z_zone.c
++++ b/z_zone.c
+@@ -180,6 +180,10 @@
+ //
+ #define MINFRAGMENT		64
+ 
++// Pico2Doom: set by Z_TryMalloc, so a failed allocation returns NULL
++// instead of calling I_Error.
++static boolean z_try_only;
++
+ 
+ void*
+ Z_Malloc
+@@ -219,6 +223,8 @@
+         if (rover == start)
+         {
+             // scanned all the way around the list
++            if (z_try_only)
++                return NULL;
+             I_Error ("Z_Malloc: failed on allocation of %i bytes", size);
+         }
+ 	
+@@ -285,7 +291,23 @@
+     mainzone->rover = base->next;	
+ 	
+     base->id = ZONEID;
+-    
++
++    return result;
++}
++
++//
++// Z_TryMalloc
++// Pico2Doom: like Z_Malloc, but returns NULL when the zone cannot make
++// room, for allocations that are nice to have (the screen melt's buffer).
++// Purgeable blocks may still have been thrown out while it looked.
++//
++void *Z_TryMalloc (int size, int tag, void *user)
++{
++    void *result;
++
++    z_try_only = true;
++    result = Z_Malloc (size, tag, user);
++    z_try_only = false;
+     return result;
+ }
+ 

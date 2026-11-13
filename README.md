@@ -638,6 +638,17 @@ The harness lives in `tools/verification/`. `tests/differential/` is the
 hand-written suites, `tests/archtest/` drives riscv-arch-test, and
 `tests/suites/` runs the precompiled third-party suites.
 
+### Against real hardware: Pico2Doom
+
+[`pico2doom/`](pico2doom/README.md) runs DOOM on a Raspberry Pi Pico 2's
+RISC-V (Hazard3) cores and checks it against DoomV on the same machine code.
+The Pico records its inputs and, every frame, hashes of its picture and game
+state and its retired-instruction counts. DoomV (`-picolink=`) replays the
+recording and halts at the first difference. `pico2doom/tools/picolink.py
+corun` runs both live, side by side, at a locked 30 fps. On the real chip,
+every frame and every retired instruction of DOOM has matched. See
+[pico2doom/docs/LOCKSTEP.md](pico2doom/docs/LOCKSTEP.md).
+
 ## Performance
 
 An interpreter, one instruction at a time, so that every instruction can be

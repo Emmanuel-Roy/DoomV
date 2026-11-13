@@ -1,0 +1,134 @@
+--- a/r_state.h
++++ b/r_state.h
+@@ -38,10 +38,11 @@
+ extern fixed_t*		textureheight;
+ 
+ // needed for pre rendering (fracs)
+-extern fixed_t*		spritewidth;
+-
+-extern fixed_t*		spriteoffset;
+-extern fixed_t*		spritetopoffset;
++// Pico2Doom: read from the sprite's own patch header in the memory-mapped
++// WAD (flash) instead of three tables of every sprite in RAM (6 KB).
++fixed_t R_SpriteWidth (int lump);
++fixed_t R_SpriteOffset (int lump);
++fixed_t R_SpriteTopOffset (int lump);
+ 
+ extern lighttable_t*	colormaps;
+ 
+--- a/r_data.c
++++ b/r_data.c
+@@ -158,9 +158,14 @@
+ int*		texturetranslation;
+ 
+ // needed for pre rendering
+-fixed_t*	spritewidth;	
+-fixed_t*	spriteoffset;
+-fixed_t*	spritetopoffset;
++static patch_t *SpritePatch (int lump)
++{
++    return W_CacheLumpNum (firstspritelump + lump, PU_CACHE);
++}
++
++fixed_t R_SpriteWidth (int lump)     { return SHORT(SpritePatch(lump)->width) << FRACBITS; }
++fixed_t R_SpriteOffset (int lump)    { return SHORT(SpritePatch(lump)->leftoffset) << FRACBITS; }
++fixed_t R_SpriteTopOffset (int lump) { return SHORT(SpritePatch(lump)->topoffset) << FRACBITS; }
+ 
+ lighttable_t	*colormaps;
+ 
+@@ -703,20 +708,14 @@
+     lastspritelump = W_GetNumForName (DEH_String("S_END")) - 1;
+     
+     numspritelumps = lastspritelump - firstspritelump + 1;
+-    spritewidth = Z_Malloc (numspritelumps*sizeof(*spritewidth), PU_STATIC, 0);
+-    spriteoffset = Z_Malloc (numspritelumps*sizeof(*spriteoffset), PU_STATIC, 0);
+-    spritetopoffset = Z_Malloc (numspritelumps*sizeof(*spritetopoffset), PU_STATIC, 0);
+-	
++
++    // Pico2Doom: no tables -- R_SpriteWidth() and friends read the patch.
+     for (i=0 ; i< numspritelumps ; i++)
+     {
+ 	if (!(i&63))
+ 	    printf (".");
+-
+-	patch = W_CacheLumpNum (firstspritelump+i, PU_CACHE);
+-	spritewidth[i] = SHORT(patch->width)<<FRACBITS;
+-	spriteoffset[i] = SHORT(patch->leftoffset)<<FRACBITS;
+-	spritetopoffset[i] = SHORT(patch->topoffset)<<FRACBITS;
+     }
++    (void) patch;
+ }
+ 
+ 
+--- a/r_things.c
++++ b/r_things.c
+@@ -524,14 +524,14 @@
+     }
+     
+     // calculate edges of the shape
+-    tx -= spriteoffset[lump];	
++    tx -= R_SpriteOffset(lump);	
+     x1 = (centerxfrac + FixedMul (tx,xscale) ) >>FRACBITS;
+ 
+     // off the right side?
+     if (x1 > viewwidth)
+ 	return;
+     
+-    tx +=  spritewidth[lump];
++    tx +=  R_SpriteWidth(lump);
+     x2 = ((centerxfrac + FixedMul (tx,xscale) ) >>FRACBITS) - 1;
+ 
+     // off the left side
+@@ -545,7 +545,7 @@
+     vis->gx = thing->x;
+     vis->gy = thing->y;
+     vis->gz = thing->z;
+-    vis->gzt = thing->z + spritetopoffset[lump];
++    vis->gzt = thing->z + R_SpriteTopOffset(lump);
+     vis->texturemid = vis->gzt - viewz;
+     vis->x1 = x1 < 0 ? 0 : x1;
+     vis->x2 = x2 >= viewwidth ? viewwidth-1 : x2;	
+@@ -553,7 +553,7 @@
+ 
+     if (flip)
+     {
+-	vis->startfrac = spritewidth[lump]-1;
++	vis->startfrac = R_SpriteWidth(lump)-1;
+ 	vis->xiscale = -iscale;
+     }
+     else
+@@ -667,14 +667,14 @@
+     // calculate edges of the shape
+     tx = psp->sx-160*FRACUNIT;
+ 	
+-    tx -= spriteoffset[lump];	
++    tx -= R_SpriteOffset(lump);	
+     x1 = (centerxfrac + FixedMul (tx,pspritescale) ) >>FRACBITS;
+ 
+     // off the right side
+     if (x1 > viewwidth)
+ 	return;		
+ 
+-    tx +=  spritewidth[lump];
++    tx +=  R_SpriteWidth(lump);
+     x2 = ((centerxfrac + FixedMul (tx, pspritescale) ) >>FRACBITS) - 1;
+ 
+     // off the left side
+@@ -684,7 +684,7 @@
+     // store information in a vissprite
+     vis = &avis;
+     vis->mobjflags = 0;
+-    vis->texturemid = (BASEYCENTER<<FRACBITS)+FRACUNIT/2-(psp->sy-spritetopoffset[lump]);
++    vis->texturemid = (BASEYCENTER<<FRACBITS)+FRACUNIT/2-(psp->sy-R_SpriteTopOffset(lump));
+     vis->x1 = x1 < 0 ? 0 : x1;
+     vis->x2 = x2 >= viewwidth ? viewwidth-1 : x2;	
+     vis->scale = pspritescale<<detailshift;
+@@ -692,7 +692,7 @@
+     if (flip)
+     {
+ 	vis->xiscale = -pspriteiscale;
+-	vis->startfrac = spritewidth[lump]-1;
++	vis->startfrac = R_SpriteWidth(lump)-1;
+     }
+     else
+     {

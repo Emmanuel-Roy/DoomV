@@ -133,6 +133,38 @@ void RiscvCore::exec_ZBB(const DecodedOp &instr, Registers &regs, Memory &mem)
 	uint8_t funct7 = instr.funct7;
 	uint8_t funct6 = (uint8_t)(funct7 >> 1);
 
+	// RV32: these operate on XLEN = 32 bits. Registers hold RV32 values
+	// sign-extended to 64, so a 64-bit rotate, count or byte-reverse of the
+	// container is wrong -- rotates pulled in the extension bits, clz(0) was
+	// 64, rev8 moved the low bytes out of the register. Found by Pico2Doom's
+	// lock-step: DoomV's DOOM frames drifted from the Pico's by a few texels
+	// (tools/rv32check in that repository is the spot-check). Computed in 32
+	// bits and sign-extended back, as every RV32 result is stored.
+	if (!Extensions.XLEN64 && (instr.opcode == 0b0110011 || instr.opcode == 0b0010011)) {
+		const uint32_t a = (uint32_t)rs1_val, b = (uint32_t)rs2_val;
+		bool handled = true;
+		uint32_t r = 0;
+		if (instr.opcode == 0b0110011 && funct7 == 0b0110000) {          // rol/ror
+			r = (funct3 == 0b001) ? rotl32(a, b & 31) : rotr32(a, b & 31);
+		} else if (instr.opcode == 0b0110011 && funct7 == 0b0000100) {   // zext.h (pack rd, rs1, x0)
+			r = a & 0xFFFF;
+		} else if (instr.opcode == 0b0010011 && funct3 == 0b001 && instr.rs2 <= 2) {  // clz/ctz/cpop
+			r = (instr.rs2 == 0) ? (uint32_t)clz32(a) : (instr.rs2 == 1) ? (uint32_t)ctz32(a)
+			                                          : (uint32_t)cpop64(a);
+		} else if (instr.opcode == 0b0010011 && funct3 == 0b101 && funct6 == 0b011000) {  // rori
+			r = rotr32(a, (unsigned)(shamt & 31));
+		} else if (instr.opcode == 0b0010011 && funct3 == 0b101 && funct6 != 0b001010) {  // rev8 (RV32 form)
+			r = (a >> 24) | ((a >> 8) & 0xFF00u) | ((a << 8) & 0xFF0000u) | (a << 24);
+		} else {
+			handled = false;
+		}
+		if (handled) {
+			regs.write_x(instr.rd, sext32(r));
+			regs.set_pc(pc + instr.length);
+			return;
+		}
+	}
+
 	switch (instr.opcode) {
 	case 0b0110011: // OP
 		if (funct7 == 0b0100000) { // andn/orn/xnor

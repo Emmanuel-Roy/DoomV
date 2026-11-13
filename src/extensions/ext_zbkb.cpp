@@ -151,7 +151,9 @@ void RiscvCore::exec_ZBKB(const DecodedOp &instr, Registers &regs, Memory &mem)
 		// zero-extended. packw is the 32-bit form and sign-extends, which
 		// is why zext.h -- packw with rs2 = x0 -- belongs to Zbb and is
 		// decoded there rather than here.
-		if (op32)
+		// RV32's pack is RV64's packw: two 16-bit halves (and zext.h, its
+		// rs2 = x0 case, arrives here on RV32 -- see ext_zbb.cpp).
+		if (op32 || (!Extensions.XLEN64 && instr.funct3 == 0b100))
 			result = (uint64_t)(int64_t)(int32_t)((uint32_t)(a & 0xFFFF)
 			                                    | ((uint32_t)(b & 0xFFFF) << 16));
 		else if (instr.funct3 == 0b111)
@@ -166,6 +168,11 @@ void RiscvCore::exec_ZBKB(const DecodedOp &instr, Registers &regs, Memory &mem)
 		break;
 	}
 
+	// RV32: results live sign-extended in the 64-bit container (brev8 of a
+	// negative value must stay negative). Carry-less multiply and xperm are
+	// Zbkc/Zbkx and keep their RV64 behaviour here.
+	if (!Extensions.XLEN64 && (instr.funct7 == 0b0000100 || instr.funct7 == 0b0110100))
+		result = (uint64_t)(int64_t)(int32_t)(uint32_t)result;
 	regs.write_x(instr.rd, result);
 	regs.set_pc(regs.get_pc() + instr.length);
 }
