@@ -359,7 +359,7 @@ of console output (`2667bf1`, re-verified in `936df17`).
 194. [FMIN/FMAX with one signaling NaN returned whatever libm did](#bug194)
 195. [Vector single precision never raised invalid for a signaling NaN](#bug195)
 196. [Half to and from 8-bit integers did nothing in the vector unit](#bug196)
-197. [Every misaligned AMO trapped, even inside the atomicity granule](#bug197)
+197. [The two Sail references disagreed on misaligned AMOs](#bug197)
 
 <a id="part-vii"></a>
 ### Part VII — Cross-cutting
@@ -7539,22 +7539,24 @@ now reaches those two conversions, which use SoftFloat's f16_to_i8/ui8 and
 i64_to_f16 like every other width.
 
 <a id="bug197"></a>
-### 197. Every misaligned AMO trapped, even inside the atomicity granule
+### 197. The two Sail references disagreed on misaligned AMOs
 
-RVA23 requires Zama16b: in main memory, a misaligned AMO that lies wholly
-inside one aligned 16-byte block is performed, atomically. Sail is configured
-that way (RAM's misaligned_atomicity_granule_size_exp 4, no global misaligned
-exception for AMOs). DoomV took an access fault for any misaligned AMO, and
-took it before translating the address. riscv-arch-test's
-sv39_exceptions_Zaamo_{M,S,U}mode do an amoadd.w at offset 2 of a block: Sail
-performed it, DoomV trapped. The signature check passed anyway; the
-four-simulator co-run (corun.py) caught it.
+DoomV is held to Sail twice: by riscv-arch-test's signatures, made with the
+suite's own sail-RVA23S64 config, and by the lock-step and corun.py, which run
+Sail with rva23s64.json from mkconfig.py. mkconfig.py takes misaligned-access
+behaviour from the model's default config, and that default performs a
+misaligned AMO that fits in main memory's 16-byte misaligned atomicity
+granule. The arch-test config faults every misaligned AMO, before
+translation. DoomV does what the arch-test config does, so the signatures
+passed while the four-simulator co-run reported sv39_exceptions_Zaamo_{M,S,U}mode
+as diverging from Sail at an amoadd.w two bytes into a block.
 
-Now, as Sail does it: LR and SC still take an access fault (load for LR,
-store for SC) before translation. Every other AMO, including Zabha's,
-amocas and ssamoswap, is translated first, so a page fault on its address
-comes first. It is then performed if it fits in its 16-byte block, and is a
-store access fault if it crosses one. Only the first page is translated, so
-a crossing AMO at the end of a page is an access fault even when the next
-page is unmapped. tools/verification/tests/lockstep/amo_misaligned.S
-lock-steps each case against Sail.
+Making DoomV follow the granule turned the lock-step green and failed those
+three signatures (663 -> 660), so that change was dropped. Both behaviours are
+allowed: Zama16b promises atomicity for a misaligned AMO that is performed,
+and the A extension permits an access fault instead. mkconfig.py now sets
+misaligned.exceptions.amo to AccessFault, so both references describe the
+same machine (loads and stores keep the granule). Spike and QEMU also trap
+these AMOs, though as address-misaligned. tools/verification/tests/lockstep/amo_misaligned.S
+lock-steps the cases against Sail: inside a block, across one, LR/SC, and
+under Sv39 on an unmapped page, where the access fault comes first.

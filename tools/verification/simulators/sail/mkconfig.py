@@ -135,6 +135,18 @@ def main():
     # accommodation is needed here and the two references run the same
     # configuration.
 
+    # A misaligned AMO is an access fault, raised before translation, as in
+    # riscv-arch-test's own sail-RVA23S64 config -- the one its reference
+    # signatures come from. (Spike and QEMU trap it too, as address-misaligned
+    # rather than access fault.) The model's
+    # default instead performs one that fits in main memory's 16-byte
+    # misaligned atomicity granule, so the two Sail references disagreed on
+    # sv39_exceptions_Zaamo_*: the signatures said trap, the lock-step said
+    # complete. Zama16b only promises atomicity for a misaligned AMO that is
+    # performed; trapping it is the A extension's other permitted answer.
+    # Loads and stores keep the granule.
+    cfg["memory"]["misaligned"]["exceptions"]["amo"] = {"Some": "AccessFault"}
+
     json.dump(cfg, open(OUT, "w"), indent=2)
     print("\nenabled %d extensions; wrote %s" % (len(enabled), OUT))
     if unknown:

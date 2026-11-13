@@ -116,52 +116,37 @@ void RiscvCore::exec_32A(const DecodedOp &instr, Registers &regs, Memory &mem)
 			raise_illegal_instruction(regs, instr.raw);
 		return;
 	}
-	// A misaligned atomic. What happens depends on which kind it is, and is
-	// read off the reference (Sail, configured as RVA23S64 main memory).
+	// Every A-extension access must be naturally aligned, and unlike an
+	// ordinary load or store this is not softened by Zicclsm: an atomic
+	// spanning two naturally-aligned units is not something hardware can
+	// perform. DoomV checked nothing here and quietly did the access.
 	//
-	// LR and SC must be naturally aligned, and a misaligned one is an
-	// *access* fault, not an address-misaligned one. The A extension permits
-	// either -- "an address-misaligned exception or an access-fault
-	// exception will be generated" -- and the access fault is the one to
-	// raise when the access is not going to be emulated, which is this
-	// machine. It comes *before* translation: the misalignment is decided
-	// from the effective address alone, so an LR both misaligned and
-	// unmapped reports the access fault, not the page fault.
+	// Two details here are not what they look like, and both were got
+	// wrong before being read off the reference.
 	//
-	// Every other AMO (and Zabha's, amocas, ssamoswap) obeys the
-	// misaligned atomicity granule instead (Zama16b, which RVA23 requires):
-	// main memory here has a 16-byte granule, and an AMO that lies wholly
-	// inside one aligned 16-byte block is performed, atomically, misaligned
-	// or not. One that crosses a block boundary is a store access fault,
-	// and that is a physical-memory-attribute check -- after translation,
-	// so a page fault on the address comes first. DoomV used to fault every
-	// misaligned AMO before translating, which the arch tests'
-	// sv39_exceptions_Zaamo caught against Sail (BUGS 197).
-	constexpr uint64_t CAUSE_LOAD_ACCESS  = 5;
-	constexpr uint64_t CAUSE_STORE_ACCESS = 7;
-	constexpr uint64_t AMO_GRANULE = 16;
+	// The cause is an *access* fault, not an address-misaligned one. The A
+	// extension explicitly permits either -- "an address-misaligned
+	// exception or an access-fault exception will be generated" -- and the
+	// access fault is the one to raise when the misaligned access is not
+	// going to be emulated, which is this machine. Sail raises the access
+	// fault, so cause 4/6 here is a mismatch even though it looks like the
+	// more specific answer.
+	//
+	// And it comes *before* translation. An atomic to an address that is
+	// both misaligned and unmapped reports the access fault, not the page
+	// fault -- the misalignment is decided from the effective address
+	// alone and never reaches the page tables.
 	const unsigned width = 1u << instr.funct3;   // 1, 2, 4, 8 or 16 bytes (decode allows only legal ones)
-	const bool lrsc = amo_op == 0b00010 || amo_op == 0b00011;
-	const bool misaligned = (addr & (width - 1)) != 0;
-	if (misaligned && lrsc) {
-		enter_trap(regs, amo_op == 0b00010 ? CAUSE_LOAD_ACCESS : CAUSE_STORE_ACCESS, addr);
+	if (addr & (width - 1)) {
+		constexpr uint64_t CAUSE_LOAD_ACCESS  = 5;
+		constexpr uint64_t CAUSE_STORE_ACCESS = 7;
+		enter_trap(regs, (amo_op == 0b00010) ? CAUSE_LOAD_ACCESS
+		                                     : CAUSE_STORE_ACCESS, addr);
 		return;
 	}
 
 	uint64_t paddr;
-	if (misaligned && (addr & (AMO_GRANULE - 1)) + width > AMO_GRANULE) {
-		// Crosses a granule: translated (the page at the address, as Sail
-		// does -- it never looks at a second one), then refused.
-		if (!translate_or_trap(regs, mem, addr, amo_access, paddr, 1)) return;
-		enter_trap(regs, CAUSE_STORE_ACCESS, addr);
-		return;
-	}
 	if (!translate_or_trap(regs, mem, addr, amo_access, paddr, width)) return;
-	if (misaligned && !mem.is_ram(paddr, width)) {
-		// Only main memory has a granule; a device region has none.
-		enter_trap(regs, CAUSE_STORE_ACCESS, addr);
-		return;
-	}
 
 	// Zacas and Zabha: compare-and-swap at any width, and the byte and
 	// halfword AMOs. The rest -- words and doublewords -- are below as ever.

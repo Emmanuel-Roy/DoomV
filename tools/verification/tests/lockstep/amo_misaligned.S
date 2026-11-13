@@ -1,22 +1,21 @@
 # Misaligned atomics, lock-stepped against Sail (BUGS 197).
 #
-# Main memory has a 16-byte misaligned atomicity granule (Zama16b, which
-# RVA23 requires). An AMO that lies wholly inside one aligned 16-byte block
-# is performed, misaligned or not; one that crosses a block boundary is a
-# store access fault, raised after translation, so a page fault on the
-# address comes first. LR and SC are different: a misaligned one is an
-# access fault (load for LR, store for SC) raised before translation.
+# Every misaligned atomic is an access fault, raised from the effective
+# address before translation: a store/AMO access fault for an AMO or SC, a
+# load access fault for LR. That is riscv-arch-test's sail-RVA23S64 config,
+# which its reference signatures come from (Spike and QEMU trap too, as
+# address-misaligned); the lock-step Sail config (mkconfig.py) is set to match. The
+# alternative the spec allows -- performing one that fits in a 16-byte
+# misaligned atomicity granule -- is what Sail's default does, and that
+# default made the two references disagree.
 #
-#   inside a block:  amoadd.w at +2, amoswap.d at +4, amoor.w at +12,
-#                    amoadd.h at +1 and amomax.b (Zabha), amocas.w at +6 (Zacas)
-#   crossing:        amoadd.w at +14, amoswap.d at +12, amoadd.h at +15,
-#                    amocas.d at +9 -- each a store access fault, nothing stored
-#   LR.W at +2, LR.D at +4, SC.W at +2 -- access faults, no reservation
-#   under Sv39 in S-mode, with page 1 unmapped:
-#     amoadd.w inside a block on the unmapped page -- store page fault
-#     amoadd.w crossing from page 0's last block into page 1 -- store access
-#       fault (only the first page is translated), not a page fault
-#     lr.w misaligned on the unmapped page -- load access fault, not a page fault
+#   offsets that fit in one 16-byte block: amoadd.w +2, amoswap.d +4,
+#     amoor.w +12, amoadd.h +1, amocas.w +6 (amomax.b is never misaligned)
+#   offsets that cross a block: amoadd.w +14, amoswap.d +12, amoadd.h +15,
+#     amocas.d +9
+#   LR.W +2, LR.D +4, SC.W +2
+#   under Sv39 in S-mode, with page 1 unmapped: misaligned AMOs and an LR on
+#     the unmapped page -- access faults, not page faults (no translation)
 # Traps go to M, which records mcause and mtval and skips the instruction.
 
 .option arch, +zabha, +zacas
