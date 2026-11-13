@@ -202,10 +202,7 @@ bool DoomSystem::gdb_read_reg(unsigned n, std::string &hex)
 	if (n < 32) { hex = le_hex(r.read_x((int)n), 8); return true; }
 	if (n == REG_PC) { hex = le_hex(r.get_pc(), 8); return true; }
 	if (n >= REG_F0 && n < REG_F0 + 32) {
-		const double d = r.read_f((int)(n - REG_F0));
-		uint64_t bits;
-		std::memcpy(&bits, &d, 8);
-		hex = le_hex(bits, 8);
+		hex = le_hex(r.read_f_bits((int)(n - REG_F0)), 8);
 		return true;
 	}
 	if (n >= REG_CSR0 && n < REG_CSR0 + 4096) {
@@ -230,10 +227,7 @@ bool DoomSystem::gdb_write_reg(unsigned n, const std::string &hex)
 	if (n < 32 && b.size() == 8) { r.write_x((int)n, le_value(b)); return true; }
 	if (n == REG_PC && b.size() == 8) { r.set_pc(le_value(b)); return true; }
 	if (n >= REG_F0 && n < REG_F0 + 32 && b.size() == 8) {
-		const uint64_t bits = le_value(b);
-		double d;
-		std::memcpy(&d, &bits, 8);
-		r.write_f((int)(n - REG_F0), d);
+		r.write_f_bits((int)(n - REG_F0), le_value(b));
 		return true;
 	}
 	if (n >= REG_V0 && n < REG_V0 + 32 && Extensions.V && b.size() == (size_t)Registers::VLEN_BYTES) {

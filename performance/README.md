@@ -245,8 +245,10 @@ leaves the exception flags alone. The mingw-w64 runtime in the GCC 8.1 bundle
 does a read-modify-write and preserves them, so that order worked for as long
 as there was one toolchain in play. llvm-mingw's writes MXCSR whole and clears
 the status bits with it, which zeroed the flag between raising it and reading
-it. Collecting before restoring is correct under either runtime and is what the
-code does now; `collect_fflags` in `ext_fp_common.hpp` says why. Both compilers
+it. Collecting before restoring is correct under either runtime, and was the fix
+then. The floating-point unit has since left the host FPU altogether -- every
+operation is SoftFloat on bit patterns (`src/extensions/fpu.hpp`) -- so the
+question no longer arises. Both compilers
 pass everything with the fix, and the GCC build's `crash.log` is unchanged.
 
 Worth noting for its own sake: a second toolchain found a latent bug here that

@@ -219,32 +219,29 @@ the accrued-flags-only test could not see.
 RVA23 mandates only `Zfhmin` and `Zvfhmin` — half precision *arithmetic*
 is an expansion option — but the full `Zfh` and `Zvfh` are implemented
 here anyway, so `fadd.h` and its vector twin are real instructions rather
-than something software has to widen around. MinGW has no `_Float16` on
-x86, so the conversions are hand-written integer code
-(`src/extensions/ext_fp16.hpp`) and the arithmetic goes through Berkeley
-SoftFloat's `f16` alongside F and D. Narrowing rounds exactly once from
-the source significand: going double → float → half rounds twice, and a
-value that is an exact midpoint in half but not in single rounds the
-wrong way.
+than something software has to widen around. Half is simply the third
+format of the floating-point unit (`src/extensions/fpu.hpp`): F, D and Zfh
+are one implementation, parameterised by format, and every operation in
+it -- scalar and vector, arithmetic and conversion -- is Berkeley SoftFloat
+on bit patterns. Narrowing rounds exactly once from the source: going
+double → float → half rounds twice, and a value that is an exact midpoint
+in half but not in single rounds the wrong way.
 
-Carrying an f16 through the vector unit needed one trick worth naming.
-`ext_v_fp.cpp` computes in `double` and converts at the edges, and the
-obvious conversion canonicalises every NaN — which destroys the operand's
-payload and quiets a signalling NaN before anything can raise invalid on
-it. So a half NaN is smuggled through the double as `0x7FF8000000000000 |
-bits`, where the low sixteen bits are the original encoding and the result
-is still a NaN to everything in between.
+The vector unit used to carry every element as a host `double`, which
+needed tricks to survive -- a half NaN smuggled through as
+`0x7FF8000000000000 | bits`, single-precision NaNs widened and narrowed by
+hand -- and still lost the invalid flag where a cast slipped in (BUGS 195).
+Elements are their own bit patterns now, so a move copies them and an
+operation hands them to SoftFloat.
 
 Adding them surfaced two older gaps. `exec_v_fp` returned silently for
 any SEW other than 32 or 64, so every vector FP instruction at `e16` was
 a no-op; and the whole widening/narrowing half of VFUNARY0
 (`vfwcvt.*`/`vfncvt.*`, 14 instructions) was ignored the same way. Both
 are implemented now. Separately, float-to-integer conversions never
-reported inexact: `collect_fflags()` reads MXCSR, but `std::llrint` on
-this toolchain goes through x87, so the flag was dropped. It is now
-decided from the values — a conversion is inexact exactly when its
-result converts back to something different — which holds for every
-rounding mode and does not depend on the host.
+reported inexact: `collect_fflags()` read MXCSR, but `std::llrint` on
+this toolchain went through x87, so the flag was dropped. Conversions are
+SoftFloat's now, and report their own flags.
 
 `Svnapot` and `Svpbmt` add no instructions — they give meaning to page
 table entry bits that were previously ignored, so the only way to exercise
@@ -615,7 +612,10 @@ that say something about the method:
   all and was being approximated by round-to-nearest-even, wrong on every
   exact tie, and because host exception flags are unreliable on this
   machine. F/D now compute in Berkeley SoftFloat, which is what spike uses
-  and why Sail and spike agree with each other. 103 failures to zero.
+  and why Sail and spike agree with each other. 103 failures to zero. The
+  conversions, min/max and vector elements stayed host-shaped for longer,
+  and each was a bug of its own (BUGS 193-195); the whole unit is SoftFloat
+  on bit patterns now, register file included.
 * **The hand-written suites passed the whole time.** All 19 matched Sail
   while 123 certification tests failed. They never fed a signalling NaN to
   `fcvt.d.s`, never exercised RMM, never hit a tie. Where an established

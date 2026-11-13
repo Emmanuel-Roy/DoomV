@@ -15,9 +15,9 @@ Inventory baseline: `6b37ec0`. Selected behavior corrections reviewed at `c7d881
 
 ## F — single precision floating point
 
-32 FP registers use 64-bit storage. F represents binary32 with upper bits set for NaN boxing; D represents binary64 and requires F. Numerical operations use the shared helpers, with Berkeley SoftFloat used for core arithmetic and rounding-sensitive behavior; other conversions and vector paths still contain host arithmetic. This is not a claim that every FP path is independent of the host.
+32 FP registers hold 64-bit patterns. F represents binary32 with upper bits set for NaN boxing; D represents binary64 and requires F. Every floating-point operation -- arithmetic, conversions, comparisons, min/max, classification, scalar and vector -- is Berkeley SoftFloat on those bit patterns; no host float, host rounding mode or host exception flag is involved anywhere. F, D and Zfh share one implementation, parameterised by format.
 
-Implementation: [src/extensions/ext_f.cpp](../../src/extensions/ext_f.cpp), [src/extensions/ext_fp_common.hpp](../../src/extensions/ext_fp_common.hpp), [src/extensions/ext_softfloat.hpp](../../src/extensions/ext_softfloat.hpp).
+Implementation: [src/extensions/fpu.hpp](../../src/extensions/fpu.hpp), [src/extensions/fpu.cpp](../../src/extensions/fpu.cpp), [src/extensions/ext_f.cpp](../../src/extensions/ext_f.cpp) (decode, loads and stores).
 
 | Instruction | Operation and relevant details |
 |---|---|
@@ -66,9 +66,9 @@ Implementation: [src/extensions/ext_f.cpp](../../src/extensions/ext_f.cpp), [src
 
 ## D — double precision floating point
 
-32 FP registers use 64-bit storage. F represents binary32 with upper bits set for NaN boxing; D represents binary64 and requires F. Numerical operations use the shared helpers, with Berkeley SoftFloat used for core arithmetic and rounding-sensitive behavior; other conversions and vector paths still contain host arithmetic. This is not a claim that every FP path is independent of the host.
+32 FP registers hold 64-bit patterns. F represents binary32 with upper bits set for NaN boxing; D represents binary64 and requires F. Every floating-point operation -- arithmetic, conversions, comparisons, min/max, classification, scalar and vector -- is Berkeley SoftFloat on those bit patterns; no host float, host rounding mode or host exception flag is involved anywhere. F, D and Zfh share one implementation, parameterised by format.
 
-Implementation: [src/extensions/ext_d.cpp](../../src/extensions/ext_d.cpp), [src/extensions/ext_fp_common.hpp](../../src/extensions/ext_fp_common.hpp), [src/extensions/ext_softfloat.hpp](../../src/extensions/ext_softfloat.hpp).
+Implementation: [src/extensions/fpu.hpp](../../src/extensions/fpu.hpp), [src/extensions/fpu.cpp](../../src/extensions/fpu.cpp), [src/extensions/ext_d.cpp](../../src/extensions/ext_d.cpp) (decode, loads and stores).
 
 <details>
 <summary>Expand the full instruction or CSR table</summary>
@@ -148,9 +148,9 @@ Reuses F `fflags`, `frm`, `fcsr`; adds no CSR.
 
 ## Zfhmin — minimal scalar half precision
 
-Storage, raw moves and conversions for IEEE binary16. Full Zfh arithmetic such as FADD.H is not implemented. Half conversions use integer significand handling to avoid double rounding.
+Storage, raw moves and conversions for IEEE binary16. The conversions are SoftFloat's, rounding once from the source. (Full Zfh arithmetic is implemented too, by the same unit.)
 
-Implementation: [src/extensions/ext_zfhmin.cpp](../../src/extensions/ext_zfhmin.cpp), [src/extensions/ext_fp16.hpp](../../src/extensions/ext_fp16.hpp).
+Implementation: [src/extensions/ext_zfhmin.cpp](../../src/extensions/ext_zfhmin.cpp) (loads and stores), [src/extensions/fpu.cpp](../../src/extensions/fpu.cpp).
 
 | Instruction | Operation and relevant details |
 |---|---|

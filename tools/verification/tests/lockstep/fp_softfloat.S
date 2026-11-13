@@ -151,6 +151,47 @@ _start:
 	FLAGS a1
 	fmv.x.w a0, f3
 
+	# Zfa, rebuilt on SoftFloat with the rest of the unit: fcvtmod.w.d (truncate,
+	# wrap modulo 2^32), fminm/fmaxm (any NaN gives NaN), fleq/fltq (quiet).
+	li   t0, 0x41F0000000400000      # 2^32 + 4: wraps to 4, NV
+	fmv.d.x f23, t0
+	fcvtmod.w.d a0, f23, rtz
+	FLAGS a1
+	li   t0, 0x4544000000000000      # 2^85: wraps to 0, NV
+	fmv.d.x f23, t0
+	fcvtmod.w.d a0, f23, rtz
+	FLAGS a1
+	li   t0, 0xC1E0000000100000      # -2^31 - 0.5: truncates to -2^31, in range, NX
+	fmv.d.x f23, t0
+	fcvtmod.w.d a0, f23, rtz
+	FLAGS a1
+	li   t0, 0xC004000000000000      # -2.5: -2, NX
+	fmv.d.x f23, t0
+	fcvtmod.w.d a0, f23, rtz
+	FLAGS a1
+	li   t0, 0x7FF8000000000000      # quiet NaN: 0, NV
+	fmv.d.x f23, t0
+	fcvtmod.w.d a0, f23, rtz
+	FLAGS a1
+	li   t0, 0x0000000000000001      # smallest subnormal: 0, NX
+	fmv.d.x f23, t0
+	fcvtmod.w.d a0, f23, rtz
+	FLAGS a1
+	fminm.s f3, f1, f20              # sNaN operand: canonical NaN, NV
+	FLAGS a1
+	fmv.x.w a0, f3
+	fmaxm.d f4, f7, f7               # 2.5
+	FLAGS a1
+	fmv.x.d a0, f4
+	li   t0, 0x7FC00000
+	fmv.w.x f24, t0
+	fleq.s a0, f1, f24               # quiet NaN: 0, no flag (fle.s would raise NV)
+	FLAGS a1
+	fltq.s a0, f1, f20               # signaling NaN: 0, NV
+	FLAGS a1
+	fle.s  a0, f1, f24               # the signaling compare, for contrast: 0, NV
+	FLAGS a1
+
 	# ---- 2. FMIN/FMAX with one signaling NaN --------------------------------------
 	fmv.w.x f8, zero                 # +0.0f
 	li   t0, SNAN_S1
@@ -223,6 +264,41 @@ _start:
 	vfmv.f.s f19, v1                 # the sNaN, boxed, bit for bit; no flags
 	FLAGS a1
 	fmv.x.w a0, f19
+
+	# Narrowing conversions, rebuilt on SoftFloat: round-to-odd as SoftFloat's
+	# own mode, and float to 8- and 16-bit integers by SoftFloat's narrow
+	# conversions (saturating, invalid alone).
+	vsetivli zero, 2, e32, m1, ta, ma
+	li   t0, 0x3FF0000010000000      # 1 + 2^-24, as a double
+	vmv.v.x v6, zero
+	vsetivli zero, 1, e64, m1, ta, ma
+	vmv.s.x v6, t0
+	vsetivli zero, 1, e32, mf2, ta, ma
+	vfncvt.rod.f.f.w v7, v6          # 0x3F800001: inexact, the low bit forced
+	FLAGS a1
+	vfncvt.f.f.w v7, v6              # 0x3F800000 by frm (RNE)
+	FLAGS a1
+	vsetivli zero, 4, e16, mf2, ta, ma
+	li   t0, 0x5BD0                  # 250.0 as a half
+	vmv.v.x v8, t0
+	vsetivli zero, 4, e8, mf4, ta, ma
+	vfncvt.x.f.w  v9, v8             # 127 (saturated), NV
+	FLAGS a1
+	vfncvt.xu.f.w v9, v8             # 250, exact
+	FLAGS a1
+	vsetivli zero, 4, e16, mf2, ta, ma
+	li   t0, 0x7C00                  # +inf as a half
+	vmv.v.x v8, t0
+	vfcvt.x.f.v  v9, v8              # 32767, NV
+	FLAGS a1
+	vsetivli zero, 2, e32, m1, ta, ma
+	li   t0, 0x47C35000              # 100000.0f
+	vmv.v.x v10, t0
+	vsetivli zero, 2, e16, mf2, ta, ma
+	vfncvt.xu.f.w v11, v10           # 65535 (saturated), NV
+	FLAGS a1
+	vfncvt.rtz.x.f.w v11, v10        # 32767 (saturated), NV
+	FLAGS a1
 
 	# ---- done -----------------------------------------------------------------------
 	li   t0, 1

@@ -978,8 +978,7 @@ void DoomSystem::traced_step()
 	uint8_t *const v0 = v0_storage.data();
 	for (int i = 0; i < 32; i++) {
 		x0[i] = regs.read_x(i);
-		const double d = regs.read_f(i);
-		std::memcpy(&f0[i], &d, sizeof(double));
+		f0[i] = regs.read_f_bits(i);
 		std::memcpy(v0 + i * VB, regs.read_v(i), VB);
 	}
 	const uint8_t fflags0 = regs.get_fflags(), frm0 = regs.get_frm();
@@ -1050,9 +1049,7 @@ void DoomSystem::traced_step()
 			actual.push_back(buf);
 		}
 		for (int i = 0; i < 32; i++) {
-			const double d = regs.read_f(i);
-			uint64_t bits;
-			std::memcpy(&bits, &d, sizeof(double));
+			const uint64_t bits = regs.read_f_bits(i);
 			if (bits == f0[i]) continue;
 			std::snprintf(buf, sizeof(buf), "f%d <- 0x%016" PRIX64, i, bits);
 			actual.push_back(buf);
@@ -1185,9 +1182,7 @@ void DoomSystem::traced_step()
 			fail("DoomV wrote x" + std::to_string(i) + ", which the reference did not");
 			return;
 		}
-		const double d = regs.read_f(i);
-		uint64_t bits;
-		std::memcpy(&bits, &d, sizeof(double));
+		const uint64_t bits = regs.read_f_bits(i);
 		if (bits != f0[i] && !ref_f.count((unsigned)i)) {
 			fail("DoomV wrote f" + std::to_string(i) + ", which the reference did not");
 			return;
@@ -1218,9 +1213,7 @@ void DoomSystem::traced_step()
 			}
 		} else if (f.cls == 'f') {
 			if (f.idx > 31) continue;
-			const double d = regs.read_f((int)f.idx);
-			uint64_t bits;
-			std::memcpy(&bits, &d, sizeof(double));
+			uint64_t bits = regs.read_f_bits((int)f.idx);
 			if (f.value.size() <= 10) bits &= 0xFFFFFFFFull;   // a 32-bit FLEN
 			if (bits != want) {
 				fail("f" + std::to_string(f.idx) + ": reference " + f.value + ", DoomV " + hex(bits, 16));

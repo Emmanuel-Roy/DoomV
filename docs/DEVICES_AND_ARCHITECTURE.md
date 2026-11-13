@@ -434,7 +434,7 @@ The superproject tree was inventoried, including binary artifacts and submodule 
 | Scalar ISA | `src/extensions/ext_i/m/a/c/f/d*.cpp` | Base integer, multiply, atomics, compressed and FP |
 | Additional ISA | `src/extensions/ext_z*.cpp` | Bit operations, hints, CSR access, cache operations, extra FP |
 | Vector ISA | `src/extensions/ext_v*.cpp`, `ext_zvbb.cpp` | Vector configuration, memory, arithmetic, masks and permutations |
-| Shared FP/state helpers | `ext_fp16.hpp`, `ext_fp_common.hpp`, `ext_softfloat.hpp`, `ext_xstate.hpp`, `ext_v_common.hpp` | Numeric conversions, flags and state enable/dirty utilities |
+| Floating-point unit, shared state helpers | `fpu.hpp`, `fpu.cpp`, `ext_softfloat.hpp`, `ext_xstate.hpp`, `ext_v_common.hpp` | SoftFloat on bit patterns for every FP operation (scalar F/D/Zfh/Zfa and vector); state enable/dirty utilities |
 | Privileged features | `ext_h*`, `ext_sscofpmf*`, `ext_ssstateen*`, `ext_svinval.cpp`, `ext_zicsr.cpp` | H, traps, CSR-only extensions and fences |
 | Addressing | `src/memory.*`, `src/mmu.*`, `src/pmp.*` | Physical bus, loaders, translations and protection |
 | Devices | `src/timer.*`, `aplic.*`, `imsic.*`, `uart.*`, `virtio/*`, `net/usernet.*` | Timer, interrupt controllers, console, disks, keyboard and mouse, shared folder, network |

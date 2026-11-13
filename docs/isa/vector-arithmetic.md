@@ -392,7 +392,7 @@ Shares fflags/frm/fcsr plus V CSRs and FS/VS status. No new FP-vector CSR.
 
 No independent flag; implemented through V floating conversions. It does not enable full half arithmetic or Zvfh.
 
-Implementation: [src/extensions/ext_v_fp.cpp](../../src/extensions/ext_v_fp.cpp), [src/extensions/ext_fp16.hpp](../../src/extensions/ext_fp16.hpp).
+Implementation: [src/extensions/ext_v_fp.cpp](../../src/extensions/ext_v_fp.cpp), [src/extensions/fpu.hpp](../../src/extensions/fpu.hpp).
 
 | Instruction | Operation and relevant details |
 |---|---|

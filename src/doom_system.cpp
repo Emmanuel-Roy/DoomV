@@ -3,7 +3,7 @@
 #include "event_gen.hpp"
 #include "pmp.hpp"
 #include "mmu.hpp"
-#include "extensions/ext_fp_common.hpp"   // the bit-level FP helpers, for run_fast
+#include "extensions/fpu.hpp"   // NaN-boxing, for run_fast
 #include "extensions.hpp"
 #include <iostream>
 #include <SDL2/SDL.h>
@@ -796,7 +796,7 @@ void DoomSystem::run_fast(uint64_t n)
 				if (!(e.vpage == (addr >> 12) && e.key == dkey)) { fs_ld++; goto out; }
 				uint64_t v = 0;
 				std::memcpy(&v, e.host + (addr & 0xFFF), size);
-				regs.write_f(d.rd, f64_from_bits(size == 4 ? box_f32((uint32_t)v) : v));
+				regs.write_f_bits(d.rd, size == 4 ? fpu::box(v, 32) : v);
 				break;
 			}
 			case FOP_FSW: case FOP_FSD: {
@@ -806,7 +806,7 @@ void DoomSystem::run_fast(uint64_t n)
 				if (((addr + size - 1) >> 12) != (addr >> 12)) goto out;
 				const RiscvCore::DataPage &e = core.store_cache[(addr >> 12) & (RiscvCore::DATA_CACHE_SIZE - 1)];
 				if (!(e.vpage == (addr >> 12) && e.key == dkey)) { fs_st++; goto out; }
-				const uint64_t bits = bits_from_f64(regs.read_f(d.rs2));
+				const uint64_t bits = regs.read_f_bits(d.rs2);
 				std::memcpy(e.host + (addr & 0xFFF), &bits, size);
 				if (e.backing != Memory::Backing::Ram) memory.framebuffer_stored(e.backing, size);
 				break;

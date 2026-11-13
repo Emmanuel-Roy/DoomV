@@ -48,9 +48,14 @@ public:
 
 	// FP registers, unlike x0, have no hardwired-zero special case -- all
 	// 32 are ordinary read/write storage. Always 64 bits wide (NaN-boxed
-	// when holding a single-precision value alongside D) -- see riscv_core.
-	double read_f(int i) const;
-	void write_f(int i, double value);
+	// when holding a single- or half-precision value) -- see fpu.hpp.
+	//
+	// Bit patterns, not doubles. A register holds a value of whatever format
+	// the last instruction wrote, and only SoftFloat interprets it: holding
+	// it as a host double invited host arithmetic on it, and a host
+	// float/double conversion quiets a signaling NaN.
+	uint64_t read_f_bits(int i) const { return f[i]; }
+	void write_f_bits(int i, uint64_t bits);
 
 	// V (vector) register file. Raw bytes, not a fixed element type: a real
 	// vector register gets reinterpreted at different element widths (SEW)
@@ -233,7 +238,7 @@ public:
 
 private:
 	uint64_t x[32];
-	double f[32];
+	uint64_t f[32];
 	uint8_t v[32][VLEN_DEFAULT / 8];
 	uint64_t pc;
 	PrivMode priv;

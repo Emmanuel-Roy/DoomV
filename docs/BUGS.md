@@ -358,6 +358,7 @@ of console output (`2667bf1`, re-verified in `936df17`).
 193. [Scalar conversions and fround rounded RMM ties to even](#bug193)
 194. [FMIN/FMAX with one signaling NaN returned whatever libm did](#bug194)
 195. [Vector single precision never raised invalid for a signaling NaN](#bug195)
+196. [Half to and from 8-bit integers did nothing in the vector unit](#bug196)
 
 <a id="part-vii"></a>
 ### Part VII — Cross-cutting
@@ -7517,6 +7518,21 @@ quiet. The .vf scalar operand was widened the same way (through a host
 float), and so was vfmv.f.s's result going back to an f register, which
 handed on a quieted NaN rather than the element. The comment on widen_f32
 said arithmetic was unaffected; it was, in the value, and not in the flags.
-Elements go to and from float through narrow_f32/widen_f32 now, bit for bit.
+Fixed first by crossing to float bit for bit; then the vector unit was rebuilt
+on bit patterns (fpu.hpp), so an element is never a host float at all.
 In fp_softfloat.S: vfadd.vv(0x7FA49854, 1.0) gives the canonical NaN and NV,
 vfmin.vv gives 1.0 and NV, as Sail and QEMU do.
+
+<a id="bug196"></a>
+### 196. Half to and from 8-bit integers did nothing in the vector unit
+
+Zvfh makes two conversions legal at SEW=8, both with half on the other side:
+vfwcvt.f.x(u).v widens an 8-bit integer to half, and vfncvt.x(u).f.w and
+vfncvt.rtz.x(u).f.w narrow half to an 8-bit integer. exec_v_fp returned at
+once for any SEW but 16, 32 and 64, so both left the destination untouched and
+raised nothing -- the same silent no-op the e16 forms once had. Found by the
+narrowing cases added to fp_softfloat.S when the vector unit was rebuilt on
+SoftFloat: Sail converted vfncvt.x.f.w of 250.0 to 127 with invalid, DoomV
+wrote nothing. riscv-vector-tests has no e8 floating-point conversions. SEW=8
+now reaches those two conversions, which use SoftFloat's f16_to_i8/ui8 and
+i64_to_f16 like every other width.

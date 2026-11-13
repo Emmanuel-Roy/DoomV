@@ -25,17 +25,15 @@
 // all of them explicitly, which is why the OP-FP arm there is as long as it
 // is.
 //
-// All the numeric work is in ext_fp16.hpp; this file is operand plumbing,
-// NaN boxing and flag accounting.
+// The loads and stores are here; the moves and conversions are the shared
+// floating-point unit's (fpu.cpp), as for F and D.
 #include "riscv_decoder.hpp"
 #include "riscv_core.hpp"
 #include "registers.hpp"
 #include "memory.hpp"
 #include "mmu.hpp"
-#include "ext_fp_common.hpp"
-#include "ext_fp16.hpp"
+#include "fpu.hpp"
 #include "ext_xstate.hpp"
-#include <cfenv>
 #include <cstdint>
 
 DecodedInstruction Decoder::decode_zfhmin(uint32_t raw_instr) const
@@ -77,83 +75,36 @@ DecodedInstruction Decoder::decode_zfhmin(uint32_t raw_instr) const
 void RiscvCore::exec_ZFHMIN(const DecodedOp &instr, Registers &regs, Memory &mem)
 {
 	vcommon::FpDirtyWhenWritten fp_dirty(regs);   // FS: Dirty only if this writes FP state
-	uint8_t flags = 0;
 
 	switch (instr.opcode) {
 	case 0b0000111: { // flh
-		// As FLW does it -- see exec_F.
+		// As FLW does it -- see exec_F. Boxed on the way in, so a later fmv.x.h
+		// or fcvt sees a valid half rather than the canonical NaN the unbox
+		// rule would otherwise give.
 		uint64_t addr = regs.read_x(instr.rs1) + (uint64_t)instr.imm;
 		uint64_t v;
 		if (!load_virtual(regs, mem, addr, 2, v)) return;
-		const uint16_t h = (uint16_t)v;
-		// Boxed on the way in, so a later fmv.x.h or fcvt sees a valid half
-		// rather than the canonical NaN the unbox rule would otherwise give.
-		regs.write_f(instr.rd, f64_from_bits(fp16::box_f16(h)));
+		regs.write_f_bits(instr.rd, fpu::box(v, 16));
 		break;
 	}
 
 	case 0b0100111: { // fsh
+		// Raw bits, with no NaN-box check. A store transfers the low 16 bits
+		// exactly as they sit in the register -- the spec is explicit that
+		// FSH does not modify what it transfers and does not canonicalise
+		// NaNs. The unbox rule belongs to instructions that *interpret* the
+		// value as a number; applying it here turned every improperly-boxed
+		// pattern into 0x7E00 on the way to memory.
 		uint64_t addr = regs.read_x(instr.rs1) + (uint64_t)instr.imm;   // as FLH
-		// Raw bits, with no NaN-box check. A store transfers the low 16
-		// bits exactly as they sit in the register -- the spec is explicit
-		// that FSH does not modify what it transfers and does not
-		// canonicalise NaNs. The unbox rule belongs to instructions that
-		// *interpret* the value as a number; applying it here turned every
-		// improperly-boxed pattern into 0x7E00 on the way to memory.
-		const uint16_t h = (uint16_t)bits_from_f64(regs.read_f(instr.rs2));
-		if (!store_virtual(regs, mem, addr, 2, h)) return;
-		// A store writes no register, so it must not mark the FP state
-		// dirty or advance through the shared tail below.
-		regs.set_pc(regs.get_pc() + instr.length);
-		return;
-	}
-
-	default:
-		switch (instr.funct7) {
-		case 0x72: { // fmv.x.h -- raw bits, sign-extended to XLEN, no conversion
-			// "No conversion" includes no NaN-box check: this moves the low
-			// 16 bits of the register, whatever they are. Unboxing here made
-			// the instruction report the canonical NaN for every register
-			// that had not been written by a half-precision producer.
-			uint16_t h = (uint16_t)bits_from_f64(regs.read_f(instr.rs1));
-			regs.write_x(instr.rd, (uint64_t)(int64_t)(int16_t)h);
-			regs.set_pc(regs.get_pc() + instr.length);
-			return; // writes an x register, not an f one
-		}
-
-		case 0x7A: // fmv.h.x -- raw bits the other way, boxed
-			regs.write_f(instr.rd, f64_from_bits(fp16::box_f16((uint16_t)regs.read_x(instr.rs1))));
-			break;
-
-		case 0x20: { // fcvt.s.h -- always exact, so no rounding mode is consulted
-			uint16_t h = fp16::unbox_f16(bits_from_f64(regs.read_f(instr.rs1)));
-			uint32_t f = fp16::h_to_f32_bits(h, flags);
-			regs.write_f(instr.rd, f64_from_bits(box_f32(f)));
-			break;
-		}
-
-		case 0x21: { // fcvt.d.h -- also exact
-			uint16_t h = fp16::unbox_f16(bits_from_f64(regs.read_f(instr.rs1)));
-			regs.write_f(instr.rd, f64_from_bits(fp16::h_to_f64_bits(h, flags)));
-			break;
-		}
-
-		case 0x22: { // fcvt.h.s / fcvt.h.d -- the rounding direction
-			// SoftFloat, as the vector narrowing to half already was: the
-			// hand-written narrowing took a host rounding mode, and the host
-			// has no ties away, so RMM rounded ties to even (BUGS 193).
-			sf::begin(instr.funct3, regs.get_frm());
-			const float16_t h = (instr.rs2 == 0)
-				? f32_to_f16(sf::f32(read_f32_bits(regs, instr.rs1)))
-				: f64_to_f16(sf::f64(bits_from_f64(regs.read_f(instr.rs1))));
-			flags |= (uint8_t)softfloat_exceptionFlags;
-			regs.write_f(instr.rd, f64_from_bits(fp16::box_f16(sf::bits(h))));
-			break;
-		}
-		}
+		if (!store_virtual(regs, mem, addr, 2, (uint16_t)regs.read_f_bits(instr.rs2))) return;
 		break;
 	}
 
-	if (flags) regs.or_fflags(flags);
+	default:
+		// fmv.x.h, fmv.h.x, and the conversions to and from half: the unit's.
+		fpu::execute(instr, regs);
+		break;
+	}
+
 	regs.set_pc(regs.get_pc() + instr.length);
 }

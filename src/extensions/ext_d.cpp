@@ -1,7 +1,6 @@
-// D: double-precision floating point. Uses the host's real IEEE-754
-// hardware via <cfenv> rather than a from-scratch soft-float library --
-// see ext_fp_common.hpp for the shared rounding-mode, exception-flag and
-// NaN-canonicalisation plumbing that both F and D sit on.
+// D: double-precision floating point -- its decode, and its loads and
+// stores. Everything else runs in the shared floating-point unit (fpu.cpp),
+// which is SoftFloat on bit patterns; see fpu.hpp.
 //
 // D shares every opcode with F, split in Decoder::classify(): OP-FP on
 // funct7's low bit (odd is double), LOAD-FP/STORE-FP on funct3, and the
@@ -13,19 +12,14 @@
 // enabled, unlike every other instruction in either file, which is enforced
 // in decode_d() below.
 //
-// The f registers are 64 bits wide, so double values need no boxing: unlike
-// F's single-precision, these read and write regs.read_f/write_f directly.
+// The f registers are 64 bits wide, so double values need no boxing.
 #include "riscv_decoder.hpp"
 #include "riscv_core.hpp"
 #include "ext_xstate.hpp"
 #include "registers.hpp"
 #include "memory.hpp"
 #include "extensions.hpp"
-#include "ext_fp_common.hpp"
-#include <cfenv>
-#include <climits>
-#include <cmath>
-#include <cstring>
+#include "fpu.hpp"
 
 DecodedInstruction Decoder::decode_d(uint32_t raw_instr) const
 {
@@ -152,117 +146,20 @@ void RiscvCore::exec_D(const DecodedOp &instr, Registers &regs, Memory &mem)
 		uint64_t addr = regs.read_x(instr.rs1) + (uint64_t)instr.imm;
 		uint64_t v;
 		if (!load_virtual(regs, mem, addr, 8, v)) return;
-		regs.write_f(instr.rd, f64_from_bits(v));
+		regs.write_f_bits(instr.rd, v);
 		regs.set_pc(pc + instr.length);
 		return;
 	}
 
-	if (instr.opcode == 0b0100111) { // FSD -- raw bits, no canonicalization needed
+	if (instr.opcode == 0b0100111) { // FSD -- raw bits
 		uint64_t addr = regs.read_x(instr.rs1) + (uint64_t)instr.imm;   // as FLD
-		if (!store_virtual(regs, mem, addr, 8, bits_from_f64(regs.read_f(instr.rs2)))) return;
+		if (!store_virtual(regs, mem, addr, 8, regs.read_f_bits(instr.rs2))) return;
 		regs.set_pc(pc + instr.length);
 		return;
 	}
 
-	if (instr.opcode == 0b1000011 || instr.opcode == 0b1000111 ||
-	    instr.opcode == 0b1001011 || instr.opcode == 0b1001111) { // FMADD/FMSUB/FNMSUB/FNMADD
-		bool negate_c = (instr.opcode == 0b1000111 || instr.opcode == 0b1001111);
-		bool negate_a = (instr.opcode == 0b1001011 || instr.opcode == 0b1001111);
-		double a = regs.read_f(instr.rs1), b = regs.read_f(instr.rs2), c = regs.read_f(instr.rs3);
-		if (negate_a) a = -a;
-		if (negate_c) c = -c;
-		regs.write_f(instr.rd, fp_fma(a, b, c, instr.funct3, regs));
-		regs.set_pc(pc + instr.length);
-		return;
-	}
-
-	// Everything else is OP-FP; funct7 re-selects the operation the same way
-	// decode_d() did to pick its mnemonic.
-	switch (instr.funct7) {
-	case 0b0000001: regs.write_f(instr.rd, fp_binop(regs.read_f(instr.rs1), regs.read_f(instr.rs2), '+', instr.funct3, regs)); break; // FADD.D
-	case 0b0000101: regs.write_f(instr.rd, fp_binop(regs.read_f(instr.rs1), regs.read_f(instr.rs2), '-', instr.funct3, regs)); break; // FSUB.D
-	case 0b0001001: regs.write_f(instr.rd, fp_binop(regs.read_f(instr.rs1), regs.read_f(instr.rs2), '*', instr.funct3, regs)); break; // FMUL.D
-	case 0b0001101: regs.write_f(instr.rd, fp_binop(regs.read_f(instr.rs1), regs.read_f(instr.rs2), '/', instr.funct3, regs)); break; // FDIV.D
-	case 0b0101101: regs.write_f(instr.rd, fp_sqrt(regs.read_f(instr.rs1), instr.funct3, regs)); break; // FSQRT.D
-
-	case 0b0010001: regs.write_f(instr.rd, fsgnj_f64(regs.read_f(instr.rs1), regs.read_f(instr.rs2), instr.funct3)); break; // FSGNJ/N/X.D
-	case 0b0010101: regs.write_f(instr.rd, fminmax(regs.read_f(instr.rs1), regs.read_f(instr.rs2), instr.funct3 == 0b001, regs)); break; // FMIN/FMAX.D
-
-	case 0b1010001: regs.write_x(instr.rd, fcompare(regs.read_f(instr.rs1), regs.read_f(instr.rs2), instr.funct3, regs)); break; // FLE/FLT/FEQ.D
-
-	case 0b1110001: // rs1 D -> rd integer: FMV.X.D (RV64 only) / FCLASS.D
-		if (instr.funct3 == 0b001) regs.write_x(instr.rd, fclassify(regs.read_f(instr.rs1)));
-		else regs.write_x(instr.rd, bits_from_f64(regs.read_f(instr.rs1)));
-		break;
-	case 0b1111001: // FMV.D.X (RV64 only)
-		regs.write_f(instr.rd, f64_from_bits(regs.read_x(instr.rs1)));
-		break;
-
-	// In SoftFloat, as exec_F's conversions and for the same reason: the
-	// host cannot round ties away (RMM), and fcvt.d.l 2^53+1 or fcvt.s.d of
-	// a halfway double came out rounded to even (BUGS 193).
-	case 0b1100001: { // FCVT.W/WU/L/LU.D -- rd integer; rs2 selects which
-		const float64_t v = sf::f64(bits_from_f64(regs.read_f(instr.rs1)));
-		const uint_fast8_t rm = sf::round_mode(instr.funct3, regs.get_frm());
-		sf::begin(instr.funct3, regs.get_frm());
-		uint64_t result = 0;
-		switch (instr.rs2) {
-		case 0b00000: result = sext32((uint32_t)f64_to_i32(v, rm, true)); break;  // FCVT.W.D
-		case 0b00001: result = sext32((uint32_t)f64_to_ui32(v, rm, true)); break; // FCVT.WU.D -- still sign-extended per spec
-		case 0b00010: result = (uint64_t)f64_to_i64(v, rm, true); break;          // FCVT.L.D
-		case 0b00011: result = f64_to_ui64(v, rm, true); break;                   // FCVT.LU.D
-		}
-		sf::end(regs);
-		regs.write_x(instr.rd, result);
-		break;
-	}
-
-	case 0b1101001: { // FCVT.D.W/WU/L/LU -- rd D, rs1 integer
-		const uint64_t xv = regs.read_x(instr.rs1);
-		sf::begin(instr.funct3, regs.get_frm());
-		float64_t r{};
-		switch (instr.rs2) {
-		case 0b00000: r = i32_to_f64((int32_t)xv); break;
-		case 0b00001: r = ui32_to_f64((uint32_t)xv); break;
-		case 0b00010: r = i64_to_f64((int64_t)xv); break;
-		case 0b00011: r = ui64_to_f64(xv); break;
-		}
-		sf::end(regs);
-		regs.write_f(instr.rd, f64_from_bits(sf::bits(r)));
-		break;
-	}
-
-	case 0b0100000: { // FCVT.S.D -- narrow double to single
-		sf::begin(instr.funct3, regs.get_frm());
-		const float32_t r = f64_to_f32(sf::f64(bits_from_f64(regs.read_f(instr.rs1))));
-		sf::end(regs);
-		write_f32_bits(regs, instr.rd, sf::bits(r));
-		break;
-	}
-	case 0b0100001: { // FCVT.D.S -- widen single to double
-		// Every float is exactly representable as a double, so this never
-		// rounds and never raises inexact. That was the whole of what this
-		// did, and it was the wrong whole: a *signalling* NaN input still
-		// raises invalid, because quieting a signalling NaN is precisely
-		// the event NV exists to report. Canonicalising it silently, as
-		// this did, loses the only observable evidence the operation ever
-		// saw one.
-		//
-		// Found by riscv-arch-test D-fcvt.d.s-00 against Sail; the
-		// hand-written suites never fed this instruction a signalling NaN.
-		//
-		// SoftFloat's f32_to_f64 does all of that, as the other conversions
-		// do now.
-		sf::begin(instr.funct3, regs.get_frm());
-		const float64_t r = f32_to_f64(sf::f32(read_f32_bits(regs, instr.rs1)));
-		sf::end(regs);
-		regs.write_f(instr.rd, f64_from_bits(sf::bits(r)));
-		break;
-	}
-
-	default:
-		break; // the decoder gates unrecognized combinations to illegal first
-	}
-
+	// Everything else is the shared unit, at double precision -- including
+	// FCVT.S.D and FCVT.D.S, whose format field names the destination.
+	fpu::execute(instr, regs);
 	regs.set_pc(pc + instr.length);
 }

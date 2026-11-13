@@ -852,10 +852,7 @@ bool SaveState::export_state(DoomSystem &s, const std::string &dir)
 	for (int i = 0; i < 32; i++) j << (i ? ", " : "") << hex(r.read_x(i));
 	j << "],\n  \"f\": [";
 	for (int i = 0; i < 32; i++) {
-		const double d = r.read_f(i);
-		uint64_t b;
-		std::memcpy(&b, &d, 8);
-		j << (i ? ", " : "") << hex(b);
+		j << (i ? ", " : "") << hex(r.read_f_bits(i));
 	}
 	j << "],\n  \"v\": [";
 	for (int i = 0; i < 32; i++) {

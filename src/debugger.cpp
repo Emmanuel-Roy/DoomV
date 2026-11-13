@@ -138,9 +138,7 @@ void Debugger::dump_log(const Registers &regs, Memory &mem, const char *path)
 		file << "x" << std::dec << i << " "; hex(regs.read_x(i), 16) << "\n";
 	}
 	for (int i = 0; i < 32; i++) {
-		uint64_t bits;
-		double d = regs.read_f(i);
-		std::memcpy(&bits, &d, 8);
+		const uint64_t bits = regs.read_f_bits(i);
 		file << "f" << std::dec << i << " "; hex(bits, 16) << "\n";
 	}
 	for (int i = 0; i < 32; i++) {
