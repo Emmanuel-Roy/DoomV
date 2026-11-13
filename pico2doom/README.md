@@ -51,8 +51,12 @@ You need: CMake, Ninja, Python 3, the
 (`riscv-none-elf-gcc`, the compiler DoomV uses), a host C++ compiler (for
 picotool), and the shareware `DOOM1.WAD` in [`wad/`](wad/README.md).
 
+Pico2Doom lives in the `pico2doom/` folder of the DoomV repository. From
+the DoomV checkout:
+
 ```sh
-git clone --recursive <this repository>     # or: git submodule update --init --recursive
+git submodule update --init --recursive pico2doom/external
+cd pico2doom
 cmake -S firmware -B build/firmware -G Ninja
 cmake --build build/firmware
 ```

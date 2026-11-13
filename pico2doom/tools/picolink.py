@@ -449,7 +449,10 @@ GUEST_MARCH = "-march=rv32imac_zicsr_zifencei_zba_zbb_zbs_zbkb"   # the Pico's H
 
 def find_doomv(path):
     names = ("riscv_doom.exe", "riscv_doom") if os.name == "nt" else ("riscv_doom",)
-    candidates = [path, os.environ.get("DOOMV")] + [os.path.join(REPO, "..", "DoomV", n) for n in names]
+    # pico2doom/ sits inside the DoomV repository; a standalone checkout
+    # next to one (../DoomV) works too.
+    candidates = ([path, os.environ.get("DOOMV")] + [os.path.join(REPO, "..", n) for n in names]
+                  + [os.path.join(REPO, "..", "DoomV", n) for n in names])
     for c in candidates:
         if c and os.path.isfile(c):
             return os.path.abspath(c)
@@ -607,7 +610,7 @@ def main():
     p.add_argument("--ahead", type=int, default=2, help="frames the Pico may run ahead of DoomV (min 1)")
     p.add_argument("--headless", action="store_true", help="DoomV without its window")
     p.add_argument("--seconds", type=float, default=0, help="stop after this long (default: Ctrl+C)")
-    p.add_argument("--doomv", help="path to DoomV's riscv_doom (default: ../DoomV)")
+    p.add_argument("--doomv", help="path to DoomV's riscv_doom (default: the DoomV repository this is in)")
     p.add_argument("--guest", default="build/firmware/doomv-guest",
                    help="the DoomV build of the firmware (the firmware build makes it)")
     p.set_defaults(fn=cmd_corun)

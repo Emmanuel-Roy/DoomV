@@ -33,3 +33,12 @@
 	path = tools/linux/ubuntu/src
 	url = https://git.launchpad.net/ubuntu/+source/debootstrap
 	branch = applied/ubuntu/noble
+[submodule "pico2doom/external/pico-sdk"]
+	path = pico2doom/external/pico-sdk
+	url = https://github.com/raspberrypi/pico-sdk.git
+[submodule "pico2doom/external/doomgeneric"]
+	path = pico2doom/external/doomgeneric
+	url = https://github.com/ozkl/doomgeneric.git
+[submodule "pico2doom/external/picotool"]
+	path = pico2doom/external/picotool
+	url = https://github.com/raspberrypi/picotool.git

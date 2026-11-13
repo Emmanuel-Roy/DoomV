@@ -1,9 +1,0 @@
-[submodule "external/pico-sdk"]
-	path = external/pico-sdk
-	url = https://github.com/raspberrypi/pico-sdk.git
-[submodule "external/doomgeneric"]
-	path = external/doomgeneric
-	url = https://github.com/ozkl/doomgeneric.git
-[submodule "external/picotool"]
-	path = external/picotool
-	url = https://github.com/raspberrypi/picotool.git
