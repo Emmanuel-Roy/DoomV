@@ -7428,3 +7428,23 @@ version 9 had, and an older snapshot is restored as the machine DoomV then
 was, its command line rewritten to say so. Checked: a version 9 Linux
 snapshot, run 500,000 instructions on the build before the change and on
 this one, leaves the same crash.log.
+
+<a id="bug191"></a>
+### 191. Every level interrupt Linux handled came back as a spurious one
+
+22f7457 (direct delivery, for the lock-step against Sail) made a write to the
+APLIC's setipnum_le, at 0x2000, assert the source. Linux's MSI-mode driver
+writes setipnum_le after each level-triggered interrupt it handles, to
+re-trigger a line that is still up (AIA §4.9.2), and AIA §4.7 lets that write
+set a level-sensitive source pending only while its input is high. DoomV
+sent a fresh MSI every time, whatever the device's InterruptStatus said; the
+handler found nothing to do, and after 100,000 of those the kernel disabled
+the IRQ -- `irq 12: nobody cared` -- taking the virtio keyboard with it. An
+Ubuntu boot then reached its login prompt and never took a keystroke, so
+anything driven by `-input` (tools/llama/run.sh, boot.py's installs) stopped
+there. The BusyBox smoke test types nothing and kept passing. The APLIC now
+knows each virtio device's wire (up while InterruptStatus has a bit set,
+rebuilt from the devices on a restore), and setipnum and setipnum_le set a
+level source pending only while it is up. Bisected: 05d2917 boots clean,
+22f7457 does not.
+

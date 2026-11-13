@@ -118,7 +118,7 @@ void Aplic::write32(uint64_t offset, uint32_t val)
 		return;
 	}
 	if (offset == OFF_SETIPNUM || offset == OFF_SETIPNUM_LE) {
-		assert_source(val);
+		set_pending_by_write(val);
 		return;
 	}
 	if (offset >= IDC_BASE) {
@@ -141,6 +141,28 @@ void Aplic::write32(uint64_t offset, uint32_t val)
 	else if (offset == OFF_CLRIENUM) ie &= ~bit;
 	else return;
 	bump_event_gen();
+}
+
+void Aplic::set_line(uint32_t n, bool high)
+{
+	if (n == 0 || n >= NUM_SOURCES) return;
+	if (high) line |= 1u << n;
+	else line &= ~(1u << n);
+}
+
+void Aplic::set_pending_by_write(uint32_t n)
+{
+	if (n == 0 || n >= NUM_SOURCES) return;
+	// SM 6 is Level1 (active high), 7 Level0 (active low); the rectified
+	// input is the wire, or its inverse.
+	const uint32_t sm = sourcecfg[n];
+	const bool wire = (line >> n) & 1;
+	if ((sm == 6 && !wire) || (sm == 7 && wire)) return;
+	// Without this, Linux's re-trigger after each interrupt became a fresh
+	// MSI with nothing behind it: the handler found InterruptStatus 0, and
+	// after 100,000 of those the kernel disabled the IRQ ("irq N: nobody
+	// cared"), taking the keyboard with it.
+	assert_source(n);
 }
 
 void Aplic::assert_source(uint32_t n)

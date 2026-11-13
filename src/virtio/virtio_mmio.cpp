@@ -66,7 +66,10 @@ void VirtioMmio::write32(uint64_t offset, uint32_t value, Memory &mem, Aplic &ap
 	case REG_QUEUE_AVAIL_HI:  if (q) high(q->avail); return;
 	case REG_QUEUE_USED_LO:   if (q) low(q->used); return;
 	case REG_QUEUE_USED_HI:   if (q) high(q->used); return;
-	case REG_INTERRUPT_ACK:   interrupt_status &= ~value; return;
+	case REG_INTERRUPT_ACK:
+		interrupt_status &= ~value;
+		aplic.set_line(irq, interrupt_status != 0);   // the wire drops with the last bit
+		return;
 	case REG_QUEUE_NOTIFY:
 		if (value < num_queues && queues[value].ready && present()) notify(value, mem, aplic);
 		return;
@@ -78,6 +81,7 @@ void VirtioMmio::write32(uint64_t offset, uint32_t value, Memory &mem, Aplic &ap
 		if (value == 0) {
 			for (Queue &each : queues) each = Queue{};
 			interrupt_status = 0;
+			aplic.set_line(irq, false);
 			reset();
 		}
 		return;
@@ -128,5 +132,6 @@ void VirtioMmio::complete(Memory &mem, unsigned q, uint16_t head, uint32_t writt
 void VirtioMmio::interrupt(Aplic &aplic)
 {
 	interrupt_status |= 1;   // bit 0: the used ring moved
+	aplic.set_line(irq, true);
 	aplic.assert_source(irq);
 }

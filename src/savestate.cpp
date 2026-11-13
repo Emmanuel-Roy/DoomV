@@ -524,6 +524,14 @@ struct SaveState {
 			gpu(io, m.gpu, version);
 		}
 		io.mark(0x44455600);   // "DEV"
+		// The APLIC's view of each wire is the devices' InterruptStatus, so
+		// it is set from them rather than stored.
+		if constexpr (!std::is_same_v<IO, Writer>) {
+			auto wire = [&m](const VirtioMmio &d) { m.aplic.set_line(d.irq_source(), d.line_high()); };
+			wire(m.kbd_dev); wire(m.mouse_dev); wire(m.disk);
+			for (const VirtioBlk &d : m.drives) wire(d);
+			wire(m.share); wire(m.net); wire(m.snd); wire(m.gpu);
+		}
 	}
 
 	// A hart's state beyond its registers and core: a wait in progress, its

@@ -37,6 +37,17 @@ public:
 	// configured or enabled must be dropped just as silently either way.
 	void assert_source(uint32_t source);
 
+	// The level of a source's wire, for a device whose interrupt stays
+	// asserted until the driver acknowledges it (virtio-mmio's
+	// InterruptStatus). Only setipnum and setipnum_le read it: AIA §4.7 lets
+	// those writes set a level-sensitive source pending only while its
+	// rectified input is high, and Linux's MSI-mode driver relies on that --
+	// it writes setipnum_le after every level interrupt it handles (§4.9.2),
+	// to re-trigger a line that is still up. A source no device drives reads
+	// as low. Not snapshot state: savestate.cpp sets it again from the
+	// devices it restores.
+	void set_line(uint32_t source, bool high);
+
 	// Direct delivery (domaincfg.DM = 0): no IMSIC, no AIA CSRs. Sources
 	// are pending and enabled here, each hart has an interrupt delivery
 	// control block (IDC) at 0x4000 + 32 * hart, and what reaches the hart
@@ -60,6 +71,10 @@ private:
 	// Direct mode: pending and enabled, a bit per source (bit 0 unused), and
 	// each hart's IDC.
 	uint32_t ip = 0, ie = 0;
+	uint32_t line = 0;   // set_line: each source's wire, a bit per source
+	// setipnum / setipnum_le: a level-sensitive source becomes pending only
+	// while its rectified input is high; any other source, always.
+	void set_pending_by_write(uint32_t source);
 	struct Idc { uint32_t idelivery = 0, iforce = 0, ithreshold = 0; };
 	std::vector<Idc> idc;
 };

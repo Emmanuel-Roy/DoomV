@@ -75,6 +75,8 @@ public:
 	void write32(uint64_t offset, uint32_t value, Memory &mem, Aplic &aplic);
 
 	uint32_t irq_source() const { return irq; }
+	// The interrupt wire: up while InterruptStatus has a bit set.
+	bool line_high() const { return interrupt_status != 0; }
 
 protected:
 	struct Queue {
