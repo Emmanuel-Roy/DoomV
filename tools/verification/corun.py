@@ -425,12 +425,20 @@ def isa_tokens(march: str):
     return base, [t for t in dict.fromkeys(rest) if t]
 
 
+def smstateen_for_ssstateen(toks):
+    """Spike, Whisper and QEMU have the state-enable CSRs as Smstateen only,
+    which brings sstateen with it. Without it every riscv-arch-test traps in
+    its setup, at its first sstateen0 write, and the comparison ends there."""
+    return ["smstateen" if t == "ssstateen" else t for t in toks]
+
+
 def spike_isa(march: str, vlen: int, elf: pathlib.Path, timeout: int):
     """The march, less what this Spike refuses ("unsupported extension: x")."""
     base, toks = isa_tokens(march)
     dropped = []
     if vlen != 128 and "v" in base[4:]:
         toks.append(f"zvl{vlen}b")
+    toks = smstateen_for_ssstateen(toks)
     while True:
         isa = "_".join([base] + toks)
         code, out = in_wsl([SPIKE, f"--isa={isa}", "--instructions=1", wsl(elf)], timeout)
@@ -447,6 +455,7 @@ QEMU_LETTERS = {"v": "v", "h": "h"}
 def qemu_cpu(march: str, vlen: int, elf: pathlib.Path, timeout: int):
     """-cpu rv64 with the march's extensions turned on, less what QEMU does not have."""
     base, toks = isa_tokens(march)
+    toks = smstateen_for_ssstateen(toks)
     props = [f"{QEMU_LETTERS[c]}=true" for c in base[4:] if c in QEMU_LETTERS]
     props += [f"{t}=true" for t in toks]
     # QEMU's rv64 turns Svadu on by itself: it sets a page's A and D bits in
@@ -541,6 +550,7 @@ def run_spike(prog, out, march, limit, timeout) -> Run:
 def run_whisper(prog, out, march, limit, timeout) -> Run:
     r = Run("whisper", log=out / "whisper.csv")
     base, toks = isa_tokens(march)
+    toks = smstateen_for_ssstateen(toks)
     # This Whisper, with H and no hart configuration beyond the ISA, crashes
     # on the first hypervisor CSR write (CsRegs::hyperWrite); without H it
     # runs, and a test that uses H traps where Sail does not, which the
@@ -550,6 +560,16 @@ def run_whisper(prog, out, march, limit, timeout) -> Run:
         r.dropped.append("h")
     # Whisper takes S and U mode as ISA letters; without them it has neither.
     base += "".join(c for c in "su" if c not in base[4:])
+    # What this Whisper refuses outright ("Invalid ISA extension: sv48") is
+    # left out and reported, as Spike's refusals are.
+    while True:
+        code, text = in_wsl([WHISPER, "--isa", "_".join([base] + toks), "--target", wsl(prog.elf),
+                             "--maxinst", "1"], timeout)
+        m = re.search(r"Invalid ISA extension: (\w+)", text or "")
+        if not m or m.group(1) not in toks:
+            break
+        toks.remove(m.group(1))
+        r.dropped.append(m.group(1))
     config = out / "whisper.json"
     config.write_text(json.dumps({"vector": {"bytes_per_vec": prog.vlen // 8, "max_bytes_per_elem": 8}}))
     extra = 4096 if prog.start else 0
@@ -572,14 +592,48 @@ def run_whisper(prog, out, march, limit, timeout) -> Run:
     return r
 
 
+def sized_htif(elf: pathlib.Path, out: pathlib.Path) -> pathlib.Path:
+    """elf, or a copy whose tohost and fromhost symbols say they are 8 bytes.
+
+    QEMU's spike machine refuses to start ("HTIF tohost must be 8 bytes")
+    unless the symbol's size is 8, and riscv-arch-test, like most bare-metal
+    tests, leaves it 0. The size is the only thing changed.
+    """
+    data = bytearray(elf.read_bytes())
+    if data[:4] != b"ELF" or data[4] != 2 or data[5] != 1:
+        return elf                                  # only ELF64 little-endian
+    shoff, = struct.unpack_from("<Q", data, 0x28)
+    shentsize, shnum = struct.unpack_from("<HH", data, 0x3A)
+    sections = [struct.unpack_from("<IIQQQQIIQQ", data, shoff + i * shentsize) for i in range(shnum)]
+    changed = False
+    for sh in sections:
+        if sh[1] != 2:                              # SHT_SYMTAB
+            continue
+        strtab = sections[sh[6]]                    # sh_link
+        for off in range(sh[4], sh[4] + sh[5], sh[9] or 24):
+            name_off, = struct.unpack_from("<I", data, off)
+            start = strtab[4] + name_off
+            name = bytes(data[start:data.index(0, start)])
+            size, = struct.unpack_from("<Q", data, off + 16)
+            if name in (b"tohost", b"fromhost") and size != 8:
+                struct.pack_into("<Q", data, off + 16, 8)
+                changed = True
+    if not changed:
+        return elf
+    copy = out / ("htif-" + elf.name)
+    copy.write_bytes(data)
+    return copy
+
+
 def run_qemu(prog, out, march, limit, timeout) -> Run:
     r = Run("qemu", log=out / "qemu.log")
     cpu, r.dropped = qemu_cpu(march, prog.vlen, prog.elf, timeout)
+    elf = sized_htif(prog.elf, out) if not prog.start else prog.elf
     mem = ["-m", f"{prog.ram_mb + 2048}M"] if prog.ram_mb else []
     # From a snapshot, the generic loader: the spike machine starts a -kernel
     # at the bottom of RAM whatever its entry, and the restore program is not
     # there. A test keeps -kernel, which is what wires its tohost to an exit.
-    load = ["-device", f"loader,file={wsl(prog.elf)},cpu-num=0"] if prog.start else ["-kernel", wsl(prog.elf)]
+    load = ["-device", f"loader,file={wsl(prog.elf)},cpu-num=0"] if prog.start else ["-kernel", wsl(elf)]
     r.command = [QEMU, "-machine", "spike", "-cpu", cpu] + mem + ["-bios", "none"] + load + ["-nographic",
         "-monitor", "none", "-serial", "none", "-accel", "tcg,one-insn-per-tb=on",
         "-d", "in_asm,cpu,fpu,vpu,nochain", "-D", wsl(r.log)]
@@ -642,6 +696,10 @@ def compare(sail: Run, other: Run, entry: int, tohost: int | None = None, limit:
     if limit:
         A, B = A[:limit], B[:limit]      # the same number of instructions for all of them
     sa, sb = {}, {}
+    # fflags only where the other's log has it at all (QEMU's and DoomV's do,
+    # Spike's and Whisper's are not read for it): a register a log never
+    # mentions would otherwise read as Sail's previous value and differ.
+    reports = {"fflags"} if any("fflags" in s.writes for s in B) else set()
     for i in range(min(len(A), len(B))):
         a, b = A[i], B[i]
         if a.pc != b.pc:
@@ -654,7 +712,7 @@ def compare(sail: Run, other: Run, entry: int, tohost: int | None = None, limit:
         if a.trap:
             continue
         for name in sorted(set(a.writes) | set(b.writes)):
-            if name in ("x0",):
+            if name in ("x0",) or (name == "fflags" and name not in reports):
                 continue
             prev = sa.get(name)
             va = a.writes.get(name, prev)
