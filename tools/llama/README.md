@@ -95,9 +95,9 @@ wall clock: 4 min 53 s, boot included
 ```
 
 That is the whole run -- boot, model load, answer -- in under five minutes.
-On the CPU the static build takes about 35 minutes for twelve tokens (above),
-and this binary with `NGL=0`, beside it on the same machine, had given its
-first token after 23. The guest's clock counts instructions, so 12 ms a token
+The same binary with `NGL=0`, everything on the emulated CPU, took 43 min
+27 s for the same answer: 2.2 tokens/s reading the prompt and 1.5 generating,
+against 122.7 and 83.7 on the GPU, about 55 times faster. The guest's clock counts instructions, so 12 ms a token
 is about 12 million guest instructions: the CPU only sends the work, and the
 matrices are multiplied on the GPU.
 
@@ -138,6 +138,34 @@ export GGML_VK_VISIBLE_DEVICES=0
 
 `-st` ends the chat after one answer; without it `completion` waits at its
 `>` prompt for the next turn. That is what an unattended run must not do.
+
+## Boot it and chat
+
+`boot.py` does the interactive version: Ubuntu in a window, logged in as root,
+llama.cpp copied in from the share, and its chat started on the model.
+
+```sh
+python scripts/boot.py ubuntu --gpu --llama shared/Qwen3.5-0.8B-Q4_K_M.gguf   # on the GPU
+python scripts/boot.py ubuntu --llama shared/Qwen3.5-0.8B-Q4_K_M.gguf         # on the CPU
+```
+
+Type at the `>` prompt. Every answer ends with its speed:
+
+```
+[ Prompt: 162.7 t/s | Generation: 77.2 t/s ]      (Qwen3.5-0.8B Q4_K_M, RX 9070 XT)
+```
+
+`/clear` forgets the conversation, `/exit` (or Ctrl+C twice) leaves it, and
+the up arrow at the shell starts it again. It is llama.cpp's `cli`, with
+`--simple-io` (see below), `-t 1`, and `-ngl 99` on the GPU.
+
+The model has to be in the shared folder, which is how the guest reads it. The
+binary is `shared/llama-vulkan` with `--gpu` (`build_vulkan.sh`, and the image
+set up once with `--setup-gpu`) or `shared/llama` without (`build.sh`).
+`--llama` gives the guest 4G unless `--ram` says otherwise; `--ctx` sets the
+context (default 2048). On the GPU, loading takes a few minutes after the
+login. On the CPU it takes about half an hour, and the answers come at about a
+word a second.
 
 ## Run it by hand
 

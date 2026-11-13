@@ -54,6 +54,8 @@ python scripts/boot.py ubuntu --setup-network      # once, before --net, for an 
 python scripts/boot.py ubuntu --setup-browser      # once: a browser (NetSurf) and w3m; includes --setup-network
 python scripts/boot.py ubuntu --setup-sound        # once: aplay, arecord and speaker-test; includes --setup-network
 python scripts/boot.py ubuntu --setup-gpu          # once: the desktops on --gpu, current Mesa, glxgears/vkcube
+python scripts/boot.py ubuntu --gpu --llama shared/model.gguf   # chat with a model on the GPU (tools/llama)
+python scripts/boot.py ubuntu --llama shared/model.gguf         # ... on the CPU; --ctx N sets the context
 ```
 
 `--desktop` boots from scratch, about 25 minutes to a usable desktop.

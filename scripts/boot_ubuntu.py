@@ -9,6 +9,8 @@
   python scripts/boot.py ubuntu --setup-browser       # once: a browser, and the network for it
   python scripts/boot.py ubuntu --setup-sound         # once: aplay, arecord, speaker-test
   python scripts/boot.py ubuntu --setup-gpu           # once: OpenGL and Vulkan for --gpu
+  python scripts/boot.py ubuntu --llama model.gguf    # chat with a model in shared/, on the CPU
+  python scripts/boot.py ubuntu --gpu --llama model.gguf   # ... on this computer's GPU (Vulkan)
   python scripts/boot.py ubuntu --login               # test: log in, run a command, exit
 
 The image is an input: it takes hours to build, so this script never builds
@@ -72,16 +74,61 @@ key 28 0
 """
 
 
-def autologin_args():
+def autologin_args(then=""):
     """Log in as root through the emulated keyboard once the prompt is up.
 
     Typed from the host rather than configured in the image, which is not
-    something a boot script should edit.
+    something a boot script should edit. `then` is more script, run once the
+    shell is up.
     """
     script = BUILD / "logs/ubuntu-autologin.script"
     script.parent.mkdir(parents=True, exist_ok=True)
-    script.write_text(AUTOLOGIN_SCRIPT, newline="\n")
+    script.write_text(AUTOLOGIN_SCRIPT + then, newline="\n")
     return [f"-expect={LOGIN_PROMPT}", f"-input={script}"]
+
+
+def llama_script(model: str, gpu: bool, ctx: int) -> str:
+    """What --llama types once logged in: llama.cpp's chat on `model`.
+
+    The binary comes in through the shared folder (tools/llama/build.sh, or
+    build_vulkan.sh for --gpu) and is copied to /root, because 9p carries no
+    execute bit. `cli` rather than `completion` because it prints each answer's
+    speed after it, "[ Prompt: N t/s | Generation: N t/s ]"; --simple-io
+    because cli crashes in the guest without it (tools/llama/README.md).
+
+    On the GPU llama.cpp would split the model across every Vulkan device the
+    guest has -- Venus shows it each of the host's GPUs, and a discrete card
+    and an integrated one are two -- so it is kept to the first, and the list
+    is printed so it is plain which that is. -t 1: the machine has one hart.
+    """
+    binary = "llama-vulkan" if gpu else "llama"
+    setup = (f"mkdir -p /mnt/shared && mount -t 9p -o trans=virtio,version=9p2000.L shared /mnt/shared"
+             f" && cp /mnt/shared/{binary} /root/{binary} && chmod +x /root/{binary} && clear")
+    if gpu:
+        setup += f" && export GGML_VK_VISIBLE_DEVICES=0 && /root/{binary} completion --list-devices"
+    chat = (f"echo 'Loading {model} on the {'GPU' if gpu else 'CPU'}: minutes, silent until its > prompt.'; "
+            f"/root/{binary} cli --simple-io -m /mnt/shared/{model} -c {ctx} -t 1" + (" -ngl 99" if gpu else ""))
+    # sleep N is N x 10,000 instructions. Generous: what is typed early waits
+    # in the terminal until the shell reads it.
+    lines = ["sleep 75000", f"type {setup}", "key 28 1", "key 28 0",
+             "sleep 300000", f"type {chat}", "key 28 1", "key 28 0"]
+    return "".join(line + "\n" for line in lines)
+
+
+def llama_model(args) -> str:
+    """--llama's model, checked: the file name the guest finds it by under /mnt/shared."""
+    shared = Path(args.shared).resolve() if args.shared else ROOT / "shared"
+    model = args.llama.resolve()
+    if not model.is_file():
+        model = shared / args.llama.name
+    if not model.is_file() or model.resolve().parent != shared.resolve():
+        raise RuntimeError(f"--llama: no {args.llama.name} in {shared}; the guest reads models from "
+                           "the shared folder, so put it there.")
+    binary = shared / ("llama-vulkan" if args.gpu else "llama")
+    if not binary.is_file():
+        build = "build_vulkan.sh" if args.gpu else "build.sh"
+        raise RuntimeError(f"--llama: no {binary.name} in {shared}; build it with: bash tools/llama/{build}")
+    return model.name
 
 
 def ubuntu_command(image: Path, emulator_args=(), extra=(), dtb="ubuntu.dtb", harts=1):
@@ -362,6 +409,10 @@ def main():
     u.add_argument("--desktop-snapshot", nargs="?", const=DESKTOP_SNAPSHOT, type=Path, metavar="DIR",
                    help="restore the booted XFCE desktop (default build/desktop/xfce-100G)")
     u.add_argument("--no-autologin", action="store_true", help="stop at the login prompt (root / doomv)")
+    u.add_argument("--llama", type=Path, metavar="MODEL",
+                   help="log in and chat with MODEL, a .gguf in the shared folder, through llama.cpp; "
+                        "on the GPU with --gpu. Each answer ends with its tokens per second")
+    u.add_argument("--ctx", type=int, default=2048, metavar="N", help="--llama's context length (default 2048)")
     u.add_argument("--install-desktops", action="store_true",
                    help="install all three desktops into the image, once (hours)")
     u.add_argument("--setup-network", action="store_true",
@@ -385,6 +436,14 @@ def main():
         parser.error("--timeout must be positive")
     if sum(bool(x) for x in (args.login, args.desktop, args.desktop_snapshot, args.install_desktops)) > 1:
         parser.error("--login, --desktop, --desktop-snapshot and --install-desktops are separate runs; pick one")
+    if args.llama and (args.headless or args.no_autologin or args.desktop or args.desktop_snapshot or args.login):
+        parser.error("--llama types into the window's console; it cannot go with --headless, --no-autologin, "
+                     "--desktop, --desktop-snapshot or --login")
+    if args.llama:
+        model = llama_model(args)
+        # 1G, the default, is too little even for an 0.8B model, and llama.cpp
+        # says so by segfaulting (tools/llama/README.md).
+        args.ram = args.ram or "4G"
     image = args.image.resolve()
     require_image(image)   # before a build that would be wasted without one
     with checkout_lock():
@@ -443,8 +502,12 @@ def main():
                 print("Ubuntu opens in the window; systemd takes a few minutes. Ctrl+Alt+F for full")
                 print("window, Ctrl+Alt+G to grab the mouse." + (
                     " Log in as root / doomv." if args.no_autologin else " It logs in as root by itself."))
+                if args.llama:
+                    print(f"Then it starts llama.cpp on {model}, on the " + ("GPU" if args.gpu else "CPU")
+                          + ": type at its > prompt; each answer ends with its tokens per second. "
+                          "/exit, or Ctrl+C twice, leaves it.")
                 if not args.no_autologin:
-                    extra = autologin_args()
+                    extra = autologin_args(llama_script(model, args.gpu, args.ctx) if args.llama else "")
             run(ubuntu_command(image, boot_args(args, passthrough), extra=extra, harts=args.harts))
     return 0
 

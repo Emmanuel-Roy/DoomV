@@ -12,6 +12,100 @@ card, GPU (2D, or OpenGL and Vulkan through the host's GPU), and a 9P folder sha
 
 <img width="1920" height="1080" alt="DOOM E1M1 running on DoomV, with the register file and trace log beside it" src="docs/images/doomv-hero.png" />
 
+## Quick start
+
+Windows 11 with WSL. Run every command from the repository root, in
+PowerShell or Git Bash.
+
+**1. Install the tools (once).**
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/install_dependencies.ps1   # make, a compiler, SDL2, Python
+wsl --install -d Ubuntu                                                      # reboot if asked
+powershell -ExecutionPolicy Bypass -File scripts/toolchain.ps1               # the RISC-V cross-compiler, in WSL
+```
+
+**2. Boot something.** Each command builds what it needs, then opens a window.
+Close the window to stop.
+
+```powershell
+python scripts/boot.py doom       # DOOM, bare metal
+python scripts/boot.py linux      # Linux with a BusyBox shell
+python scripts/boot.py ubuntu     # Ubuntu 24.04; logs in as root by itself
+```
+
+Ubuntu needs `ubuntu.img` in the repository root first. It takes hours to
+build, so no script builds it for you:
+
+```powershell
+git submodule update --init tools/linux/ubuntu/src
+wsl -d Ubuntu -u root -- bash tools/linux/ubuntu/mkrootfs.sh   # stage 1: unpack on the host
+bash tools/linux/ubuntu/boot-stage2.sh                         # stage 2: DoomV runs dpkg (hours)
+```
+
+**3. Add devices and desktops.** These options combine.
+
+```powershell
+python scripts/boot.py ubuntu --ram 4G --harts 2   # more memory, more CPUs
+python scripts/boot.py ubuntu --net                # a network card
+python scripts/boot.py ubuntu --sound              # a sound card
+python scripts/boot.py ubuntu --gpu                # OpenGL and Vulkan on this computer's GPU
+python scripts/boot.py ubuntu --install-desktops   # once (hours), then:
+python scripts/boot.py ubuntu --desktop xfce       # a desktop: xfce, openbox or x
+```
+
+`--gpu` needs two things once: `python scripts/get_venus.py`, which builds the
+host side (boot.py runs it by itself the first time), and
+`python scripts/boot.py ubuntu --setup-gpu`, which installs Mesa's OpenGL and
+Vulkan drivers in the image.
+
+**4. Chat with a language model (llama.cpp).** Build llama.cpp for the guest,
+put a GGUF model in `shared/` (any model llama.cpp loads; a small one such as
+Qwen3.5-0.8B at Q4_K_M is a good start), and boot with `--llama`:
+
+```powershell
+bash tools/llama/build_vulkan.sh                                            # once: shared/llama-vulkan, for the GPU
+python scripts/boot.py ubuntu --gpu --llama shared/Qwen3.5-0.8B-Q4_K_M.gguf  # on this computer's GPU
+
+bash tools/llama/build.sh                                                   # once: shared/llama, for the CPU
+python scripts/boot.py ubuntu --llama shared/Qwen3.5-0.8B-Q4_K_M.gguf        # on the emulated CPU
+```
+
+It logs in, loads the model and waits at a `>` prompt. Type a question, and
+each answer ends with its speed:
+
+```
+Paris
+
+[ Prompt: 162.7 t/s | Generation: 77.2 t/s ]
+```
+
+`/exit` leaves the chat and `/clear` starts the conversation over. On the GPU
+the model answers a few minutes after the login. On the CPU, loading takes
+about half an hour and answers come at about a word a second. The GPU path is
+llama.cpp's Vulkan backend on Mesa's Venus driver, through virtio-gpu to the
+host's own Vulkan driver.
+
+To run a prompt unattended and print the output and timings:
+
+```sh
+bash tools/llama/run_vulkan.sh shared/Qwen3.5-0.8B-Q4_K_M.gguf "The capital of France is" 12   # GPU
+NGL=0 bash tools/llama/run_vulkan.sh shared/Qwen3.5-0.8B-Q4_K_M.gguf                           # same binary, CPU only
+```
+
+[tools/llama/README.md](tools/llama/README.md) has the rest.
+
+**5. Test.**
+
+```powershell
+python scripts/boot.py linux --smoke    # BusyBox runs, then exits
+python scripts/boot.py ubuntu --login   # logs in through the emulated keyboard, then exits
+python scripts/verify.py                # every regression suite
+```
+
+Every option is in [scripts/README.md](scripts/README.md), and
+`python scripts/boot.py <guest> --help` lists them too.
+
 ## Why
 
 My Gameboy emulator was done, I'd taken a chunk of computer architecture
