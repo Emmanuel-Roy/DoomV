@@ -1,0 +1,36 @@
+--- a/net_defs.h
++++ b/net_defs.h
+@@ -34,7 +34,9 @@
+ // This is the maximum supported by the networking code; individual games
+ // have their own values for MAXPLAYERS that can be smaller.
+ 
+-#define NET_MAXPLAYERS 8
++// Pico2Doom: was 8. DOOM itself has 4 players (MAXPLAYERS), and the
++// network code that needed room for observers is not built.
++#define NET_MAXPLAYERS 4
+ 
+ // Maximum length of a player's name.
+ 
+@@ -42,7 +44,9 @@
+ 
+ // Networking and tick handling related.
+ 
+-#define BACKUPTICS 128
++// Pico2Doom: was 128. Single player only ever runs a few tics ahead; with
++// NET_MAXPLAYERS this cuts d_loop.c's ticdata from 20 KB to 2.5 KB.
++#define BACKUPTICS 32
+ 
+ typedef struct _net_module_s net_module_t;
+ typedef struct _net_packet_s net_packet_t;
+--- a/statdump.c
++++ b/statdump.c
+@@ -53,7 +53,8 @@
+ 
+ // Array of end-of-level statistics that have been captured.
+ 
+-#define MAX_CAPTURES 32
++// Pico2Doom: was 32 (6 KB). -statdump is a desktop tool; keep one slot.
++#define MAX_CAPTURES 1
+ static wbstartstruct_t captured_stats[MAX_CAPTURES];
+ static int num_captured_stats = 0;
+ 

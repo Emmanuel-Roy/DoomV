@@ -1,0 +1,8 @@
+build/
+wad/*.WAD
+wad/*.wad
+*.p2dl
+*.ppm
+crash.log
+picolink_doomv.*
+__pycache__/

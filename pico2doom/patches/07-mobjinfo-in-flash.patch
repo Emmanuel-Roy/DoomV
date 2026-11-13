@@ -1,0 +1,145 @@
+--- a/info.h
++++ b/info.h
+@@ -1335,6 +1335,13 @@
+ 
+ } mobjinfo_t;
+ 
+-extern mobjinfo_t mobjinfo[NUMMOBJTYPES];
++// Pico2Doom: const, so it stays in flash (12 KB of RAM saved). The only
++// thing vanilla ever wrote to it was the speed of three projectiles, for
++// -fast / Nightmare (G_InitNew). Those three entries have RAM copies, and a
++// mobj's info pointer comes from MOBJINFO(), which hands out the copy for
++// them -- so every read through mo->info sees the right speed.
++extern const mobjinfo_t mobjinfo[NUMMOBJTYPES];
++const mobjinfo_t *MOBJINFO(mobjtype_t type);
++mobjinfo_t *MOBJINFO_RW(mobjtype_t type);   // NULL unless one of the three
+ 
+ #endif
+--- a/info.c
++++ b/info.c
+@@ -1100,7 +1100,34 @@
+ };
+ 
+ 
+-mobjinfo_t mobjinfo[NUMMOBJTYPES] = {
++static const mobjtype_t projectile_types[3] =
++    { MT_BRUISERSHOT, MT_HEADSHOT, MT_TROOPSHOT };
++static mobjinfo_t projectile_info[3];
++static int projectile_info_ready;
++
++mobjinfo_t *MOBJINFO_RW(mobjtype_t type)
++{
++    int i;
++
++    if (!projectile_info_ready)
++    {
++        for (i = 0; i < 3; i++)
++            projectile_info[i] = mobjinfo[projectile_types[i]];
++        projectile_info_ready = 1;
++    }
++    for (i = 0; i < 3; i++)
++        if (type == projectile_types[i])
++            return &projectile_info[i];
++    return NULL;
++}
++
++const mobjinfo_t *MOBJINFO(mobjtype_t type)
++{
++    const mobjinfo_t *rw = MOBJINFO_RW(type);
++    return rw ? rw : &mobjinfo[type];
++}
++
++const mobjinfo_t mobjinfo[NUMMOBJTYPES] = {
+ 
+     {		// MT_PLAYER
+ 	-1,		// doomednum
+--- a/g_game.c
++++ b/g_game.c
+@@ -1813,17 +1813,17 @@
+     {
+ 	for (i=S_SARG_RUN1 ; i<=S_SARG_PAIN2 ; i++)
+ 	    fast_state_tics[i - FAST_STATE_FIRST] >>= 1;
+-	mobjinfo[MT_BRUISERSHOT].speed = 20*FRACUNIT;
+-	mobjinfo[MT_HEADSHOT].speed = 20*FRACUNIT;
+-	mobjinfo[MT_TROOPSHOT].speed = 20*FRACUNIT;
++	MOBJINFO_RW(MT_BRUISERSHOT)->speed = 20*FRACUNIT;
++	MOBJINFO_RW(MT_HEADSHOT)->speed = 20*FRACUNIT;
++	MOBJINFO_RW(MT_TROOPSHOT)->speed = 20*FRACUNIT;
+     }
+     else if (skill != sk_nightmare && gameskill == sk_nightmare)
+     {
+ 	for (i=S_SARG_RUN1 ; i<=S_SARG_PAIN2 ; i++)
+ 	    fast_state_tics[i - FAST_STATE_FIRST] <<= 1;
+-	mobjinfo[MT_BRUISERSHOT].speed = 15*FRACUNIT;
+-	mobjinfo[MT_HEADSHOT].speed = 10*FRACUNIT;
+-	mobjinfo[MT_TROOPSHOT].speed = 10*FRACUNIT;
++	MOBJINFO_RW(MT_BRUISERSHOT)->speed = 15*FRACUNIT;
++	MOBJINFO_RW(MT_HEADSHOT)->speed = 10*FRACUNIT;
++	MOBJINFO_RW(MT_TROOPSHOT)->speed = 10*FRACUNIT;
+     }
+ 
+     // force players to be initialized upon first level load
+--- a/p_mobj.h
++++ b/p_mobj.h
+@@ -241,7 +241,7 @@
+     int			validcount;
+ 
+     mobjtype_t		type;
+-    mobjinfo_t*		info;	// &mobjinfo[mobj->type]
++    const mobjinfo_t*	info;	// MOBJINFO(mobj->type)
+     
+     int			tics;	// state tic counter
+     const state_t*		state;
+--- a/p_mobj.c
++++ b/p_mobj.c
+@@ -511,11 +511,11 @@
+ {
+     mobj_t*	mobj;
+     const state_t*	st;
+-    mobjinfo_t*	info;
++    const mobjinfo_t*	info;
+ 	
+     mobj = Z_Malloc (sizeof(*mobj), PU_LEVEL, NULL);
+     memset (mobj, 0, sizeof (*mobj));
+-    info = &mobjinfo[type];
++    info = MOBJINFO(type);
+ 	
+     mobj->type = type;
+     mobj->info = info;
+--- a/p_saveg.c
++++ b/p_saveg.c
+@@ -1656,7 +1656,7 @@
+ 	    mobj->target = NULL;
+             mobj->tracer = NULL;
+ 	    P_SetThingPosition (mobj);
+-	    mobj->info = &mobjinfo[mobj->type];
++	    mobj->info = MOBJINFO(mobj->type);
+ 	    mobj->floorz = mobj->subsector->sector->floorheight;
+ 	    mobj->ceilingz = mobj->subsector->sector->ceilingheight;
+ 	    mobj->thinker.function.acp1 = (actionf_p1)P_MobjThinker;
+--- a/p_enemy.c
++++ b/p_enemy.c
+@@ -1159,7 +1159,7 @@
+     int			bx;
+     int			by;
+ 
+-    mobjinfo_t*		info;
++    const mobjinfo_t*	info;
+     mobj_t*		temp;
+ 	
+     if (actor->movedir != DI_NODIR)
+--- a/r_draw.c
++++ b/r_draw.c
+@@ -38,8 +38,10 @@
+ 
+ 
+ // ?
+-#define MAXWIDTH			1120
+-#define MAXHEIGHT			832
++// Pico2Doom: was 1120 x 832 (high-resolution builds); this port's screen is
++// 320 x 200. Saves 7 KB.
++#define MAXWIDTH			SCREENWIDTH
++#define MAXHEIGHT			SCREENHEIGHT
+ 
+ // status bar height at bottom of screen
+ #define SBARHEIGHT		32
