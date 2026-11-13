@@ -359,6 +359,7 @@ of console output (`2667bf1`, re-verified in `936df17`).
 194. [FMIN/FMAX with one signaling NaN returned whatever libm did](#bug194)
 195. [Vector single precision never raised invalid for a signaling NaN](#bug195)
 196. [Half to and from 8-bit integers did nothing in the vector unit](#bug196)
+197. [Every misaligned AMO trapped, even inside the atomicity granule](#bug197)
 
 <a id="part-vii"></a>
 ### Part VII — Cross-cutting
@@ -7536,3 +7537,24 @@ SoftFloat: Sail converted vfncvt.x.f.w of 250.0 to 127 with invalid, DoomV
 wrote nothing. riscv-vector-tests has no e8 floating-point conversions. SEW=8
 now reaches those two conversions, which use SoftFloat's f16_to_i8/ui8 and
 i64_to_f16 like every other width.
+
+<a id="bug197"></a>
+### 197. Every misaligned AMO trapped, even inside the atomicity granule
+
+RVA23 requires Zama16b: in main memory, a misaligned AMO that lies wholly
+inside one aligned 16-byte block is performed, atomically. Sail is configured
+that way (RAM's misaligned_atomicity_granule_size_exp 4, no global misaligned
+exception for AMOs). DoomV took an access fault for any misaligned AMO, and
+took it before translating the address. riscv-arch-test's
+sv39_exceptions_Zaamo_{M,S,U}mode do an amoadd.w at offset 2 of a block: Sail
+performed it, DoomV trapped. The signature check passed anyway; the
+four-simulator co-run (corun.py) caught it.
+
+Now, as Sail does it: LR and SC still take an access fault (load for LR,
+store for SC) before translation. Every other AMO, including Zabha's,
+amocas and ssamoswap, is translated first, so a page fault on its address
+comes first. It is then performed if it fits in its 16-byte block, and is a
+store access fault if it crosses one. Only the first page is translated, so
+a crossing AMO at the end of a page is an access fault even when the next
+page is unmapped. tools/verification/tests/lockstep/amo_misaligned.S
+lock-steps each case against Sail.
