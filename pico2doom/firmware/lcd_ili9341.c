@@ -87,7 +87,10 @@ static void send_strip(const uint16_t *px, int count)
 
 uint32_t lcd_init(uint32_t spi_hz)
 {
-	uint32_t actual = spi_init(LCD_SPI, spi_hz);
+	// Set-up commands at 10 MHz at most: on breadboard wires a panel that takes
+	// pixels at 41.6 MHz can miss its commands (white screen). Pixels go at
+	// spi_hz once it is on.
+	spi_init(LCD_SPI, spi_hz < 10000000u ? spi_hz : 10000000u);
 	gpio_set_function(LCD_PIN_SCK, GPIO_FUNC_SPI);
 	gpio_set_function(LCD_PIN_MOSI, GPIO_FUNC_SPI);
 	// Short breadboard wires at tens of MHz: a strong, fast edge helps.
@@ -126,6 +129,7 @@ uint32_t lcd_init(uint32_t spi_hz)
 	cmd(0x11, NULL, 0);                      // sleep out
 	sleep_ms(120);
 	cmd(0x29, NULL, 0);                      // display on
+	uint32_t actual = spi_set_baudrate(LCD_SPI, spi_hz);
 
 	dma_ch = dma_claim_unused_channel(true);
 	dma_channel_config c = dma_channel_get_default_config(dma_ch);

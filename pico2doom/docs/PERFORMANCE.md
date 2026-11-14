@@ -94,7 +94,7 @@ runs unpaced).
 
 At 250 MHz DOOM draws an E1M5 frame in about 18 ms on average, and about
 33 ms in the heaviest scenes. Sending a frame to the LCD takes about 25 ms
-at 41.6 MHz SPI. A second 64 KB screen to send from does not fit in RAM: the
+at 41.6 MHz SPI (36 ms at the 31.25 MHz default, see below). A second 64 KB screen to send from does not fit in RAM: the
 zone already has only an 8 KB margin on the tightest map. So when DOOM waits
 for the LCD, the two costs add up:
 
@@ -110,13 +110,27 @@ LCD can show a torn frame. The USB video, DoomV and the lock-step hashes
 (taken before present) are unaffected. `-DDOOM_LCD_TEAR=OFF` brings back
 the tear-free wait.
 
+On the first wired panel (ILI9341 on breadboard jumpers) the SPI clock was
+stepped up until the picture failed:
+
+| SPI clock | Frame send | Result |
+|---|---:|---|
+| 9.6 MHz | 117 ms | DOOM |
+| 31.25 MHz | 36 ms | DOOM -- **the default** |
+| 41.6 MHz | 27 ms | white screen, even with the set-up commands at 10 MHz |
+
+At 250 MHz the SPI clock is 250 MHz over an even number, so nothing lies
+between 31.25 and 41.6. At 31.25 MHz DOOM still runs at 30 fps and the LCD
+shows about 28 of those frames a second. The set-up commands always go at
+10 MHz at most; `-DDOOM_LCD_SPI_HZ=<Hz>` sets the pixel clock directly.
+
 300 MHz (clk_sys/3 flash at 100 MHz, 1.30 V) hung before USB came up on
 this board, and needed BOOTSEL to recover.
 
 ## Where to go next
 
 - **Tear-free at 30 fps.** A faster LCD clock would shorten the wait.
-  ILI9341 modules usually manage 62.5 MHz on short wires, which would make
-  the wait about 16 ms. This needs the panel wired to check.
+  41.6 MHz failed on breadboard jumpers; short soldered wires or a PCB
+  may reach 41.6 or 62.5 MHz, which would make the wait 27 or 16 ms.
 - **Hot code in RAM.** The column and span drawers run from flash through the
   16 KB XIP cache, which the WAD's textures also stream through.

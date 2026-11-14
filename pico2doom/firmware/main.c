@@ -329,11 +329,12 @@ int main(void)
 	if (buttons_raw() & (1u << BTN_FIRE)) mode = MODE_BENCH;
 
 	// The display is set up here, then belongs to core 1.
-	// Default: the fastest clock_peri/even divider at or under 42 MHz -- 37.5 MHz
-	// at the stock 150 MHz (proven on the board), 41.7 at 250, 37.5 at 300.
+	// Default: the fastest clock_peri/even divider at or under 32 MHz -- 31.25
+	// MHz at 250, 25 at 150. On breadboard jumpers 41.7 MHz gave a white
+	// screen and 31.25 worked; set DOOM_LCD_SPI_HZ to go faster on short wires.
 	uint32_t spi_hz = DOOM_LCD_SPI_HZ ? DOOM_LCD_SPI_HZ : clock_get_hz(clk_peri) / 4;
 	if (!DOOM_LCD_SPI_HZ)
-		while (spi_hz > 42000000u) spi_hz = clock_get_hz(clk_peri) / (clock_get_hz(clk_peri) / spi_hz + 2);
+		while (spi_hz > 32000000u) spi_hz = clock_get_hz(clk_peri) / (clock_get_hz(clk_peri) / spi_hz + 2);
 	spi_hz = lcd_init(spi_hz);
 	io_start();
 

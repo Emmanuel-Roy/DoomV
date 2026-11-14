@@ -47,7 +47,7 @@ include(${ROOT}/port/port.cmake)
 
 # --- options ---------------------------------------------------------------
 set(DOOM_SYS_MHZ 250 CACHE STRING "System clock in MHz (150 = stock; 250 = default overclock; 300 hangs at boot)")
-set(DOOM_LCD_SPI_HZ 0 CACHE STRING "ILI9341 SPI clock in Hz (0 = fastest at or under 42 MHz)")
+set(DOOM_LCD_SPI_HZ 0 CACHE STRING "ILI9341 SPI clock in Hz (0 = fastest at or under 32 MHz)")
 set(DOOM_FPS_CAP 30 CACHE STRING "Frame pacing: frames per second shown (0 = unpaced)")
 option(DOOM_LCD_TEAR "Never wait for the LCD: send a frame only when it is idle (can tear; keeps 30 fps)" ON)
 
