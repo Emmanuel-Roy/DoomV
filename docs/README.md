@@ -15,6 +15,7 @@ explain the code that connects those pieces.
 | How to run the scripts | [Script usage](../scripts/README.md) | The actual script for its current defaults |
 | How Ubuntu is built, booted and given a desktop | [Ubuntu root filesystem](../tools/linux/ubuntu/README.md) | The Ubuntu section of the boot walkthrough |
 | Keyboard, mouse, storage drives or the shared folder | [Top-level README](../README.md#input) | Virtio devices in the architecture guide |
+| DOOM on a real Pico 2, checked in lock-step by DoomV | [Pico2Doom](PICO2DOOM.md) | [Lock-step](../pico2doom/docs/LOCKSTEP.md), then [divergences](../pico2doom/docs/DIVERGENCE.md) |
 | Why an earlier implementation was wrong | [Bug history](BUGS.md) | Current source and tests before assuming the bug still exists |
 
 For a first read, follow **boot → architecture → ISA**. The instruction tables
