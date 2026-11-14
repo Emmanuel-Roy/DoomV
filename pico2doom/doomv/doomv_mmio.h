@@ -8,6 +8,7 @@
 #define MMIO_DEBUG      0x10000008u  // W: one byte to DoomV's console
 #define MMIO_WAD_BASE   0x10000014u  // R: guest address of the WAD
 #define MMIO_WAD_SIZE   0x10000018u  // R: its length
+#define MMIO_HOST_MS    0x10000030u  // R: real milliseconds since DoomV started (MMIO_TICK is guest time)
 #define MMIO_FB         0x10200000u  // 320x200 words, 0x00RRGGBB, shown in DoomV's window
 
 // Pico link: DoomV parses the Pico's recording (-picolink=FILE) and serves it.

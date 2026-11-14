@@ -13,6 +13,7 @@
 #include "virtio/virtio_net.hpp"
 #include "virtio/virtio_snd.hpp"
 #include "virtio/virtio_gpu.hpp"
+#include <chrono>
 #include <cstdint>
 #include <mutex>
 #include <vector>
@@ -81,8 +82,18 @@ public:
 	static constexpr uint64_t MMIO_WAD_BASE = 0x10000014;
 	static constexpr uint64_t MMIO_WAD_SIZE = 0x10000018;
 
-	// Stage 4's UART -- clear of MMIO_INPUT/TICK/DEBUG and the DOOM mouse
-	// and WAD registers above, which end at 0x1000001B.
+	// Real milliseconds since DoomV started, read from the host's steady
+	// clock. MMIO_TICK is guest time (retired instructions / INSTR_PER_MS),
+	// so a run repeats exactly; but DoomV retires far more than 1.2 million
+	// instructions a second, so a DOOM paced by it runs many times too fast.
+	// A guest that wants to play at real speed reads this instead, and gives
+	// up repeatability while it does. Pico2Doom's guest uses it only when no
+	// recording is attached: a replay takes every clock value from the Pico.
+	static constexpr uint64_t MMIO_HOST_MS = 0x10000030;
+
+	// Stage 4's UART -- clear of MMIO_INPUT/TICK/DEBUG, the DOOM mouse and
+	// WAD registers, the Pico2Doom link (0x1000001C-0x1000002F) and
+	// MMIO_HOST_MS above, which end at 0x10000033.
 	static constexpr uint64_t UART_BASE = 0x10000100;
 	static constexpr uint64_t UART_SIZE = 0x100;
 
@@ -552,6 +563,7 @@ private:
 	std::unique_ptr<PicoLink> pico_link_;
 	uint32_t tick_counter;  // instr_count / INSTR_PER_MS -- what MMIO_TICK exposes
 	uint32_t ms_accum;      // instructions banked toward the next tick_counter++ (avoids a divide every instruction)
+	const std::chrono::steady_clock::time_point host_start = std::chrono::steady_clock::now();   // MMIO_HOST_MS's zero
 	uint32_t fb_write_count;
 	std::atomic<uint64_t> fb_gen{0};
 	std::atomic<uint64_t> lfb_gen{0};

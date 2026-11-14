@@ -192,6 +192,10 @@ uint32_t Memory::read32(uint64_t addr)
 	if (addr == MMIO_TICK) {
 		return tick_counter;
 	}
+	if (addr == MMIO_HOST_MS) {
+		return (uint32_t)std::chrono::duration_cast<std::chrono::milliseconds>(
+			std::chrono::steady_clock::now() - host_start).count();
+	}
 	if (addr == MMIO_MOUSE_MOVE) {
 		std::lock_guard<std::mutex> lock(mouse_mutex);
 		// Saturate rather than wrap. A wrapped delta is a pointer that
@@ -571,6 +575,7 @@ bool Memory::is_backed(uint64_t addr, unsigned size) const
 	if (in(MMIO_INPUT, 4) || in(MMIO_TICK, 4) || in(MMIO_DEBUG, 4)) return true;
 	if (in(MMIO_MOUSE_MOVE, 4) || in(MMIO_MOUSE_BTN, 4)) return true;
 	if (in(MMIO_WAD_BASE, 4) || in(MMIO_WAD_SIZE, 4)) return true;
+	if (in(MMIO_HOST_MS, 4)) return true;
 	if (in(PicoLink::MMIO_ZONE, PicoLink::MMIO_ARGS + 4 - PicoLink::MMIO_ZONE)) return true;   // Pico2Doom link (reads 0 when off)
 
 	return false;

@@ -74,6 +74,8 @@ All ranges below are half-open: base is included, end is excluded. Values come f
 | DOOM mouse motion | `0x1000000C` | 4 | `0x10000010` | Motion accumulated since the last read; reading clears it |
 | DOOM mouse buttons | `0x10000010` | 4 | `0x10000014` | Button state |
 | DOOM WAD base and size | `0x10000014` | 8 | `0x1000001C` | Where the host loaded the WAD, and its length |
+| Pico2Doom link | `0x1000001C` | `0x14` | `0x10000030` | `-picolink=`: a Pico 2 recording's zone size, clock, keys, frame check and DOOM arguments |
+| Host clock | `0x10000030` | 4 | `0x10000034` | Real milliseconds since DoomV started (not repeatable; the DOOM tick above is) |
 | UART | `0x10000100` | `0x100` | `0x10000200` | Polled byte register interface |
 | Root disk (virtio-blk) | `0x10008000` | `0x1000` | `0x10009000` | `-disk=` image; APLIC source 1 |
 | Keyboard (virtio-input) | `0x10100000` | `0x1000` | `0x10101000` | APLIC source 2 |
