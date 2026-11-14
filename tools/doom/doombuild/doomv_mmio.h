@@ -32,6 +32,11 @@
 // advances with executed instructions, not wall-clock time.
 #define MMIO_TICK    0x10000004u
 
+// DOOM's clock: real milliseconds while DoomV has a window, so the game runs
+// at real speed (MMIO_TICK's guest time ran it dozens of times too fast);
+// headless, the same value as MMIO_TICK, so benchmarks and tests repeat.
+#define MMIO_HOST_MS 0x10000030u
+
 // Debug output: each byte written here gets echoed to the host's stdout.
 // No real UART protocol, just a write-only character sink -- exists so
 // printf/I_Error output isn't silently swallowed by nosys.specs's

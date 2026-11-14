@@ -82,14 +82,19 @@ public:
 	static constexpr uint64_t MMIO_WAD_BASE = 0x10000014;
 	static constexpr uint64_t MMIO_WAD_SIZE = 0x10000018;
 
-	// Real milliseconds since DoomV started, read from the host's steady
-	// clock. MMIO_TICK is guest time (retired instructions / INSTR_PER_MS),
-	// so a run repeats exactly; but DoomV retires far more than 1.2 million
-	// instructions a second, so a DOOM paced by it runs many times too fast.
-	// A guest that wants to play at real speed reads this instead, and gives
-	// up repeatability while it does. Pico2Doom's guest uses it only when no
-	// recording is attached: a replay takes every clock value from the Pico.
+	// DOOM's clock for playing: real milliseconds since DoomV started, from
+	// the host's steady clock, while DoomV has a window. MMIO_TICK is guest
+	// time (retired instructions / INSTR_PER_MS), so a run repeats exactly;
+	// but DoomV retires far more than 1.2 million instructions a second, so
+	// a DOOM paced by it ran dozens of times too fast to play.
+	//
+	// Headless (-ng: the benchmarks, PGO training, the suites) it reads the
+	// same value as MMIO_TICK instead, so those runs still do exactly the
+	// same work every time. Both DOOM guests read it; Pico2Doom's only when
+	// no recording is attached, since a replay takes every clock value from
+	// the Pico.
 	static constexpr uint64_t MMIO_HOST_MS = 0x10000030;
+	bool host_clock_real = true;   // false when headless (DoomSystem::set_headless)
 
 	// Stage 4's UART -- clear of MMIO_INPUT/TICK/DEBUG, the DOOM mouse and
 	// WAD registers, the Pico2Doom link (0x1000001C-0x1000002F) and

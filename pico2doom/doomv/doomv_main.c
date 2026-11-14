@@ -22,10 +22,11 @@ static enum port_link_mode mode;
 
 // ---- clock, keys, cycles ----------------------------------------------------
 
-// Real time, from the host's clock. DoomV's MMIO_TICK counts retired
-// instructions (1 ms per 1,200), and DoomV retires far more than 1.2 million
-// a second, so DOOM paced by it ran about 70 times too fast. A replay never
-// gets here: port_link.c takes every clock value from the Pico's recording.
+// Real time while DoomV has a window (guest time when headless). DoomV's
+// MMIO_TICK counts retired instructions (1 ms per 1,200), and DoomV retires
+// far more than 1.2 million a second, so DOOM paced by it ran dozens of times
+// too fast. A replay never gets here: port_link.c takes every clock value
+// from the Pico's recording.
 uint32_t backend_ticks_ms(void) { return REG(MMIO_HOST_MS); }
 
 void backend_sleep_ms(uint32_t ms)

@@ -67,7 +67,7 @@ void DG_DrawFrame(void)
 
 uint32_t DG_GetTicksMs(void)
 {
-	return *(volatile uint32_t *)MMIO_TICK;
+	return *(volatile uint32_t *)MMIO_HOST_MS;
 }
 
 void DG_SleepMs(uint32_t ms)

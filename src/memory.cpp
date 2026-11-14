@@ -193,6 +193,7 @@ uint32_t Memory::read32(uint64_t addr)
 		return tick_counter;
 	}
 	if (addr == MMIO_HOST_MS) {
+		if (!host_clock_real) return tick_counter;   // headless: repeatable, as MMIO_TICK
 		return (uint32_t)std::chrono::duration_cast<std::chrono::milliseconds>(
 			std::chrono::steady_clock::now() - host_start).count();
 	}

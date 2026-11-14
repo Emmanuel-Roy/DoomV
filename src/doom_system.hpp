@@ -85,7 +85,7 @@ public:
 	// stops rather than sitting in a render loop nobody is watching. A
 	// conformance run has no use for a window, and the window is the only
 	// reason a finished test has to be killed from outside.
-	void set_headless() { headless = true; }
+	void set_headless() { headless = true; memory.host_clock_real = false; }   // DOOM's clock stays repeatable
 	// Hold the headless stdin feed until the guest's console has printed
 	// this string. See console_stdin_loop.
 	void set_console_expect(const char *needle) { memory.get_uart().expect(needle); }
