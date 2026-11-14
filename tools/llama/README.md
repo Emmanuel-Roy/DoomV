@@ -8,6 +8,21 @@ included.
 Everything here is the specific case of
 [Running your own programs in the guest](../../README.md#own-programs).
 
+For the quick start, chatting on the GPU or the CPU with `boot.py`, see the
+[top-level README](../../README.md); [Boot it and chat](#boot-it-and-chat)
+below has the details.
+
+The scripts here run from PowerShell or Git Bash. They are Windows-side
+scripts, and when PowerShell's `bash` starts them in WSL's bash,
+`in_git_bash.sh` restarts them in Git Bash (`GIT_BASH=` points it elsewhere,
+as a WSL path). Settings given as environment variables, such as `RAM=8G` or
+`NGL=0`, go in front of the command in Git Bash. PowerShell sets them first,
+and they then stay set for the rest of that PowerShell session:
+
+```powershell
+$env:RAM = "8G"; bash tools/llama/run.sh shared/bigger.gguf
+```
+
 ## Build
 
 ```sh

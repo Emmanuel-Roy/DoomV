@@ -1,4 +1,4 @@
-# Sourced first by build.sh and build_vulkan.sh: make sure they run in Git Bash.
+# Sourced first by the llama scripts (build*.sh, run*.sh): make sure they run in Git Bash.
 #
 # They are Windows-side scripts. They turn Git Bash's /z/Code/... paths into
 # WSL's /mnt/z/Code/..., run Windows Python (WSL often has no network of its

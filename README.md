@@ -59,44 +59,74 @@ host side (boot.py runs it by itself the first time), and
 `python scripts/boot.py ubuntu --setup-gpu`, which installs Mesa's OpenGL and
 Vulkan drivers in the image.
 
-**4. Chat with a language model (llama.cpp).** Build llama.cpp for the guest,
-put a GGUF model in `shared/` (any model llama.cpp loads; a small one such as
-Qwen3.5-0.8B at Q4_K_M is a good start), and boot with `--llama`:
+**4. Chat with a language model (llama.cpp).** The Ubuntu guest runs
+llama.cpp on a GGUF model: on this computer's GPU, or on DoomV's emulated
+RISC-V CPU. Every command works in PowerShell or Git Bash. The `bash` build
+and run scripts hand themselves to Git Bash when PowerShell starts them in
+WSL's bash.
+
+First, put a model in `shared/`, which is the folder the guest reads models
+from. llama.cpp loads any GGUF model; a small one such as Qwen3.5-0.8B at
+Q4_K_M is a good start.
+
+*On the GPU* (minutes to load, then dozens of tokens a second):
 
 ```powershell
-bash tools/llama/build_vulkan.sh                                            # once: shared/llama-vulkan, for the GPU
-python scripts/boot.py ubuntu --gpu --llama shared/Qwen3.5-0.8B-Q4_K_M.gguf  # on this computer's GPU
-
-bash tools/llama/build.sh                                                   # once: shared/llama, for the CPU
-python scripts/boot.py ubuntu --llama shared/Qwen3.5-0.8B-Q4_K_M.gguf        # on the emulated CPU
+python scripts/boot.py ubuntu --setup-gpu                                    # once: Mesa's Vulkan driver in the image
+bash tools/llama/build_vulkan.sh                                             # once: shared/llama-vulkan
+python scripts/boot.py ubuntu --gpu --llama shared/Qwen3.5-0.8B-Q4_K_M.gguf
 ```
 
-Thinking is off, so answers start at once; `--think N` lets the model think
-for up to N tokens first (`-1`: no limit).
+This is llama.cpp's Vulkan backend on Mesa's Venus driver, which goes through
+virtio-gpu to the host's own Vulkan driver. `--gpu` also needs the host side
+of Venus. `boot.py` builds it by itself the first time, with
+`python scripts/get_venus.py`. If the host has more than one GPU, the guest
+uses the first and prints the list.
 
-It logs in, loads the model and waits at a `>` prompt. Type a question, and
+*On the emulated CPU* (no GPU needed, but slow: about half an hour to load,
+then about a word a second):
+
+```powershell
+bash tools/llama/build.sh                                                    # once: shared/llama
+python scripts/boot.py ubuntu --llama shared/Qwen3.5-0.8B-Q4_K_M.gguf
+```
+
+Both log in, load the model and wait at a `>` prompt. Type a question, and
 each answer ends with its speed:
 
 ```
 Paris
 
-[ Prompt: 162.7 t/s | Generation: 77.2 t/s ]
+[ Prompt: 162.7 t/s | Generation: 77.2 t/s ]      (Qwen3.5-0.8B Q4_K_M on the GPU, RX 9070 XT)
 ```
 
-`/exit` leaves the chat and `/clear` starts the conversation over. On the GPU
-the model answers a few minutes after the login. On the CPU, loading takes
-about half an hour and answers come at about a word a second. The GPU path is
-llama.cpp's Vulkan backend on Mesa's Venus driver, through virtio-gpu to the
-host's own Vulkan driver.
+`/clear` starts the conversation over. `/exit`, or Ctrl+C twice, leaves it.
+The options are:
 
-To run a prompt unattended and print the output and timings:
+| Option | Default | Effect |
+|---|---|---|
+| `--think N` | `0` | Thinking, for models that think before answering (Qwen3.5 does). `0` turns it off, so answers start at once; `N` allows up to N tokens of it; `-1` sets no limit. Unlimited thinking can mean minutes before an answer, on the CPU especially. |
+| `--ctx N` | `2048` | Context length, in tokens. Larger remembers more of the conversation and needs more memory. |
+| `--ram SIZE` | `4G` | Guest memory. A model that does not fit fails with "Segmentation fault" while loading. |
 
-```sh
+To run one prompt unattended and print the output and timings:
+
+```powershell
 bash tools/llama/run_vulkan.sh shared/Qwen3.5-0.8B-Q4_K_M.gguf "The capital of France is" 12   # GPU
-NGL=0 bash tools/llama/run_vulkan.sh shared/Qwen3.5-0.8B-Q4_K_M.gguf                           # same binary, CPU only
+bash tools/llama/run.sh shared/Qwen3.5-0.8B-Q4_K_M.gguf "The capital of France is" 12          # CPU
 ```
 
-[tools/llama/README.md](tools/llama/README.md) has the rest.
+The run scripts also take settings as environment variables, such as `NGL=0`
+to run the Vulkan binary on the CPU, or `RAM=8G`. In Git Bash they go in front
+of the command (`NGL=0 bash tools/llama/run_vulkan.sh ...`). PowerShell sets
+them first, and they then stay set for the rest of that PowerShell session:
+
+```powershell
+$env:NGL = 0; bash tools/llama/run_vulkan.sh shared/Qwen3.5-0.8B-Q4_K_M.gguf
+```
+
+[tools/llama/README.md](tools/llama/README.md) has the rest: running it by
+hand, how the GPU path works, and the failures worth knowing about.
 
 **5. Test.**
 

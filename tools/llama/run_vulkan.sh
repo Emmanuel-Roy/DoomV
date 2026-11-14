@@ -30,6 +30,7 @@
 #   DOOMV= the emulator (default ./riscv_doom.exe; it loads Venus from the
 #          build/venus/bin beside it)
 set -euo pipefail
+. "$(dirname "$0")/in_git_bash.sh"
 cd "$(dirname "$0")/.."/..
 
 MODEL_PATH="${1:?usage: run_vulkan.sh <path-to.gguf-under-shared> [prompt] [n_tokens]}"

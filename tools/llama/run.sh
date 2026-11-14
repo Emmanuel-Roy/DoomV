@@ -13,6 +13,7 @@
 # name and prompt have to be typed into the guest's shell, so they are part of
 # the script text.
 set -euo pipefail
+. "$(dirname "$0")/in_git_bash.sh"
 cd "$(dirname "$0")/.."/..
 
 MODEL_PATH="${1:?usage: run.sh <path-to.gguf-under-shared> [prompt] [n_tokens]}"
