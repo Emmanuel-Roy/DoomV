@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Cross-compile llama.cpp for the guest, and put the binary in shared/.
 #
-# Run from the repository root, on the Windows side:  bash tools/llama/build.sh
+# Run from the repository root, in PowerShell or Git Bash:  bash tools/llama/build.sh
 # It does its work inside WSL, where the cross-compiler lives, and writes one
 # file: shared/llama.
 #
@@ -11,6 +11,7 @@
 # a single-hart machine anyway. No curl, because nothing here downloads models.
 # GGML_NATIVE=OFF because the build machine is x86 and the target is not.
 set -euo pipefail
+. "$(dirname "$0")/in_git_bash.sh"
 cd "$(dirname "$0")/../.."
 # Git Bash gives /z/Code/... for Z:\Code\...; WSL sees the same drive under
 # /mnt, so the whole conversion is one prefix.

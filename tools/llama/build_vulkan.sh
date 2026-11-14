@@ -2,7 +2,7 @@
 # Cross-compile llama.cpp with its Vulkan backend for the guest, and put the
 # binary in shared/llama-vulkan.
 #
-# Run from the repository root, on the Windows side:  bash tools/llama/build_vulkan.sh
+# Run from the repository root, in PowerShell or Git Bash:  bash tools/llama/build_vulkan.sh
 #
 # The guest runs it on Mesa's Venus driver, which hands the Vulkan calls to
 # virtio-gpu and so to this computer's GPU (DoomV -gpu, tools/venus/).
@@ -20,6 +20,7 @@
 # them. glslc, which compiles the shaders on the build machine, comes the
 # same way.
 set -euo pipefail
+. "$(dirname "$0")/in_git_bash.sh"
 cd "$(dirname "$0")/../.."
 WSLREPO="/mnt$(pwd)"
 DISTRO="${DISTRO:-Ubuntu}"
