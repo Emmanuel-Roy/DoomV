@@ -340,9 +340,12 @@ def parse_whisper(path: pathlib.Path) -> list:
                         value = value.rjust(2 * width, "0")
                     store_bytes(int(addr, 16), value, st.stores)
             if st.trap:
-                # A fetch that faulted is a record here, with no instruction;
-                # Sail and Spike have no step for it.
-                if st.insn == 0:
+                # A fetch that faulted is a record here, with whatever the
+                # instruction field held (0, or the word at the physical
+                # address); Sail and Spike have no step for it. It is told by
+                # its cause -- not by a zero instruction: a fetched 0x0000 is
+                # c.illegal, a real step, cause 2.
+                if col[7].strip() in ("0", "1", "c", "14"):
                     continue
                 st.writes, st.stores = {}, {}
             steps.append(st)
@@ -463,6 +466,12 @@ def qemu_cpu(march: str, vlen: int, elf: pathlib.Path, timeout: int):
     # them. Svade, then, unless the march asks for Svadu.
     if "svadu" not in toks:
         props += ["svadu=false", "svade=true"]
+    # misa.B is Zba+Zbb+Zbs, but QEMU sets the bit only when asked for B itself.
+    if {"zba", "zbb", "zbs"} <= set(toks):
+        props.append("b=true")
+    # QEMU's rv64 has 16 programmable counters (hpmcounter3-18) unless told
+    # otherwise; Sail, Spike and DoomV have all 29.
+    props.append("pmu-mask=0xfffffff8")
     if "v" in base[4:]:
         props += [f"vlen={vlen}", "elen=64"]
     dropped = []
@@ -551,15 +560,11 @@ def run_whisper(prog, out, march, limit, timeout) -> Run:
     r = Run("whisper", log=out / "whisper.csv")
     base, toks = isa_tokens(march)
     toks = smstateen_for_ssstateen(toks)
-    # This Whisper, with H and no hart configuration beyond the ISA, crashes
-    # on the first hypervisor CSR write (CsRegs::hyperWrite); without H it
-    # runs, and a test that uses H traps where Sail does not, which the
-    # report then shows.
-    if "h" in base[4:]:
-        base = base[:4] + base[4:].replace("h", "")
-        r.dropped.append("h")
     # Whisper takes S and U mode as ISA letters; without them it has neither.
     base += "".join(c for c in "su" if c not in base[4:])
+    # misa.B, as for QEMU: Whisper sets it only for the letter.
+    if {"zba", "zbb", "zbs"} <= set(toks) and "b" not in base[4:]:
+        base += "b"
     # What this Whisper refuses outright ("Invalid ISA extension: sv48") is
     # left out and reported, as Spike's refusals are.
     while True:
@@ -571,7 +576,18 @@ def run_whisper(prog, out, march, limit, timeout) -> Run:
         toks.remove(m.group(1))
         r.dropped.append(m.group(1))
     config = out / "whisper.json"
-    config.write_text(json.dumps({"vector": {"bytes_per_vec": prog.vlen // 8, "max_bytes_per_elem": 8}}))
+    # Sail's memory map (the regions of rva23s64.json): without one, Whisper
+    # has RAM from address 0, and a store there that faults on Sail retires.
+    ram_top = 0x80000000 + (prog.ram_mb or 2048) * 2**20 - 1
+    memmap = {"pma": [
+        {"low": "0x80000000", "high": hex(ram_top),
+         "attribs": ["read", "write", "exec", "amo", "rsrv", "idempotent", "misal_ok", "misal_acc_fault"]},
+        {"low": "0x1000", "high": "0x1fff", "attribs": ["read", "io"]},
+        {"low": "0x2000000", "high": "0x11ffffff", "attribs": ["read", "write", "io"]},
+        # The first match wins; anything else has no access.
+        {"low": "0x0", "high": "0xffffffffffffffff", "attribs": ["none"]}]}
+    config.write_text(json.dumps({"vector": {"bytes_per_vec": prog.vlen // 8, "max_bytes_per_elem": 8},
+                                  "memmap": memmap}))
     extra = 4096 if prog.start else 0
     r.command = [WHISPER, "--isa", "_".join([base] + toks), "--configfile", wsl(config), "--target", wsl(prog.elf),
                  "--logfile", wsl(r.log), "--csvlog", "--maxinst", str(limit + extra)]
@@ -580,6 +596,15 @@ def run_whisper(prog, out, march, limit, timeout) -> Run:
     if prog.tohost is not None:
         r.command += ["--tohostsym", "tohost"]
     code, text = in_wsl(r.command, timeout)
+    # Whisper has run every arch test with H (misa then matches Sail's), but
+    # an older build crashed on the first hypervisor CSR write
+    # (CsRegs::hyperWrite). If it dies, the run is repeated without H, and a
+    # test that uses H then traps where Sail does not, which the report shows.
+    if code is not None and (code < 0 or code >= 128) and "h" in base[4:]:
+        nob = base[:4] + base[4:].replace("h", "")
+        r.command = [nob if a == "_".join([base] + toks) else a for a in r.command]
+        r.dropped.append("h")
+        code, text = in_wsl(r.command, timeout)
     (out / "whisper.out").write_text(text)
     r.dropped += sorted(set(re.findall(r"Unknown extension: (\w+)", text)))
     if code not in (0, None) and not r.log.exists() or (r.log.exists() and r.log.stat().st_size == 0):

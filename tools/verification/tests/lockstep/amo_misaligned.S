@@ -9,8 +9,9 @@
 # misaligned atomicity granule -- is what Sail's default does, and that
 # default made the two references disagree.
 #
-#   offsets that fit in one 16-byte block: amoadd.w +2, amoswap.d +4,
-#     amoor.w +12, amoadd.h +1, amocas.w +6 (amomax.b is never misaligned)
+#   misaligned offsets inside one 16-byte block -- they fault all the same:
+#     amoadd.w +2, amoswap.d +4, amoadd.h +1, amocas.w +6 (amoor.w +12 and
+#     amomax.b +7 are aligned, and performed)
 #   offsets that cross a block: amoadd.w +14, amoswap.d +12, amoadd.h +15,
 #     amocas.d +9
 #   LR.W +2, LR.D +4, SC.W +2
@@ -49,7 +50,7 @@ _start:
 	la   s0, blk                    # 16-byte aligned, two blocks
 	li   a1, 0x0101010101010101
 
-	# ---- inside one block: performed ---------------------------------------
+	# ---- inside one block: misaligned ones are access faults ----------------
 	amoadd.w   a2, a1, (s0)         # aligned, for reference
 	addi  t0, s0, 2
 	amoadd.w   a3, a1, (t0)
@@ -62,7 +63,7 @@ _start:
 	addi  t0, s0, 7
 	amomax.b   a7, a1, (t0)
 	addi  t0, s0, 6
-	lw    s2, 0(t0)                 # the expected value: swaps
+	lw    s2, 0(t0)                 # the expected value (it would swap)
 	mv    s3, s2
 	li    s4, 0x7777
 	amocas.w   s3, s4, (t0)
@@ -124,11 +125,11 @@ _start:
 s_entry:
 	li   s0, VA + 0x800
 	addi t0, s0, 0x7F4
-	amoadd.w   a3, a1, (t0)         # page 0, +4 in its last block: performed
+	amoadd.w   a3, a1, (t0)         # page 0, aligned: performed
 	addi t0, s0, 0x7FE
 	amoadd.w   a4, a1, (t0)         # crosses into page 1: access fault
 	li   s1, VA + 0x1802
-	amoadd.w   a5, a1, (s1)         # page 1, inside a block: page fault
+	amoadd.w   a5, a1, (s1)         # page 1, unmapped: access fault, not page
 	lr.w       a6, (s1)             # misaligned, unmapped: access fault
 	lw   a7, 0x7F4(s0)
 	ecall

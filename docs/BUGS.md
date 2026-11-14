@@ -361,6 +361,7 @@ of console output (`2667bf1`, re-verified in `936df17`).
 196. [Half to and from 8-bit integers did nothing in the vector unit](#bug196)
 197. [The two Sail references disagreed on misaligned AMOs](#bug197)
 198. [The lock-step Sail translated through a reserved PTE bit](#bug198)
+199. [The co-run gave Spike, Whisper and QEMU a different machine from Sail's](#bug199)
 
 <a id="part-vii"></a>
 ### Part VII — Cross-cutting
@@ -7575,3 +7576,51 @@ in the lock-step Sail, so corun.py reported a DoomV divergence that wasn't
 one. mkconfig.py now turns it off. Sail's default still enables other
 extensions DoomV lacks; none of them changed a test, but the mkconfig.py audit
 lists them.
+
+<a id="bug199"></a>
+### 199. The co-run gave Spike, Whisper and QEMU a different machine from Sail's
+
+Most of what the arch-test co-run counted against the other three simulators
+was corun.py's own doing. With the divergences sorted by kind:
+
+- The march was the suites', which leaves out what DoomV implements without
+  being asked: Zca/Zcb/Zcd, Zicntr, Zihpm, Zicclsm. Spike, Whisper and QEMU
+  trapped on c.not and rdcycle, and Spike without Zicclsm faults every
+  misaligned load and store (which was also all of its misaligned-AMO cause
+  6 against 7). divergence.py's MARCH adds them.
+- QEMU sets misa.B only for b=true, not for Zba+Zbb+Zbs, and has 16
+  programmable counters unless pmu-mask says otherwise; Whisper sets misa.B
+  only for the letter. corun.py now asks for both.
+- Whisper was never given H: an older build crashed on the first hypervisor
+  CSR write. This one runs every arch test with it, and misa then matches;
+  H is dropped only if Whisper dies.
+- Whisper had RAM from address 0, so a store that faults on Sail retired. It
+  now gets Sail's memory map as PMA regions, with misal_acc_fault so that a
+  misaligned AMO is an access fault, as in Sail's config.
+- The Whisper log parser dropped every trap record with instruction 0 as a
+  faulted fetch, which also dropped a real c.illegal (0x0000), and kept
+  fetch faults whose record carries the word at the physical address. It
+  now goes by the cause.
+
+What is left is real, and each case is a program in
+tools/verification/tests/divergence, checked by divergence.py: QEMU retires
+SFENCE.W.INVAL and SFENCE.INVAL.IR in U-mode, accesses through a PBMT=3
+leaf, keeps pmpaddr bits above the physical address width and the reserved
+pmpcfg bits, raises load address-misaligned (4) for a misaligned AMO or
+SC, retires a cbo.clean to physical memory that is not there, raises a page
+fault (15) where a page-table walk reads no memory (an access fault, 7), and
+fails an SC with no reservation without checking PMP (Sail raises the
+access fault; whether the spec allows QEMU's order is not settled); Whisper takes the page fault before a misaligned LR/AMO's access fault
+(allowed); mcycle and minstret differ by platform (Spike counts its boot ROM,
+QEMU's minstret is the host clock). With several harts (divergence.py
+--multihart, smp_selfcheck.S), QEMU's SC succeeds after another hart stores
+a new value and the old one back: it is a compare-and-swap of the value LR
+read. That happens with MTTCG and with one thread alike; its atomics are
+otherwise right: 8 harts x 20000 and 4 harts x 100000 iterations, ten runs
+each way, never miscount.
+
+The full co-run (663 programs) after the fixes: DoomV lock-step 663/663,
+DoomV 663, Spike 661, Whisper 658, QEMU 632 matching Sail (before: Spike
+608, Whisper 542, QEMU 528). Spike's two and two of Whisper's are the
+cycle counter; Whisper's other three are the misaligned-LR order; every
+QEMU one is a case above.
