@@ -1,23 +1,30 @@
 # Demos
 
-Four scripts that show lock-step between a real Raspberry Pi Pico 2 and
-DoomV. Run them from `pico2doom/` with the Pico plugged in over USB. Build the
+Scripts that show lock-step between a real Raspberry Pi Pico 2 and DoomV.
+Run them from `pico2doom/` with the Pico plugged in over USB. Build the
 firmware first: `cmake --build build/firmware`. That also builds the DoomV
 guest the scripts replay into. Everything they write goes to `build/demo/`.
+
+All of them show DoomV in its window. When a replay ends, or stops at a
+divergence, the script prints its result and DoomV holds that frame until
+you close its window. `histogram.py` is the exception: it closes DoomV
+itself once it has counted.
 
 | Script | What it shows | Pico needed |
 |---|---|---|
 | `python demo/corun.py` | **Co-simulation.** The Pico and DoomV run DOOM together, live. You play in the Pico's window; DoomV checks every frame as it arrives, and the Pico is never more than 2 frames ahead | yes |
 | `python demo/record_replay.py` | **Record, then replay.** Records the Pico for 30 s, then replays the recording in DoomV and checks every frame | yes (`--replay FILE` to skip recording) |
 | `python demo/divergence.py` | **A divergence.** Changes one thing in a copy of a recording and replays it: DoomV runs in step up to the change and stops on that frame, saying what differs | no (uses the newest recording) |
+| `python demo/play.py [FILE...]` | **Watch a recording.** Plays one or more recordings in DoomV's window, still checking every frame; default the newest | no |
 | `python demo/histogram.py` | **What DOOM executes.** Replays a recording counting every retired instruction by address, then reports the most executed instructions, instruction classes, the hottest functions, and DOOM vs port vs C runtime | no (uses the newest recording) |
 
 ## A run-through
 
 ```
 python demo/corun.py --seconds 60        # play for a minute; both windows open
+python demo/play.py                      # watch it again in DoomV
 python demo/divergence.py --all          # four kinds of fault, each caught
-python demo/histogram.py                 # opens nothing; see build/demo/histogram/report.html
+python demo/histogram.py                 # then see build/demo/histogram/report.html
 ```
 
 Measured (E1M1, 2,021 frames, real Pico 2 at 250 MHz):
@@ -38,8 +45,10 @@ Measured (E1M1, 2,021 frames, real Pico 2 at 250 MHz):
 - `corun.py`: `--seconds N` (0: until Ctrl+C), `--warp E M`, `--headless`
   (DoomV without its window), `--ahead N`.
 - `record_replay.py`: `--seconds N`, `--warp E M`, `--title` (the title
-  screen and DOOM's own demos instead of a map), `--replay FILE`, `--window`
-  (DoomV with its window; default headless, about 80 fps).
+  screen and DOOM's own demos instead of a map), `--replay FILE`, `--headless`
+  (DoomV without its window, about 80 fps).
+- `play.py [FILE...]`: any number of files or patterns
+  (`build/demo/*.p2dl`), played one after another.
 - `divergence.py [FILE]`: `--kind hash|instret|clock|key`, `--all`,
   `--frame N` (default: the middle frame), `--record SECONDS`. `key` needs a
   recording with keyboard input: play in the Pico's window while recording.

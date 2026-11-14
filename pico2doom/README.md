@@ -109,8 +109,9 @@ shows both frame counts and the Pico's frame rate. See
 
 **Demos** ([demo/README.md](demo/README.md)): `demo/corun.py` (live
 co-simulation), `demo/record_replay.py` (record the Pico, replay in DoomV),
-`demo/divergence.py` (a fault, caught on its frame) and `demo/histogram.py`
-(which instructions DOOM executes).
+`demo/play.py` (watch a recording in DoomV's window), `demo/divergence.py`
+(a fault, caught on its frame) and `demo/histogram.py` (which instructions
+DOOM executes).
 
 ## How it works
 

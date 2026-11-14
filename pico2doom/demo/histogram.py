@@ -20,7 +20,6 @@ Writes build/demo/histogram/report.html (charts + tables) and CSV files.
 import argparse
 import collections
 import csv
-import glob
 import html
 import os
 import re
@@ -28,7 +27,7 @@ import shutil
 import subprocess
 import sys
 
-from _common import GUEST, OUT, banner, frames, record, rel, replay
+from _common import GUEST, OUT, banner, frames, latest_recording, record, rel, replay
 
 LOADS = {"lb", "lh", "lw", "lbu", "lhu", "lwsp"}
 STORES = {"sb", "sh", "sw", "swsp"}
@@ -173,13 +172,12 @@ def main():
 
     src = a.recording
     if a.record or not src:
-        found = [f for f in sorted(glob.glob(os.path.join(OUT, "*.p2dl")), key=os.path.getmtime)
-                 if "-fault-" not in f]
-        if a.record or not found:
+        newest = latest_recording()
+        if a.record or not newest:
             src = src or os.path.join(OUT, "run.p2dl")
             record(src, a.record or 30, (1, 1))
         else:
-            src = found[-1]
+            src = newest
     fr = frames(open(src, "rb").read())
     # DoomV writes the counts every 35 frames: stop one frame past such a point.
     n = min(a.frames or len(fr), len(fr) - 1) // 35 * 35

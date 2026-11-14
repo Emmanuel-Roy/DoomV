@@ -23,6 +23,8 @@ TICKS, TICKS_REP, KEY, NOKEY, FRAME, HELLO, VIDEO, PALETTE, TEXT, ARGS, INPUT = 
 FIXED = {TICKS: 4, TICKS_REP: 1, KEY: 2, NOKEY: 0, FRAME: 20, HELLO: 16, VIDEO: 4 + 320 * 200,
          PALETTE: 768, INPUT: 3}
 
+LAST = {"seconds": 0.0}   # replay(): how long the replay itself took, without the hold
+
 PROGRESS = re.compile(r"picolink: \d+ frames in step")   # DoomV's every-175-frames line
 
 # DOOM's key codes (doomkeys.h) for the keys a player presses most.
@@ -94,10 +96,21 @@ def record(path, seconds, warp=None, video=2):
     return n
 
 
-def replay(path, workdir, headless=True, extra=(), quiet=False, timeout=None, max_frames=None):
+def latest_recording():
+    """The newest recording in build/demo that is not a divergence demo's copy."""
+    import glob
+    found = [f for f in sorted(glob.glob(os.path.join(OUT, "*.p2dl")), key=os.path.getmtime)
+             if "-fault-" not in os.path.basename(f)]
+    return found[-1] if found else None
+
+
+def replay(path, workdir, headless=False, extra=(), quiet=False, timeout=None, max_frames=None, hold=False,
+           report=None):
     """Replay a recording in DoomV until its last frame is checked or DoomV
     halts at a difference. Returns (frames matched, total frames, DoomV's
-    picolink lines, diverged?)."""
+    picolink lines, diverged?), and passes the same to report() first. With
+    hold (and a window), DoomV then stays open on its last frame until its
+    window is closed; otherwise it is stopped."""
     elf, wad = need_guest()
     doomv = picolink.find_doomv(None)
     total = len(frames(open(path, "rb").read()))
@@ -137,15 +150,27 @@ def replay(path, workdir, headless=True, extra=(), quiet=False, timeout=None, ma
                     break
             if timeout and time.time() - start > timeout:
                 break
+    except KeyboardInterrupt:
+        hold = False
     finally:
+        LAST["seconds"] = time.time() - start
+        if not quiet:
+            print()
         # A divergence's report lines all arrive before "machine halted".
+        if report:
+            report(matched, total, lines, diverged)
+        if hold and not headless and p.poll() is None:
+            # DoomV waits on its last frame (or the halt); closing the window exits it.
+            print("\n  DoomV is holding its last frame: close the DoomV window to go on", flush=True)
+            try:
+                p.communicate()                    # drains stderr too, so DoomV never blocks on it
+            except KeyboardInterrupt:
+                pass
         p.terminate()
         try:
             p.wait(5)
         except subprocess.TimeoutExpired:
             p.kill()
-    if not quiet:
-        print()
     return matched, total, lines, diverged
 
 

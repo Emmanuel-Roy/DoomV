@@ -17,14 +17,13 @@ Kinds of fault (--kind):
   python demo/divergence.py --all                 # every kind, one after another
 """
 import argparse
-import glob
 import os
 import re
 import struct
 import sys
 
-from _common import (FRAME, PROGRESS, KEY, OUT, TICKS, banner, frames, key_name, ppm_to_png, record, records,
-                     rel, replay)
+from _common import (FRAME, PROGRESS, KEY, OUT, TICKS, banner, frames, key_name, latest_recording, ppm_to_png,
+                     record, records, rel, replay)
 
 EXPLAIN = {
     "hash": "The changed hash is compared directly, so the very frame it is on fails. Everything\n"
@@ -90,12 +89,6 @@ def inject(data, kind, frame_no):
              + (" -- record with keyboard input (play in the Pico window)" if kind == "key" else ""))
 
 
-def latest_recording():
-    found = sorted(glob.glob(os.path.join(OUT, "*.p2dl")), key=os.path.getmtime)
-    found = [f for f in found if "-fault-" not in os.path.basename(f)]
-    return found[-1] if found else None
-
-
 def run(src, kind, frame_no):
     data = open(src, "rb").read()
     fr = frames(data)
@@ -110,10 +103,16 @@ def run(src, kind, frame_no):
     for old in ("crash.log", "picolink_doomv.ppm"):
         if os.path.exists(os.path.join(work, old)):
             os.remove(os.path.join(work, old))
-    matched, total, lines, diverged = replay(dst, work)
+    _, _, _, diverged = replay(dst, work, hold=True, report=lambda *r: show(r, fr, work, kind, landed))
+    return diverged
+
+
+def show(result, fr, work, kind, landed):
+    """The result, printed while DoomV still shows the frame it stopped on."""
+    matched, total, lines, diverged = result
     if not diverged:
         banner(f"RESULT: no divergence -- all {matched} frames matched. (A fault with no effect on DOOM?)")
-        return False
+        return
     report = [l for l in lines if not PROGRESS.match(l)]
     # The frame being run when DoomV stopped: the one after the last that matched.
     at = fr[matched][0] if matched < len(fr) else None
@@ -130,7 +129,6 @@ def run(src, kind, frame_no):
            + (f"\n  DoomV's picture at the stop: {rel(png)}; its registers: {rel(os.path.join(work, 'crash.log'))}"
               if os.path.exists(png) else "")
            + "\n\n  Why: " + EXPLAIN[kind])
-    return True
 
 
 def main():
