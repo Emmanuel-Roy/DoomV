@@ -50,6 +50,7 @@ public:
 
 	// Set at the first difference; DoomSystem halts the machine on it.
 	bool diverged() const { return diverged_; }
+	uint64_t frames_ok() const { return frames_ok_; }
 	const std::string &report() const { return report_; }
 	bool take_halt_request() { bool r = diverged_ && !halt_taken_; if (r) halt_taken_ = true; return r; }
 

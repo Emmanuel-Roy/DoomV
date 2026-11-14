@@ -97,6 +97,12 @@ public:
 	bool set_input_replay(const char *path);
 	// -picolink=FILE: Pico2Doom lock-step against a real Pico 2 (pico_link.hpp).
 	bool set_pico_link(const char *path);
+	// -histogram=FILE: count how often each instruction address retires and
+	// write "pc count" lines to FILE (Pico2Doom's demo/histogram.py turns them
+	// into an opcode and function histogram). Every step then takes step(),
+	// the exact path; without it nothing is counted and nothing is slower.
+	void set_histogram(const char *path) { histogram_path = path; }
+	bool write_histogram() const;
 	// -net: a network card, with user-mode NAT behind it (src/net/usernet).
 	// Call after set_input_replay: a replay gets the card but no network,
 	// only the frames the log recorded.
@@ -514,6 +520,22 @@ private:
 	unsigned trace_hart = ~0u;     // whose records -trace last wrote, with several harts
 	struct LockstepState;
 	LockstepState *lock = nullptr;
+	// -histogram: retired steps per pc, in 4 KB pages of halfword slots.
+	std::string histogram_path;
+	std::map<uint64_t, std::unique_ptr<uint64_t[]>> histogram_pages;
+	uint64_t histogram_page = ~0ull;
+	uint64_t *histogram_slots = nullptr;
+	uint64_t histogram_frames = ~0ull;   // the lock-step frame it was last written at
+	void histogram_add(uint64_t pc)
+	{
+		if ((pc >> 12) != histogram_page) {
+			histogram_page = pc >> 12;
+			auto &e = histogram_pages[histogram_page];
+			if (!e) e.reset(new uint64_t[2048]());
+			histogram_slots = e.get();
+		}
+		histogram_slots[(pc & 0xFFF) >> 1]++;
+	}
 	// Set by step(): whether the instruction it ran committed, and what it was.
 	bool step_committed = false;
 	bool step_decoded = false;     // it got as far as decoding an instruction

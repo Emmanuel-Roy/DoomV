@@ -99,6 +99,7 @@ bool setup_machine(int argc, const char *const *argv, std::unique_ptr<DoomSystem
 	uint64_t snapshot_at = 0;
 	std::string snapshot_dir, restore_dir, export_dir, cosim_path;
 	std::string record_path, replay_path;
+	std::string histogram_path;  // -histogram=FILE: retired instructions per pc
 	std::string picolink_path;   // -picolink=FILE: Pico2Doom lock-step (pico_link.hpp)
 	std::string trace_path, lockstep_path;
 	bool lockstep_strict = false;
@@ -353,6 +354,10 @@ bool setup_machine(int argc, const char *const *argv, std::unique_ptr<DoomSystem
 			// inputs in, its per-frame hashes and retired-instruction counts
 			// checked, halting at the first difference (pico_link.hpp).
 			picolink_path = arg.substr(10);
+		} else if (arg.rfind("-histogram=", 0) == 0) {
+			// Count how often each instruction address retires; written to
+			// FILE as "pc count" lines (every 35 frames with -picolink).
+			histogram_path = arg.substr(11);
 		} else if (arg.rfind("-replay=", 0) == 0) {
 			// Deliver a -record log's input at exactly its instructions, and
 			// nothing else.
@@ -433,7 +438,7 @@ bool setup_machine(int argc, const char *const *argv, std::unique_ptr<DoomSystem
 	for (int i = 1; i < argc; i++) {
 		const std::string a = argv[i];
 		static const char *const run_only[] = {"-snapshot=", "-snapshotat=", "-restore=", "-stopat=", "-trace=",
-		                                      "-lockstep=", "-lockstep-strict", "-lockstep-follow", "-lockstep-take-hpm", "-lockstep-stamp=", "-lockstep-record=", "-cycle-clock=", "-lockstep-take=", "-gdb", "-record=", "-replay=", "-picolink=",
+		                                      "-lockstep=", "-lockstep-strict", "-lockstep-follow", "-lockstep-take-hpm", "-lockstep-stamp=", "-lockstep-record=", "-cycle-clock=", "-lockstep-take=", "-gdb", "-record=", "-replay=", "-picolink=", "-histogram=",
 		                                      "-export-state=", "-expect=", "-input=", "-fbdump=", "-guidump=", "-cosim-log="};
 		bool skip = a.rfind("-shared=", 0) == 0 || a.rfind("-drives=", 0) == 0;   // written below, as used
 		for (const char *p : run_only) skip = skip || a.rfind(p, 0) == 0;
@@ -507,6 +512,7 @@ bool setup_machine(int argc, const char *const *argv, std::unique_ptr<DoomSystem
 	}
 	// Before -replay, which brings back the clock the recorded run had.
 	if (have_rtc) system.set_rtc_epoch(rtc_epoch);
+	if (!histogram_path.empty()) system.set_histogram(histogram_path.c_str());
 	if (!picolink_path.empty()) {
 		if (!system.set_pico_link(picolink_path.c_str())) { status = 1; return false; }
 	}

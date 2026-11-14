@@ -623,6 +623,7 @@ void DoomSystem::run_fast(uint64_t n)
 	while (n > 0 && !debugger.halted) {
 		// Conditions under which no step can be simple. step() for all of them.
 		if (debugger.may_halt() || memory.tohost_addr || core.access_log || memory.store_log
+		    || !histogram_path.empty()
 		    || decoder.cache_epoch != ExtensionsEpoch
 		    || !Extensions.C || Extensions.ZICFILP
 		    || core.wait_request != RiscvCore::Wait::None
@@ -631,7 +632,7 @@ void DoomSystem::run_fast(uint64_t n)
 			fs_slow_entry++;
 			// Counted only here, on the way to the slow step.
 			fs_entry[(debugger.may_halt() || memory.tohost_addr || core.access_log || memory.store_log
-			          || !Extensions.C || Extensions.ZICFILP) ? 0
+			          || !histogram_path.empty() || !Extensions.C || Extensions.ZICFILP) ? 0
 			         : decoder.cache_epoch != ExtensionsEpoch ? 1
 			         : core.wait_request != RiscvCore::Wait::None ? 2
 			         : regs.keyed(regs.state_gen + ExtensionsEpoch) != counter_key ? 3
@@ -878,8 +879,32 @@ void DoomSystem::run_fast(uint64_t n)
 void DoomSystem::step()
 {
 	const uint64_t before = memory.instruction_count();
+	const uint64_t pc = histogram_path.empty() ? 0 : cur->regs.get_pc();
 	step_execute();
-	if (memory.instruction_count() != before) end_step();
+	if (memory.instruction_count() != before) {
+		if (!histogram_path.empty() && step_committed) histogram_add(pc);
+		end_step();
+	}
+}
+
+bool DoomSystem::write_histogram() const
+{
+	FILE *f = std::fopen(histogram_path.c_str(), "w");
+	if (!f) return false;
+	uint64_t total = 0;
+	for (const auto &p : histogram_pages)
+		for (unsigned i = 0; i < 2048; i++) total += p.second[i];
+	const PicoLink *link = memory.pico_link();
+	std::fprintf(f, "# DoomV -histogram: retired instructions per pc\n# xlen %d\n# total %llu\n",
+	             Extensions.XLEN64 ? 64 : 32, (unsigned long long)total);
+	if (link) std::fprintf(f, "# picolink frames %llu\n", (unsigned long long)link->frames_ok());
+	for (const auto &p : histogram_pages)
+		for (unsigned i = 0; i < 2048; i++)
+			if (p.second[i])
+				std::fprintf(f, "%llx %llu\n", (unsigned long long)((p.first << 12) | (i << 1)),
+				             (unsigned long long)p.second[i]);
+	std::fclose(f);
+	return true;
 }
 
 // A tick of Sail's clock: mtime, and mcycle unless it is inhibited or
@@ -1551,6 +1576,13 @@ void DoomSystem::cpu_loop()
 		// Pico2Doom lock-step: the guest just finished a frame (or asked for an
 		// input) that the real Pico did differently. Stop here, state saved,
 		// for Sail lock-step or the debugger to examine.
+		// -histogram with -picolink: written every 35 frames in step, so a run
+		// stopped at any point leaves a recent one, and at a divergence.
+		if (PicoLink *link = memory.pico_link(); link && !histogram_path.empty()
+		    && link->frames_ok() != histogram_frames && (link->frames_ok() % 35 == 0 || link->diverged())) {
+			histogram_frames = link->frames_ok();
+			if (!write_histogram()) std::cerr << "cannot write histogram: " << histogram_path << "\n";
+		}
 		if (PicoLink *link = memory.pico_link(); link && link->take_halt_request()) {
 			debugger.halted = true;
 			console_drain();

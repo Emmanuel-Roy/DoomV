@@ -645,9 +645,15 @@ RISC-V (Hazard3) cores and checks it against DoomV on the same machine code.
 The Pico records its inputs and, every frame, hashes of its picture and game
 state and its retired-instruction counts. DoomV (`-picolink=`) replays the
 recording and halts at the first difference. `pico2doom/tools/picolink.py
-corun` runs both live, side by side, at a locked 30 fps. On the real chip,
+corun` runs both live, side by side, at up to 30 fps. On the real chip,
 every frame and every retired instruction of DOOM has matched. See
-[pico2doom/docs/LOCKSTEP.md](pico2doom/docs/LOCKSTEP.md).
+[pico2doom/docs/LOCKSTEP.md](pico2doom/docs/LOCKSTEP.md), and
+[pico2doom/demo/](pico2doom/demo/README.md) for the demos.
+
+`-histogram=FILE` counts how many times each instruction address retires
+and writes `pc count` lines (with `-picolink`, every 35 frames in step).
+Every step then takes the exact path; `pico2doom/demo/histogram.py` turns
+the counts into an opcode and function histogram.
 
 ## Performance
 

@@ -35,7 +35,8 @@ DoomV halts at the first frame where any of the five differs -- or the
 first time DOOM asks for an input the Pico did not read at that point --
 writes `crash.log` (its whole machine state) and `picolink_doomv.ppm` (the
 frame as it drew it), and from there its own instruction-by-instruction
-lock-step against Sail can take over.
+lock-step against Sail can take over. [DIVERGENCE.md](DIVERGENCE.md) covers
+what can make the two split and how to read the report.
 
 ## Why at retirement
 

@@ -107,6 +107,11 @@ instructions. The Pico stays at most two frames ahead. The window title
 shows both frame counts and the Pico's frame rate. See
 [docs/LOCKSTEP.md](docs/LOCKSTEP.md#co-running-live).
 
+**Demos** ([demo/README.md](demo/README.md)): `demo/corun.py` (live
+co-simulation), `demo/record_replay.py` (record the Pico, replay in DoomV),
+`demo/divergence.py` (a fault, caught on its frame) and `demo/histogram.py`
+(which instructions DOOM executes).
+
 ## How it works
 
 | Folder | |
@@ -118,10 +123,12 @@ shows both frame counts and the Pico's frame rate. See
 | [`doomv/`](doomv) | the same DOOM as a DoomV guest, for lock-step |
 | [`sim/`](sim) | a PC build with the Pico's memory limits, for measuring and testing |
 | [`tools/`](tools) | WAD packer, memory budget, `picolink.py`, ISA comparison, RV32 check |
+| [`demo/`](demo/README.md) | the presentation demos: co-run, record and replay, divergence, instruction histogram |
 
 - [docs/MEMORY.md](docs/MEMORY.md) -- 4 MB of flash, 520 KB of RAM: what went where
 - [docs/PERFORMANCE.md](docs/PERFORMANCE.md) -- measurements and where the time goes
 - [docs/LOCKSTEP.md](docs/LOCKSTEP.md) -- holding DoomV to real hardware, at retirement
+- [docs/DIVERGENCE.md](docs/DIVERGENCE.md) -- why the two machines split, and where it is caught
 
 DOOM is © id Software. doomgeneric is GPL-2.0 ([its licence](external/doomgeneric/LICENSE)),
 and so is this port, which builds on it.
