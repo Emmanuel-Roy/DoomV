@@ -87,7 +87,22 @@ def autologin_args(then=""):
     return [f"-expect={LOGIN_PROMPT}", f"-input={script}"]
 
 
-def llama_script(model: str, gpu: bool, ctx: int) -> str:
+def think_args(think: int) -> str:
+    """llama.cpp's flags for --think: 0 no thinking, N a budget of N tokens, -1 no limit.
+
+    A thinking model (Qwen3.5 among them) otherwise writes a <think> section
+    before every answer, and at a word a second on the emulated CPU that can
+    be minutes before the answer starts. -rea off has the chat template ask
+    for no thinking; --reasoning-budget ends it after N tokens.
+    """
+    if think == 0:
+        return " -rea off"
+    if think < 0:
+        return " -rea on"
+    return f" -rea on --reasoning-budget {think}"
+
+
+def llama_script(model: str, gpu: bool, ctx: int, think: int = 0) -> str:
     """What --llama types once logged in: llama.cpp's chat on `model`.
 
     The binary comes in through the shared folder (tools/llama/build.sh, or
@@ -107,7 +122,8 @@ def llama_script(model: str, gpu: bool, ctx: int) -> str:
     if gpu:
         setup += f" && export GGML_VK_VISIBLE_DEVICES=0 && /root/{binary} completion --list-devices"
     chat = (f"echo 'Loading {model} on the {'GPU' if gpu else 'CPU'}: minutes, silent until its > prompt.'; "
-            f"/root/{binary} cli --simple-io -m /mnt/shared/{model} -c {ctx} -t 1" + (" -ngl 99" if gpu else ""))
+            f"/root/{binary} cli --simple-io -m /mnt/shared/{model} -c {ctx} -t 1" + (" -ngl 99" if gpu else "")
+            + think_args(think))
     # sleep N is N x 10,000 instructions. Generous: what is typed early waits
     # in the terminal until the shell reads it.
     lines = ["sleep 75000", f"type {setup}", "key 28 1", "key 28 0",
@@ -413,6 +429,9 @@ def main():
                    help="log in and chat with MODEL, a .gguf in the shared folder, through llama.cpp; "
                         "on the GPU with --gpu. Each answer ends with its tokens per second")
     u.add_argument("--ctx", type=int, default=2048, metavar="N", help="--llama's context length (default 2048)")
+    u.add_argument("--think", type=int, default=0, metavar="N",
+                   help="--llama's thinking, for models that think before answering: 0 none (default), "
+                        "N at most N tokens, -1 no limit")
     u.add_argument("--install-desktops", action="store_true",
                    help="install all three desktops into the image, once (hours)")
     u.add_argument("--setup-network", action="store_true",
@@ -507,7 +526,7 @@ def main():
                           + ": type at its > prompt; each answer ends with its tokens per second. "
                           "/exit, or Ctrl+C twice, leaves it.")
                 if not args.no_autologin:
-                    extra = autologin_args(llama_script(model, args.gpu, args.ctx) if args.llama else "")
+                    extra = autologin_args(llama_script(model, args.gpu, args.ctx, args.think) if args.llama else "")
             run(ubuntu_command(image, boot_args(args, passthrough), extra=extra, harts=args.harts))
     return 0
 

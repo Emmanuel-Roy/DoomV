@@ -71,6 +71,9 @@ bash tools/llama/build.sh                                                   # on
 python scripts/boot.py ubuntu --llama shared/Qwen3.5-0.8B-Q4_K_M.gguf        # on the emulated CPU
 ```
 
+Thinking is off, so answers start at once; `--think N` lets the model think
+for up to N tokens first (`-1`: no limit).
+
 It logs in, loads the model and waits at a `>` prompt. Type a question, and
 each answer ends with its speed:
 

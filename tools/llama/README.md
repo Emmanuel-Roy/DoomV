@@ -163,7 +163,10 @@ The model has to be in the shared folder, which is how the guest reads it. The
 binary is `shared/llama-vulkan` with `--gpu` (`build_vulkan.sh`, and the image
 set up once with `--setup-gpu`) or `shared/llama` without (`build.sh`).
 `--llama` gives the guest 4G unless `--ram` says otherwise; `--ctx` sets the
-context (default 2048). On the GPU, loading takes a few minutes after the
+context (default 2048). Thinking is off by default: a model that thinks before
+answering (Qwen3.5 does) would otherwise write a `<think>` section first,
+which on the CPU can be minutes. `--think N` allows up to N tokens of it, and
+`--think -1` no limit. On the GPU, loading takes a few minutes after the
 login. On the CPU it takes about half an hour, and the answers come at about a
 word a second.
 
