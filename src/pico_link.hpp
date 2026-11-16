@@ -30,6 +30,7 @@
 // keep the Pico at most a few frames ahead, and to stop the Pico at the frame
 // where DoomV halted.
 
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <string>
@@ -45,6 +46,12 @@ public:
 	static bool covers(uint64_t addr) { return addr >= MMIO_ZONE && addr < MMIO_ARGS + 4; }
 
 	bool open(const std::string &path);
+	// -picolink-pace: wait for each clock reading's time to come, measured
+	// from the first, so a replay runs at the speed the Pico played it. Only
+	// ever waits: where DoomV is behind, it carries on from there instead of
+	// rushing to catch up. Timing on the host only -- the guest sees the same
+	// values either way, so the lock-step is unchanged.
+	void set_pace(bool on) { pace_ = on; }
 	uint32_t read32(uint64_t addr);
 	void write32(uint64_t addr, uint32_t val);
 
@@ -61,6 +68,7 @@ private:
 	uint8_t next_input_tag();          // the next clock/key/frame record, skipping video and text
 	void diverge(const std::string &why);
 	void read_hello();
+	void pace(uint32_t ticks);
 
 	FILE *f_ = nullptr;
 	std::string path_;
@@ -78,4 +86,7 @@ private:
 	uint64_t instret_mismatches_ = 0;
 	bool diverged_ = false, halt_taken_ = false;
 	std::string report_;
+	bool pace_ = false, paced_ = false;
+	uint32_t pace_ticks0_ = 0;
+	std::chrono::steady_clock::time_point pace_start_;
 };

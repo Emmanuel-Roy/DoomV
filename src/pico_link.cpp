@@ -123,6 +123,20 @@ void PicoLink::diverge(const std::string &why)
 	std::cerr << report_ << "\n";
 }
 
+void PicoLink::pace(uint32_t ticks)
+{
+	if (!pace_) return;
+	using namespace std::chrono;
+	const auto now = steady_clock::now();
+	if (!paced_) { paced_ = true; pace_ticks0_ = ticks; pace_start_ = now; return; }
+	const auto due = pace_start_ + milliseconds((int32_t)(ticks - pace_ticks0_));
+	if (now > due + milliseconds(100)) {
+		pace_start_ = now - milliseconds((int32_t)(ticks - pace_ticks0_));   // behind: go on from here
+		return;
+	}
+	if (now < due) std::this_thread::sleep_until(due);
+}
+
 uint32_t PicoLink::read32(uint64_t addr)
 {
 	if (diverged_) return 0;
@@ -137,7 +151,7 @@ uint32_t PicoLink::read32(uint64_t addr)
 	if (addr == MMIO_TICKS) {
 		if (repeats_) { repeats_--; return last_ticks_; }
 		uint8_t tag = next_input_tag();
-		if (tag == TAG_TICKS) { last_ticks_ = u32(); return last_ticks_; }
+		if (tag == TAG_TICKS) { last_ticks_ = u32(); pace(last_ticks_); return last_ticks_; }
 		if (tag == TAG_TICKS_REP) { repeats_ = u8() - 1u; return last_ticks_; }
 		diverge(std::string("DOOM read the clock, but the Pico's next input was ") + tag_name(tag));
 		return 0;

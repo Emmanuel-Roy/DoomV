@@ -105,12 +105,13 @@ def latest_recording():
 
 
 def replay(path, workdir, headless=False, extra=(), quiet=False, timeout=None, max_frames=None, hold=False,
-           report=None):
+           report=None, pace=False):
     """Replay a recording in DoomV until its last frame is checked or DoomV
     halts at a difference. Returns (frames matched, total frames, DoomV's
     picolink lines, diverged?), and passes the same to report() first. With
     hold (and a window), DoomV then stays open on its last frame until its
-    window is closed; otherwise it is stopped."""
+    window is closed; otherwise it is stopped. With pace (and a window), it
+    plays at the speed the Pico ran instead of as fast as DoomV can."""
     elf, wad = need_guest()
     doomv = picolink.find_doomv(None)
     total = len(frames(open(path, "rb").read()))
@@ -120,6 +121,8 @@ def replay(path, workdir, headless=False, extra=(), quiet=False, timeout=None, m
     cmd = [doomv, wad, elf, picolink.GUEST_MARCH, "-picolink=" + os.path.abspath(path)] + list(extra)
     if headless:
         cmd.append("-headless")
+    elif pace:
+        cmd.append("-picolink-pace")
     env = dict(os.environ, PICOLINK_ACK="1")
     p = subprocess.Popen(cmd, cwd=workdir, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                          stderr=subprocess.PIPE, text=True, errors="replace")

@@ -96,7 +96,7 @@ public:
 	bool set_input_record(const char *path);
 	bool set_input_replay(const char *path);
 	// -picolink=FILE: Pico2Doom lock-step against a real Pico 2 (pico_link.hpp).
-	bool set_pico_link(const char *path);
+	bool set_pico_link(const char *path, bool pace = false);
 	// -histogram=FILE: count how often each instruction address retires and
 	// write "pc count" lines to FILE (Pico2Doom's demo/histogram.py turns them
 	// into an opcode and function histogram). Every step then takes step(),

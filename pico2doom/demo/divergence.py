@@ -103,7 +103,7 @@ def run(src, kind, frame_no):
     for old in ("crash.log", "picolink_doomv.ppm"):
         if os.path.exists(os.path.join(work, old)):
             os.remove(os.path.join(work, old))
-    _, _, _, diverged = replay(dst, work, hold=True, report=lambda *r: show(r, fr, work, kind, landed))
+    _, _, _, diverged = replay(dst, work, hold=True, pace=True, report=lambda *r: show(r, fr, work, kind, landed))
     return diverged
 
 

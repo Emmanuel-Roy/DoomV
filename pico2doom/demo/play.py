@@ -28,7 +28,7 @@ def play(path):
            f"  {len(fr)} frames ({len(fr) / 35:.0f} s of DOOM), {instret / 1e9:.2f} billion instructions, "
            "every frame checked against the Pico")
     work = os.path.join(OUT, "play", os.path.splitext(os.path.basename(path))[0])
-    matched, total, _, diverged = replay(path, work, hold=True, report=show)
+    matched, total, _, diverged = replay(path, work, hold=True, pace=True, report=show)
     return matched == total and not diverged
 
 

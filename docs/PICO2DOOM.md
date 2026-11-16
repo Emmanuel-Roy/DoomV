@@ -404,6 +404,12 @@ The guest is the same port layer with a DoomV backend:
 
 ### The link device ([`src/pico_link.cpp`](../src/pico_link.cpp))
 
+With `-picolink-pace`, the device waits for each clock reading's time to
+come (measured from the first), so the replay plays at the speed the Pico
+ran rather than as fast as DoomV can. Where DoomV is behind it carries on
+from there instead of rushing to catch up. Only the host's timing changes:
+the guest reads the same values, so the lock-step is the same.
+
 `-picolink=FILE` attaches a small MMIO device:
 
 | Address | Access | Meaning |

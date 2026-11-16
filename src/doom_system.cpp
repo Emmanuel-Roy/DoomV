@@ -2982,10 +2982,11 @@ void DoomSystem::cosim_after_step()
 	std::fprintf(memory.cosim, "I %llu %d\n", (unsigned long long)memory.instruction_count(), line ? 1 : 0);
 }
 
-bool DoomSystem::set_pico_link(const char *path)
+bool DoomSystem::set_pico_link(const char *path, bool pace)
 {
 	auto link = std::make_unique<PicoLink>();
 	if (!link->open(path)) return false;
+	link->set_pace(pace);
 	memory.attach_pico_link(std::move(link));
 	return true;
 }

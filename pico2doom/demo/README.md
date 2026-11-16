@@ -10,6 +10,11 @@ divergence, the script prints its result and DoomV holds that frame until
 you close its window. `histogram.py` is the exception: it closes DoomV
 itself once it has counted.
 
+`play.py` and `divergence.py` replay at the speed the Pico played (DoomV's
+`-picolink-pace`), so what you see is in time with the recording.
+`record_replay.py` and `histogram.py` replay as fast as DoomV can (about
+100 fps), to show its speed.
+
 | Script | What it shows | Pico needed |
 |---|---|---|
 | `python demo/corun.py` | **Co-simulation.** The Pico and DoomV run DOOM together, live. You play in the Pico's window; DoomV checks every frame as it arrives, and the Pico is never more than 2 frames ahead | yes |

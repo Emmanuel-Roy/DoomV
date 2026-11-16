@@ -683,6 +683,10 @@ every frame and every retired instruction of DOOM has matched. See
 [pico2doom/docs/LOCKSTEP.md](pico2doom/docs/LOCKSTEP.md), and
 [pico2doom/demo/](pico2doom/demo/README.md) for the demos.
 
+A replay runs as fast as DoomV can, about 100 fps. `-picolink-pace` makes
+it follow the recording's clock instead, so it plays at the speed the Pico
+ran; the guest sees the same values, so the check is unchanged.
+
 `-histogram=FILE` counts how many times each instruction address retires
 and writes `pc count` lines (with `-picolink`, every 35 frames in step).
 Every step then takes the exact path; `pico2doom/demo/histogram.py` turns
