@@ -454,6 +454,9 @@ def spike_isa(march: str, vlen: int, elf: pathlib.Path, timeout: int):
 
 QEMU_LETTERS = {"v": "v", "h": "h"}
 
+# What Sail's rva23s64 config (and DoomV) implement beyond the suites' march.
+SAIL_IMPLIED = "_zca_zcb_zcd_zicntr_zihpm_zicclsm"
+
 
 def qemu_cpu(march: str, vlen: int, elf: pathlib.Path, timeout: int):
     """-cpu rv64 with the march's extensions turned on, less what QEMU does not have."""
@@ -463,9 +466,11 @@ def qemu_cpu(march: str, vlen: int, elf: pathlib.Path, timeout: int):
     props += [f"{t}=true" for t in toks]
     # QEMU's rv64 turns Svadu on by itself: it sets a page's A and D bits in
     # hardware, where Sail and Spike fault (Svade) and let the handler set
-    # them. Svade, then, unless the march asks for Svadu.
-    if "svadu" not in toks:
-        props += ["svadu=false", "svade=true"]
+    # them. Svade, then, unless the march asks for Svadu -- and with Svadu,
+    # Svade too: with both, QEMU starts with menvcfg.ADUE clear, faulting
+    # until software turns hardware updating on, as Sail does. With Svadu
+    # alone it starts with ADUE set and never takes the fault.
+    props += ["svade=true"] if "svadu" in toks else ["svadu=false", "svade=true"]
     # misa.B is Zba+Zbb+Zbs, but QEMU sets the bit only when asked for B itself.
     if {"zba", "zbb", "zbs"} <= set(toks):
         props.append("b=true")
@@ -1299,7 +1304,11 @@ def main():
     args.passthrough = passthrough
     args.march_given = args.march is not None
     if args.march is None:
-        args.march = run_suite.SUITE_MARCH
+        # The suites' march leaves out what Sail's config and DoomV have without
+        # being asked (BUGS.md #199): without Zicclsm Spike faults every
+        # misaligned access, without Zicntr/Zihpm the others trap on rdcycle.
+        # A core under --lockstep gets the suites' march as it was.
+        args.march = run_suite.SUITE_MARCH + ("" if args.lockstep else SAIL_IMPLIED)
     if args.limit is None:
         args.limit = 20_000 if args.snapshot else 2_000_000
     if args.sims is None:

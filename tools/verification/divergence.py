@@ -45,7 +45,7 @@ import corun  # noqa: E402
 
 CASES = HERE / "tests" / "divergence"
 ELFS = ROOT / "build" / "divergence-elf"
-MARCH = run_suite.SUITE_MARCH + "_zca_zcb_zcd_zicntr_zihpm_zicclsm"
+MARCH = run_suite.SUITE_MARCH + corun.SAIL_IMPLIED
 SIMS = ("doomv", "spike", "whisper", "qemu")
 EXPECT = re.compile(r"^#!\s*(\w+):\s*(\S+)\s+(.*?)\s*$")
 
